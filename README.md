@@ -138,9 +138,14 @@ Make sure your Epic and Ubisoft accounts are linked at [epicgames.com/id/link/ub
 
 ### Logs
 
-- **Decky/backend log** - `/home/deck/homebrew/logs/Unifideck`
-- **Launcher/runtime log** - `~/.local/share/unifideck/launcher.log`
-- **Edge/browser log** - `~/.local/share/unifideck/chromium-auth.log`
+The easiest way to get logs is **Settings -> Capture Logs** in the Unifideck Quick Access panel. One tap collects every log and state file, adds a report describing your device and where everything lives, and writes a single zip to your **Downloads** folder. Attach that file to your bug report. It never contains your passwords, store login tokens, or browser cookies.
+
+Individual locations, if you need them directly:
+
+- **Decky/backend log** - `~/homebrew/logs/Unifideck/` (one file per plugin session)
+- **Per-launch logs** - `~/.local/share/unifideck/launches/<id>.log` (plugin side) and `<id>.game.log` (Proton/game output)
+- **Library sync activity** - `~/.local/share/unifideck/sync_activity.log`
+- **Edge/browser sign-in log** - `~/.local/share/unifideck/edge-auth.log`
 
 ## Languages
 

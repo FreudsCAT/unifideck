@@ -95,12 +95,13 @@ export const rpcRoutes = {
   // Achievements (AchievementsRPCMixin) — GOG display + last-session summary
   getGameAchievements: "get_game_achievements",
   getLastSessionAchievements: "get_last_session_achievements",
-  // Observability (ObservabilityRPCMixin) — event bridge
+  // Observability (ObservabilityRPCMixin) — event bridge + diagnostics
   subscribeReplay: "subscribe_replay",
   getLauncherToasts: "get_launcher_toasts",
   getBusHealth: "get_bus_health",
   getPluginMetrics: "get_plugin_metrics",
   getFeatureFlags: "get_feature_flags",
+  captureLogs: "capture_logs",
   // Account switch + migration (AccountRPCMixin)
   checkAccountSwitch: "check_account_switch",
   migrateAccountData: "migrate_account_data",

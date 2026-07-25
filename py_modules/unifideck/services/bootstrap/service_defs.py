@@ -197,6 +197,18 @@ _SERVICE_DEFS: tuple[tuple[Any, ...], ...] = (
         lambda b, r, c, cfg, p, pl: (),
         lambda b, r, c, cfg, p, pl: {"config": cfg},
     ),
+    # SupportBundleService — backs the "Capture Logs" RPC. Needs config
+    # (for logs.export_path and logs.archive_path) and paths (for the
+    # data dir, Steam root, shortcuts.vdf and the playtime DB), so the
+    # audit reports the locations this install actually uses rather
+    # than the defaults. Plugin-only: the launcher subset never asks
+    # for it, and it holds no state beyond a re-entrancy lock.
+    (
+        "support_bundle", "unifideck.services.support_bundle",
+        "SupportBundleService",
+        lambda b, r, c, cfg, p, pl: (),
+        lambda b, r, c, cfg, p, pl: {"config": cfg, "paths": p},
+    ),
     # Sprint 18e — MicrosoftSubscriptionService. Consumes the
     # shared EventBus and CacheManager; reads config for its
     # endpoint URL. Must be instantiated BEFORE the StoreRegistry

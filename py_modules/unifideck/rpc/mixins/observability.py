@@ -153,6 +153,60 @@ class ObservabilityRPCMixin:
         """Return recent probe-reaction history."""
         return getattr(self, "runtime_probes", None) or []
 
+    async def capture_logs(self, dest_path: str = "") -> Any:
+        """Collect every log + diagnostic into one zip in Downloads.
+
+        Exists to end the "where are your logs" round-trip: the
+        artifacts live in four unrelated places whose paths differ per
+        user, distro and Steam layout, so asking a reporter to find
+        them by hand reliably produces the wrong subset.
+
+        ``dest_path`` is normally empty, which means "use
+        ``logs.export_path`` and then the usual fallbacks". A caller may
+        pass a directory or a full ``.zip`` path to override it.
+
+        The returned dict describes the archive (path, size, file
+        count) plus what was skipped and which sanity checks failed.
+        Every string in it is a stable machine code, never prose, so
+        the frontend maps them through i18n.
+        """
+        svc = getattr(self.services, "support_bundle", None)
+        if svc is None:
+            raise RpcError("service_unavailable", service="support_bundle")
+        try:
+            return await svc.capture(dest_path, extra=self._support_bundle_extra())
+        except RpcError:
+            raise
+        except OSError as err:
+            # The one expected failure: nothing writable to put it in.
+            logger.warning("[Observability] log capture destination failed: %s", err)
+            raise RpcError("bundle_dest_unwritable", detail=str(err)) from err
+        except Exception as err:
+            logger.exception("[Observability] log capture failed")
+            raise RpcError("bundle_failed", detail=repr(err)) from err
+
+    def _support_bundle_extra(self) -> dict[str, Any]:
+        """Gather the facts only this layer can see.
+
+        Feature flags and the frontend's boot-time CEF probe results
+        live on the plugin instance, not on the filesystem, so the
+        collector cannot reach them. Kept sync and underscore-prefixed
+        so the RPC auto-wrapper skips it. Each lookup is guarded
+        individually — a missing flag service must not cost us the
+        whole bundle.
+        """
+        extra: dict[str, Any] = {}
+        flags = getattr(self.services, "feature_flags", None)
+        if flags is not None:
+            try:
+                extra["feature_flags"] = flags.get_flags()
+            except Exception:
+                logger.debug("[Observability] flag snapshot failed", exc_info=True)
+        probes = getattr(self, "runtime_probes", None)
+        if probes:
+            extra["runtime_probes"] = probes
+        return extra
+
     async def report_runtime_probes(self, probes: list[dict[str, Any]]) -> Any:
         """Store frontend boot-time CEF probe results."""
         if not isinstance(probes, list):
