@@ -289,7 +289,22 @@ def _ubisoft_has_populated_prefix(game_id: str) -> bool:
     the recorded ``prefix_path`` in ``ubisoft_id_map.json``, else the fixed
     internal default — and require upc.exe present so we only open UPC into a
     real prefix (genuinely-missing games still raise GameNotFoundError).
+
+    ``drive_c`` is located with :func:`resolve_drive_c` rather than by
+    appending it to the prefix root. A Proton prefix keeps its C: drive at
+    ``<root>/pfx/drive_c`` (only very old ones use ``<root>/drive_c``), so
+    the hand-built path missed every modern prefix: this returned False for a
+    fully-populated one, the caller raised ``GameNotFoundError``, and the
+    launcher exited before opening UPC. The install itself was already
+    waiting on that UPC window, so the UI sat on "INSTALLING UBISOFT
+    CONNECT / Follow the Ubisoft Connect window" forever — reported from the
+    field against Rayman Origins, whose prefix was a custom
+    ``~/Games/prefixes/ubisoft/80`` recorded in ``ubisoft_id_map.json``.
     """
+    from unifideck.launcher.proton.infrastructure.prefix_layout import (
+        resolve_drive_c,
+    )
+
     id_map_file = Path(
         "~/.local/share/unifideck/ubisoft_id_map.json",
     ).expanduser()
@@ -302,8 +317,7 @@ def _ubisoft_has_populated_prefix(game_id: str) -> bool:
     entry = data.get(game_id)
     recorded = entry.get("prefix_path") if isinstance(entry, dict) else None
     upc_rel = (
-        Path("drive_c")
-        / "Program Files (x86)"
+        Path("Program Files (x86)")
         / "Ubisoft"
         / "Ubisoft Game Launcher"
         / "upc.exe"
@@ -315,7 +329,11 @@ def _ubisoft_has_populated_prefix(game_id: str) -> bool:
         Path("~/.local/share/unifideck/prefixes/ubisoft").expanduser()
         / game_id,
     )
-    return any((c / upc_rel).is_file() for c in candidates)
+    for candidate in candidates:
+        drive_c = resolve_drive_c(candidate)
+        if drive_c is not None and (drive_c / upc_rel).is_file():
+            return True
+    return False
 
 
 def _xcloud_context(

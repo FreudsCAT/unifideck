@@ -69,6 +69,46 @@ def test_is_rockstar_egs_false_when_exe_name_unrelated():
     assert game_fixes.is_rockstar_egs("Fortnite", None, "FortniteClient-Win64-Shipping.exe") is False
 
 
+# ── install-dir tier: generalises to Rockstar titles with no table entry ──
+
+def test_install_dir_tier_matches_play_exe_plus_launcher(tmp_path):
+    """A Rockstar title we hold no app id or exe name for (e.g. a Definitive
+    Edition / GTA IV / RDR1 listing) is still recognised from the
+    Play<Title>.exe + Launcher.exe pair its build ships.
+    """
+    (tmp_path / "PlayGTA3.exe").write_bytes(b"MZ")
+    (tmp_path / "Launcher.exe").write_bytes(b"MZ")
+
+    assert game_fixes.is_rockstar_egs("unknown-id", None, "GTA3.exe", tmp_path) is True
+    assert game_fixes.rockstar_play_exe_in_dir(tmp_path) == "PlayGTA3.exe"
+
+
+def test_install_dir_tier_requires_launcher_sibling(tmp_path):
+    """A lone Play*.exe is NOT enough. A false positive would flip an
+    ordinary Epic title to STORE=egs, which hangs EOS games — so this tier
+    deliberately demands both signals.
+    """
+    (tmp_path / "PlayAmbiguous.exe").write_bytes(b"MZ")
+
+    assert game_fixes.rockstar_play_exe_in_dir(tmp_path) is None
+    assert game_fixes.is_rockstar_egs("unknown-id", None, "x.exe", tmp_path) is False
+
+
+def test_install_dir_tier_ignores_launcher_without_play_exe(tmp_path):
+    """Plenty of non-Rockstar games ship a generic Launcher.exe — that alone
+    must never trigger the Rockstar flow."""
+    (tmp_path / "Launcher.exe").write_bytes(b"MZ")
+
+    assert game_fixes.rockstar_play_exe_in_dir(tmp_path) is None
+    assert game_fixes.is_rockstar_egs("unknown-id", None, "x.exe", tmp_path) is False
+
+
+def test_install_dir_tier_survives_missing_dir(tmp_path):
+    """Nonexistent / None install dir → no match, no raise."""
+    assert game_fixes.rockstar_play_exe_in_dir(tmp_path / "nope") is None
+    assert game_fixes.rockstar_play_exe_in_dir(None) is None
+
+
 # ── epic_cleanup skip gating ───────────────────────────────────────
 
 def _cleanup_plan(tmp_path, game_id, umu_id=None, exe_name="game.exe"):
@@ -236,6 +276,86 @@ def test_setup_registers_protocol_when_user_reg_present(tmp_path):
     assert user_reg.read_text(encoding="utf-8").count(header) == 1
 
 
+def test_setup_writes_launch_shim_matching_proven_fix(tmp_path):
+    """The generated shim must match the reporter's hand-written fix.bat
+    byte-for-byte (that exact file was verified working on-device):
+
+        start "" EpicGamesLauncher.exe PlayGTAV.exe %*
+
+    ``start ""`` supplies the empty title argument cmd needs, and ``%*``
+    forwards game args. GTA V Enhanced's app id is used here since that's
+    the reported title.
+    """
+    install = tmp_path / "install"
+    install.mkdir()
+    plugin = tmp_path / "plugin"
+    (plugin / "bin").mkdir(parents=True)
+    (plugin / "bin" / "EpicGamesLauncher.exe").write_bytes(b"MZ-fake")
+
+    rockstar_egs.apply_rockstar_egs_setup(
+        _setup_plan(
+            tmp_path, "8769e24080ea413b8ebca3f1b8c50951",
+            install_dir=install, plugin_dir=plugin,
+        ),
+    )
+
+    shim = install / rockstar_egs.LAUNCH_SHIM_NAME
+    assert shim.is_file()
+    assert shim.read_text() == 'start "" EpicGamesLauncher.exe PlayGTAV.exe %*\n'
+
+
+def test_setup_shim_names_rdr2_play_exe(tmp_path):
+    """The shim must name the *right* Play exe per title, not a fixed one."""
+    install = tmp_path / "install"
+    install.mkdir()
+    plugin = tmp_path / "plugin"
+    (plugin / "bin").mkdir(parents=True)
+    (plugin / "bin" / "EpicGamesLauncher.exe").write_bytes(b"MZ-fake")
+
+    rockstar_egs.apply_rockstar_egs_setup(
+        _setup_plan(tmp_path, "Heather", install_dir=install, plugin_dir=plugin),
+    )
+
+    shim = install / rockstar_egs.LAUNCH_SHIM_NAME
+    assert shim.read_text() == 'start "" EpicGamesLauncher.exe PlayRDR2.exe %*\n'
+
+
+def test_setup_shim_rewritten_when_stale(tmp_path):
+    """A shim from an older template must be corrected, not skipped forever."""
+    install = tmp_path / "install"
+    install.mkdir()
+    plugin = tmp_path / "plugin"
+    (plugin / "bin").mkdir(parents=True)
+    (plugin / "bin" / "EpicGamesLauncher.exe").write_bytes(b"MZ-fake")
+    stale = install / rockstar_egs.LAUNCH_SHIM_NAME
+    stale.write_text("echo an older broken template\n")
+
+    rockstar_egs.apply_rockstar_egs_setup(
+        _setup_plan(tmp_path, "Heather", install_dir=install, plugin_dir=plugin),
+    )
+
+    assert stale.read_text() == 'start "" EpicGamesLauncher.exe PlayRDR2.exe %*\n'
+
+
+def test_setup_does_not_touch_user_hand_written_fix_bat(tmp_path):
+    """Testers following the manual workaround hand-write their own fix.bat
+    in this same directory — we must never clobber it."""
+    install = tmp_path / "install"
+    install.mkdir()
+    plugin = tmp_path / "plugin"
+    (plugin / "bin").mkdir(parents=True)
+    (plugin / "bin" / "EpicGamesLauncher.exe").write_bytes(b"MZ-fake")
+    theirs = install / "fix.bat"
+    theirs.write_text('start "" EpicGamesLauncher.exe PlayGTAV.exe %*\n')
+
+    rockstar_egs.apply_rockstar_egs_setup(
+        _setup_plan(tmp_path, "Heather", install_dir=install, plugin_dir=plugin),
+    )
+
+    assert theirs.read_text() == 'start "" EpicGamesLauncher.exe PlayGTAV.exe %*\n'
+    assert rockstar_egs.LAUNCH_SHIM_NAME != "fix.bat"
+
+
 def test_setup_survives_missing_bundled_launcher(tmp_path):
     """No bundled stub → best-effort no-op, never raises."""
     install = tmp_path / "install"
@@ -252,10 +372,14 @@ def test_setup_survives_missing_bundled_launcher(tmp_path):
 
 # ── --override-exe resolution across the three match tiers ─────────
 
-def _exe_plan(game_id, exe_name, umu_id=None):
+def _exe_plan(game_id, exe_name, umu_id=None, work_dir=None):
+    # work_dir=None → no shim on disk, so these assert the raw Play-exe
+    # fallback; the shim-preference cases pass a real dir.
     return SimpleNamespace(
         context=SimpleNamespace(
-            game_id=game_id, exe_path=Path("/install") / exe_name,
+            game_id=game_id,
+            exe_path=Path("/install") / exe_name,
+            work_dir=work_dir,
         ),
         state=SimpleNamespace(umu_id=umu_id),
     )
@@ -282,3 +406,15 @@ def test_play_exe_rel_falls_back_to_exe_name_for_unknown_app_id():
     """
     plan = _exe_plan("some-future-epic-catalog-id", "PlayGTAV.exe")
     assert _rockstar_play_exe_rel(plan) == "PlayGTAV.exe"
+
+
+def test_play_exe_rel_prefers_the_shim_when_present(tmp_path):
+    """THE regression this whole change exists for: once the shim is on
+    disk it must win, so the game launches *through* the fake Epic
+    launcher. Returning the bare Play exe here is the reported bug
+    (Rockstar launcher finds the game once, won't start it, then loses it).
+    """
+    (tmp_path / rockstar_egs.LAUNCH_SHIM_NAME).write_text("start ...")
+    plan = _exe_plan("Heather", "PlayRDR2.exe", work_dir=tmp_path)
+
+    assert _rockstar_play_exe_rel(plan) == rockstar_egs.LAUNCH_SHIM_NAME

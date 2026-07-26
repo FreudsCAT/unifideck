@@ -147,33 +147,40 @@ def cleanup_umu_runtime_cache() -> None:
                 target.unlink()
     logger.info("[launcher.umu] cache cleaned: %s", UMU_CACHE_DIR)
 def _runtime_entry_point_ok(variant_dir: Path) -> bool:
-    """Return whether ``variant_dir`` holds a completely installed runtime.
+    """Return whether ``variant_dir`` has a usable umu entry point.
 
-    Two signals, newest first:
+    Mirrors umu's OWN launch-time gate (``build_command`` does
+    ``entry_point.is_file()`` on ``<variant>/umu``): the ``umu`` symlink must
+    resolve to an existing ``_v2-entry-point``. ``Path.is_file()`` follows
+    symlinks, so a *missing* ``umu`` file AND a *dangling* ``umu`` symlink
+    both return ``False`` — exactly the two states that make umu raise
+    "Runtime Platform missing or download incomplete" *after* it has already
+    logged "<variant> is up to date".
 
-    ``.installed.ok`` — umu >=1.4.0 writes this marker only after
-    ``check_runtime()`` has validated the extracted payload against its
-    mtree. It is umu's own answer to "did this install finish?", and
-    ``has_umu_setup`` consults it rather than inspecting the tree. Prefer it,
-    because the entry-point probe below became unreliable in 1.4.x: umu now
-    creates the ``umu -> _v2-entry-point`` symlink inside a ``finally:``
-    block, so the link is present even when validation FAILED — the very
-    half-installed state UD-084 is about. Checking only the link would have
-    declared those runtimes healthy and skipped the repair.
+    Why umu's own ``.installed.ok`` marker is deliberately NOT accepted as an
+    alternative signal here, despite being newer and more authoritative about
+    whether an install *finished*: the two answer different questions.
 
-    ``<variant>/umu`` — the pre-1.4 layout, kept as a fallback so a runtime
-    installed by an older umu (no marker) is not needlessly wiped on first
-    launch after the upgrade. Mirrors umu's launch-time gate (``build_command``
-    does ``entry_point.is_file()``); ``Path.is_file()`` follows symlinks, so a
-    *missing* file and a *dangling* symlink both read as False — the two
-    states that make umu raise "Runtime Platform missing or download
-    incomplete" *after* it has already logged "<variant> is up to date".
+    * ``.installed.ok`` (written only when ``check_runtime`` validated the
+      mtree) is what ``has_umu_setup`` reads, so it means "umu will NOT
+      reinstall this".
+    * ``<variant>/umu`` is what umu must actually exec.
+
+    Treating them as interchangeable (``marker or entry_point``) reopens
+    UD-084 in its 1.4.x form: umu writes the marker and then creates the
+    symlink in a ``finally:``, so a runtime can carry the marker with a
+    broken entry point. umu would decline to reinstall it (marker present)
+    and then fail to exec it — the precise wedge this repair exists to break,
+    and we would have declared it healthy.
+
+    The reverse mismatch needs no handling: a runtime with an entry point but
+    NO marker is one umu will reinstall by itself on the next run, so it is
+    not our problem — and pre-1.4 runtimes, which have no marker at all, must
+    not be wiped for lacking one.
 
     Our own ``.unifideck-repair-<variant>`` marker lives in the cache ROOT,
     not inside a variant dir, so it can never be confused with umu's.
     """
-    if (variant_dir / _UMU_INSTALL_MARKER).is_file():
-        return True
     return (variant_dir / "umu").is_file()
 def _repair_marker(variant: str) -> Path:
     """Path of the "we already tried repairing this" marker for ``variant``."""

@@ -35,7 +35,9 @@ from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 def _plan() -> ProtonLaunchPlan:
     return ProtonLaunchPlan(
         context=types.SimpleNamespace(
-            game_id="abc123", store="epic", exe_path=Path("/install/abc123.exe"),
+            game_id="abc123", store="epic",
+            exe_path=Path("/install/abc123.exe"),
+            work_dir=Path("/install"),
         ),
         state=types.SimpleNamespace(wrappers=[], game_args=[], umu_id=None),
         python_bin=Path("/usr/bin/python3"),

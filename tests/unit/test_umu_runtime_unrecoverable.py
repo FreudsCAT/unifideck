@@ -134,23 +134,32 @@ def test_variant_that_repairs_successfully_clears(_isolated_cache):
     assert ur.unrecoverable_runtime_variants() == []
 
 
-def test_umu_install_marker_alone_counts_as_healthy(_isolated_cache):
-    """umu >=1.4.0's ``.installed.ok`` is authoritative on its own.
+def test_umu_marker_does_not_excuse_a_missing_entry_point(_isolated_cache):
+    """UD-084 in its 1.4.x form — the marker must NOT count as healthy.
 
-    It is written only after ``check_runtime()`` validates the payload, so
-    a runtime carrying it is complete even if the entry point is not laid
-    out the way pre-1.4 umu did it.
+    umu writes ``.installed.ok`` and only THEN creates the ``umu`` symlink,
+    in a ``finally:``. So a runtime can carry the marker while its entry
+    point is broken, and the marker is precisely what makes umu decline to
+    reinstall it (``has_umu_setup`` reads it). Accepting the marker as an
+    alternative signal would leave that runtime in place for umu to fail on
+    — the exact wedge this repair exists to break.
     """
     d = _marker_only(_isolated_cache, "steamrt4")
 
     ur.repair_incomplete_umu_runtime()
 
-    assert d.exists(), "a marked-installed runtime must never be wiped"
-    assert ur.unrecoverable_runtime_variants() == []
+    assert not d.exists(), (
+        "a marked-installed runtime with no entry point must still be wiped"
+    )
 
 
-def test_pre_1_4_entry_point_still_counts_as_healthy(_isolated_cache):
-    """A runtime installed by old umu has no marker — don't wipe it."""
+def test_entry_point_without_a_marker_is_healthy(_isolated_cache):
+    """The reverse mismatch is umu's problem, not ours.
+
+    No marker means umu will reinstall the runtime itself on the next run,
+    and pre-1.4 runtimes have no marker at all — wiping them for that would
+    throw away a perfectly good multi-hundred-MB download.
+    """
     _healthy(_isolated_cache, "steamrt3")
 
     ur.repair_incomplete_umu_runtime()

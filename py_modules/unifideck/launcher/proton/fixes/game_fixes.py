@@ -137,30 +137,123 @@ ROCKSTAR_PLAY_EXE_NAMES: frozenset[str] = frozenset({
     "playrdr2.exe",
     "playgtav.exe",
 })
+# FOURTH tier — the ``Play<Title>.exe`` convention itself, for Rockstar titles
+# we have no id or exact exe name for yet (GTA III/VC/SA Definitive Edition,
+# GTA IV Complete, the RDR1 port…). Rockstar-on-Epic builds ship a
+# ``Play*.exe`` bootstrap that chain-loads the Rockstar Games Launcher's
+# ``Launcher.exe`` from the SAME directory — the ordering visible in a real
+# game log (``PlayGTAV.exe`` → ``Launcher.exe`` → ``SocialClubHelper.exe``).
+#
+# BOTH signals are required, and that is deliberate. A false positive here is
+# not harmless: it would flip an ordinary Epic title to STORE=egs, whose
+# ProtonFixes profile adds the HKCR\\com.epicgames.launcher key that pushes
+# the EOS SDK into launcher-IPC auth → instant exit/hang (see
+# _epic_store_value and tests/unit/test_proton_prepare_store_env.py). A lone
+# "starts with Play" match would be far too loose to risk that.
+#
+# UNVERIFIED: the two titles we have hard evidence for (GTA V Enhanced, RDR2)
+# are both already covered by the exact-name tier above, so this tier is
+# inferred from Rockstar's packaging convention rather than observed. It can
+# only ADD coverage — every verified title still matches earlier, cheaper
+# tiers — but the specific titles above need a tester who owns them to
+# confirm. Once confirmed, prefer adding the exact name/app id above.
+_ROCKSTAR_PLAY_EXE_PREFIX = "play"
+_ROCKSTAR_LAUNCHER_SIBLING = "launcher.exe"
+
+
+def rockstar_play_exe_in_dir(install_dir: Any) -> str | None:
+    """The ``Play<Title>.exe`` bootstrap in ``install_dir``, or ``None``.
+
+    Requires a sibling ``Launcher.exe`` (the Rockstar Games Launcher
+    bootstrap) before claiming a match — see ``_ROCKSTAR_PLAY_EXE_PREFIX``
+    for why one signal alone is too dangerous. Returns the real (cased)
+    filename. Best-effort: any I/O problem yields ``None``.
+    """
+    from pathlib import Path
+    if not install_dir:
+        return None
+    try:
+        names = {
+            p.name.lower(): p.name
+            for p in Path(install_dir).iterdir()
+            if p.is_file()
+        }
+    except OSError:
+        return None
+    if _ROCKSTAR_LAUNCHER_SIBLING not in names:
+        return None
+    for lowered in sorted(names):
+        if (
+            lowered.startswith(_ROCKSTAR_PLAY_EXE_PREFIX)
+            and lowered.endswith(".exe")
+        ):
+            return names[lowered]
+    return None
 
 
 def is_rockstar_egs(
     game_id: str | None,
     umu_id: str | None = None,
     exe_name: str | None = None,
+    install_dir: Any = None,
 ) -> bool:
     """True for the Rockstar-on-Epic titles that need the special flow.
 
-    Three tiers, most durable first: ``exe_name`` (the game's own exe
+    Four tiers, cheapest/most-certain first: ``exe_name`` (the game's own exe
     filename, e.g. "PlayGTAV.exe" — stable across every Epic-catalog
     edition/re-release of the title, so prefer this everywhere the caller
     has it); ``game_id``, legendary's Epic app name (e.g. "Heather") — the
     reliable identifier ALWAYS present at launch, but a new one is minted
     every time Rockstar reshuffles their Epic listings; ``umu_id`` — an
     optional secondary match (the umu-database id, only populated when
-    ``bin/umu_lookup.py`` is present). Any one match returns True; matching
-    none returns False so the ordinary Epic path is taken unchanged.
+    ``bin/umu_lookup.py`` is present); and finally ``install_dir``, probed
+    for the ``Play<Title>.exe`` + ``Launcher.exe`` pair that any
+    Rockstar-on-Epic build ships, which is what lets Rockstar titles we hold
+    no id for work without a code change. Any one match returns True;
+    matching none returns False so the ordinary Epic path is unchanged.
+
+    Only the last tier touches the filesystem, and only when the cheap tiers
+    have already missed — so the hot path for ordinary Epic games stays pure.
     """
     if exe_name and exe_name.lower() in ROCKSTAR_PLAY_EXE_NAMES:
         return True
     if game_id and game_id in ROCKSTAR_EGS_APP_NAMES:
         return True
-    return bool(umu_id) and umu_id in ROCKSTAR_EGS_UMU_IDS
+    if umu_id and umu_id in ROCKSTAR_EGS_UMU_IDS:
+        return True
+    return rockstar_play_exe_in_dir(install_dir) is not None
+
+
+def resolve_rockstar_play_exe(
+    game_id: str | None,
+    umu_id: str | None = None,
+    exe_name: str | None = None,
+    install_dir: Any = None,
+) -> str | None:
+    """The Rockstar Play-launcher exe filename for a title, else ``None``.
+
+    ``None`` for anything that isn't a Rockstar-on-Epic title. The curated
+    :data:`ROCKSTAR_PLAY_EXES` table wins (it knows the right Play exe even
+    when the launch exe we were handed is an Epic-launcher stub); then the
+    exe name itself; then whatever ``Play*.exe`` the install dir yields,
+    which is what generalises this to Rockstar titles with no table entry.
+
+    Single source of truth — both ``compat.rockstar_egs`` (which bakes the
+    name into the generated launch shim) and ``handlers.epic`` (which turns
+    it into ``--override-exe``) must agree, or the shim would point at an
+    exe the launch never uses.
+    """
+    if not is_rockstar_egs(game_id, umu_id, exe_name, install_dir):
+        return None
+    from_table = (
+        ROCKSTAR_PLAY_EXES.get(game_id or "")
+        or ROCKSTAR_PLAY_EXES.get(umu_id or "")
+    )
+    if from_table:
+        return from_table
+    if exe_name and exe_name.lower() in ROCKSTAR_PLAY_EXE_NAMES:
+        return exe_name
+    return rockstar_play_exe_in_dir(install_dir)
 
 
 _UMU_DATABASE_URL_FORMATS = [
