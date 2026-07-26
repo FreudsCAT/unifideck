@@ -14,6 +14,7 @@ that downstream classification matches on.
 """
 from __future__ import annotations
 
+import asyncio
 import types
 
 from unifideck.stores.amazon.amazon_install import (
@@ -104,3 +105,89 @@ async def test_failure_message_carries_the_real_reason() -> None:
     # The reporter's bundle showed a bare "nile_exit_1"; it must now say why.
     assert err != "nile_exit_1"
     assert "No space left on device" in err
+
+
+# --------------------------------------------------------------------------
+# rc == 0 and no install dir — the stale-manifest no-op
+#
+# nile prints "Game is up to date" and exits 0 when a stale cached manifest
+# makes the download a no-op. Discarding that line left "install_dir_not_found"
+# as the only evidence, and the reason had to be recovered from nile's source
+# rather than from our own logs.
+# --------------------------------------------------------------------------
+async def test_finalize_failure_carries_niles_own_words() -> None:
+    inst = _installer()
+
+    async def _no_dir(*_args, **_kwargs) -> str | None:
+        return None
+
+    inst._resolve_install_path = _no_dir
+
+    res = await inst._finalize_install("gid", "/games", "Game is up to date")
+
+    assert res.success is False
+    assert res.error == "install_dir_not_found: Game is up to date"
+
+
+async def test_finalize_failure_keeps_parsable_prefix_without_a_tail() -> None:
+    inst = _installer()
+
+    async def _no_dir(*_args, **_kwargs) -> str | None:
+        return None
+
+    inst._resolve_install_path = _no_dir
+
+    res = await inst._finalize_install("gid", "/games", "")
+
+    assert res.error == "install_dir_not_found"
+
+
+# --------------------------------------------------------------------------
+# the spawn itself
+# --------------------------------------------------------------------------
+def test_format_exit_error_reports_a_spawn_failure() -> None:
+    outcome = _RunOutcome(rc=-2, spawn_error="[Errno 13] Permission denied")
+    assert _format_exit_error(outcome) == (
+        "nile_spawn_failed: [Errno 13] Permission denied"
+    )
+
+
+async def test_unspawnable_nile_is_not_a_generic_unknown_error(monkeypatch) -> None:
+    """A lost exec bit on bin/nile must name itself, not escape to the worker."""
+    def _refuse(*_args, **_kwargs):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _refuse)
+    inst = _installer()
+
+    outcome = await inst._run_install("/games", "gid", None)
+
+    assert outcome.rc == -2
+    assert "Permission denied" in _format_exit_error(outcome)
+
+
+async def test_nile_is_spawned_with_a_scrubbed_environment(monkeypatch) -> None:
+    """The frozen Decky backend leaks its own loader vars to every child.
+
+    Epic got this in the env-sanitization pass and Amazon was missed, so
+    ``nile`` still inherited ``LD_LIBRARY_PATH=/tmp/_MEIxxxx`` — the same
+    class of leak that made every GOG/Amazon/Ubisoft launch exit 127.
+    """
+    seen: dict[str, object] = {}
+
+    def _capture(*_args, **kwargs):
+        seen.update(kwargs)
+        raise OSError("stop here — the env is all this test needs")
+
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/_MEI123456")
+    monkeypatch.setenv("PYTHONPATH", "/plugin/py_modules")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _capture)
+
+    await _installer()._run_install("/games", "gid", None)
+
+    env = seen["env"]
+    assert isinstance(env, dict)
+    assert "LD_LIBRARY_PATH" not in env
+    assert "PYTHONPATH" not in env
+    # Scrubbed, not emptied — nile still needs PATH and HOME.
+    assert env.get("PATH")

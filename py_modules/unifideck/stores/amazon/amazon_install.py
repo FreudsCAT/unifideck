@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from unifideck.core.binaries import clean_cli_env
 from unifideck.core.manifest import write_manifest
 from unifideck.core.safe_delete import canonical_prefix, safe_rmtree
 from unifideck.core.types import Events, InstallResult, Result
@@ -66,14 +67,17 @@ ProgressCallback = Callable[[Any], Awaitable[None]]
 class _RunOutcome:
     """Result of one ``nile install`` subprocess run.
 
-    ``rc`` is the exit code (``-1`` on timeout); ``tail`` is the last few
-    non-progress output lines captured by the ring buffer — nile's real
-    error text when ``rc != 0``, so the failure isn't reduced to a bare
-    ``nile_exit_{rc}``.
+    ``rc`` is the exit code (``-1`` on timeout, ``-2`` when the process
+    never started); ``tail`` is the last few non-progress output lines
+    captured by the ring buffer — nile's real error text when ``rc != 0``,
+    so the failure isn't reduced to a bare ``nile_exit_{rc}``.
+    ``spawn_error`` is set only when ``create_subprocess_exec`` itself
+    raised, in which case there is no exit code to report at all.
     """
 
     rc: int
     tail: str = ""
+    spawn_error: str | None = None
 
 
 def _format_exit_error(outcome: _RunOutcome) -> str:
@@ -89,6 +93,8 @@ def _format_exit_error(outcome: _RunOutcome) -> str:
     printed as its actual error, went to a DEBUG log the reporter never
     captured. Mirrors the identical fix made for Epic/legendary.
     """
+    if outcome.spawn_error:
+        return f"nile_spawn_failed: {outcome.spawn_error}"
     base = f"nile_exit_{outcome.rc}"
     return f"{base}: {outcome.tail}" if outcome.tail else base
 
@@ -171,9 +177,11 @@ class AmazonInstaller:
                 store="amazon",
                 game_id=game_id,
             )
-        return await self._finalize_install(game_id, base)
+        return await self._finalize_install(game_id, base, outcome.tail)
 
-    async def _finalize_install(self, game_id: str, base: str) -> InstallResult:
+    async def _finalize_install(
+        self, game_id: str, base: str, tail: str = "",
+    ) -> InstallResult:
         """Finalize install — locate the installed directory and write manifest.
 
         Nile may record the install path in its installed.json before
@@ -182,24 +190,32 @@ class AmazonInstaller:
         verifies the directory exists on disk before returning it.
         If we still can't locate the install directory after the CLI
         reported success, the install is incomplete and we report failure.
+
+        ``tail`` is nile's own output for the run. It matters most on this
+        exact-zero-exit failure: when a stale cached manifest makes nile
+        no-op it prints "Game is up to date" and exits 0, and discarding
+        that line left the bare code ``install_dir_not_found`` as the only
+        evidence — the reason had to be recovered from nile's source
+        instead of from our own logs.
         """
         install_path = await self._resolve_install_path(game_id, base)
         if not install_path:
+            error = f"install_dir_not_found: {tail}" if tail else "install_dir_not_found"
             logger.error(
                 "[AmazonInstall] cannot locate install directory for %s "
                 "under %s — nile reported success but no matching "
-                "directory found on disk",
-                game_id, base,
+                "directory found on disk; nile said: %s",
+                game_id, base, tail or "(no output captured)",
             )
             await self._bus.emit(
                 Events.DOWNLOAD_FAILED,
                 store="amazon",
                 game_id=game_id,
-                error="install_dir_not_found",
+                error=error,
             )
             return InstallResult(
                 success=False,
-                error="install_dir_not_found",
+                error=error,
                 store="amazon",
                 game_id=game_id,
             )
@@ -262,11 +278,20 @@ class AmazonInstaller:
         }
         cmd = self._build_install_cmd(base, game_id, verb)
         logger.info("[AmazonInstall] executing: %s", " ".join(cmd))
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=clean_cli_env(),
+            )
+        except OSError as e:
+            # A lost exec bit / missing loader on bin/nile would otherwise
+            # escape to the worker and surface as a generic "unknown_error",
+            # which is visually identical to a genuine instant failure.
+            # The uninstall path has always reported this properly.
+            logger.exception("[AmazonInstall] cannot spawn %s", cmd[0])
+            return _RunOutcome(rc=-2, spawn_error=str(e))
         tail_buf = TailRingBuffer()
         drain_exc: BaseException | None = None
         try:
@@ -474,6 +499,7 @@ class AmazonInstaller:
                 "--yes",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
         except OSError as e:
             logger.warning("[AmazonUninstall] could not spawn nile: %s", e)

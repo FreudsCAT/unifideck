@@ -24,6 +24,7 @@ import json
 import logging
 from pathlib import Path
 
+from unifideck.core.binaries import clean_cli_env
 from unifideck.event_bus.event_bus import EventBus
 
 from .amazon_library import AmazonLibraryReader
@@ -64,6 +65,7 @@ class AmazonUpdateChecker:
                 "--json",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
             stdout, _ = await asyncio.wait_for(
                 proc.communicate(),
@@ -99,6 +101,7 @@ class AmazonUpdateChecker:
                 "--json",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
             stdout, _ = await asyncio.wait_for(
                 proc.communicate(),
