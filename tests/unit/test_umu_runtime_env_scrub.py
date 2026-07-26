@@ -8,11 +8,11 @@ exit code 127. game.log showed umu starting cleanly, then, right after
     cannot open shared object file: No such file or directory
 
 That ``python3`` is the interpreter of Proton's own launch script, run
-*inside* the container. It died because ``LD_LIBRARY_PATH`` — inherited
-from a Steam client that now runs containerised itself, so it points at
-``/usr/lib/pressure-vessel/overrides/...`` paths that resolve only in the
-*outer* container — was copied by umu into ``STEAM_RUNTIME_LIBRARY_PATH``
-and shadowed the nested container's own libs.
+*inside* the container. It died because an inherited ``LD_LIBRARY_PATH``
+was copied by umu into ``STEAM_RUNTIME_LIBRARY_PATH``, so a *host* library
+path shadowed the container's own libs. (The reporter was on plain Steam
+stable, so a containerised Steam client is NOT the source; where the value
+comes from is unestablished. It must not survive either way.)
 
 Epic was the only store that worked, purely because
 ``handlers/epic.py`` wraps its umu-run invocation in

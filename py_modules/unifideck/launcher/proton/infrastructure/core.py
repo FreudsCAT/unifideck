@@ -54,12 +54,12 @@ def sanitize_frozen_loader_env(env: dict[str, str]) -> None:
     directly contradicted ``bin/unifideck-launcher``, which pops
     ``LD_LIBRARY_PATH`` at process start precisely because Steam's value
     breaks non-Steam binaries — it just never popped the ``_ORIG`` twin, so
-    this function silently handed the value back. That was invisible until
-    Steam itself began running containerised (SteamOS 3.8+), where the
-    inherited path (``/usr/lib/pressure-vessel/overrides/...``) resolves only
-    inside the outer container and every GOG/Amazon/Ubisoft launch died at
-    127 while Epic — which strips both vars at its own ``--wrapper``
-    boundary — kept working.
+    this function silently handed the value back. In the field that showed up
+    as every GOG/Amazon/Ubisoft launch dying at 127 while Epic — which strips
+    both vars at its own ``--wrapper`` boundary — kept working. (Where the
+    inherited value originates is not established; it was seen on a plain
+    Steam stable client, so a containerised Steam is not the explanation.
+    The remedy is the same either way.)
 
     The retired bash launcher unset both once at startup and never restored
     them for any Proton/umu launch; mirror that here.

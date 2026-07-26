@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import signal
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,14 @@ _LAUNCHES_DIR = Path("~/.local/share/unifideck/launches").expanduser()
 # a different variant — covering all three keeps them meaningful
 # regardless of which runtime a given Proton build actually uses.
 UMU_RUNTIME_VARIANTS = ("steamrt2", "steamrt3", "steamrt4")
+# How long a failed repair suppresses another attempt on the same variant.
+# Deliberately an on-disk marker with a TTL rather than in-memory state: the
+# prefix warmup runs in the long-lived Decky BACKEND while launches run in a
+# fresh launcher process, and both repair the SAME shared runtime — so
+# process-scoped state would both miss the cross-process case and, in the
+# backend, disable UD-084 self-heal permanently after one unrelated failure.
+# The TTL means a genuinely fixable runtime starts self-healing again.
+_REPAIR_MARKER_TTL_SECONDS = 600
 _RECOVERABLE_CODES = {2, 74, 127}
 # Recoverable codes whose likely cause is a corrupt/incomplete steamrt
 # runtime bootstrap — the only ones that justify wiping the *shared*
@@ -135,6 +144,39 @@ def _runtime_entry_point_ok(variant_dir: Path) -> bool:
     already logged "<variant> is up to date".
     """
     return (variant_dir / "umu").is_file()
+def _repair_marker(variant: str) -> Path:
+    """Path of the "we already tried repairing this" marker for ``variant``."""
+    return UMU_CACHE_DIR / f".unifideck-repair-{variant}"
+
+
+def _repair_recently_attempted(variant: str) -> bool:
+    """Whether ``variant`` was repaired within the marker TTL."""
+    try:
+        age = time.time() - _repair_marker(variant).stat().st_mtime
+    except OSError:
+        return False
+    return age < _REPAIR_MARKER_TTL_SECONDS
+
+
+def runtime_is_unrecoverable(variant: str) -> bool:
+    """True when ``variant`` is broken AND a recent repair already failed.
+
+    See :func:`repair_incomplete_umu_runtime` for why a second failure is
+    treated as terminal rather than retried.
+    """
+    variant_dir = UMU_CACHE_DIR / variant
+    return (
+        _repair_recently_attempted(variant)
+        and variant_dir.is_dir()
+        and not _runtime_entry_point_ok(variant_dir)
+    )
+
+
+def unrecoverable_runtime_variants() -> list[str]:
+    """Every variant that survived a repair still broken, for error text."""
+    return [v for v in UMU_RUNTIME_VARIANTS if runtime_is_unrecoverable(v)]
+
+
 def repair_incomplete_umu_runtime() -> None:
     """Wipe any runtime variant that is present but has no umu entry point.
 
@@ -156,15 +198,40 @@ def repair_incomplete_umu_runtime() -> None:
     no-op on a healthy runtime, so it is safe to call on every launch. Safe
     without locking: launches run serially and this runs before any umu
     process is spawned, so no concurrent umu holds ``umu.lock`` here.
+
+    ONCE PER VARIANT PER LAUNCH. The repair assumes umu can re-download what
+    we delete. That assumption can be false: umu fetches the runtime from
+    ``repo.steampowered.com/<variant>/images/latest-public-beta``, and those
+    ``latest-*`` paths are symlinks that the repo now answers with HTTP 403
+    (real numbered version dirs still return 200). umu's *update* path
+    treats a 403 as non-fatal and keeps using the runtime it already has,
+    but its *install* path RAISES — so once a variant is gone it cannot come
+    back, and re-deleting the stub umu leaves behind just spins: field logs
+    showed this fire three times in one launch, each time deleting a fresh
+    403 stub. After one failed repair we leave the variant alone and let
+    :func:`unrecoverable_runtime_variants` turn it into a real error instead
+    of an infinite silent retry.
     """
     for variant in UMU_RUNTIME_VARIANTS:
         variant_dir = UMU_CACHE_DIR / variant
-        if variant_dir.is_dir() and not _runtime_entry_point_ok(variant_dir):
-            logger.warning(
-                "[launcher.umu] runtime '%s' present but entry point missing "
-                "— removing so umu re-downloads it", variant,
+        if not (variant_dir.is_dir() and not _runtime_entry_point_ok(variant_dir)):
+            continue
+        if _repair_recently_attempted(variant):
+            logger.error(
+                "[launcher.umu] runtime '%s' is STILL incomplete after a "
+                "recent repair — umu cannot download it (check game.log for "
+                "the umu error). Leaving it in place; deleting it again "
+                "would only spin.", variant,
             )
-            shutil.rmtree(variant_dir, ignore_errors=True)
+            continue
+        logger.warning(
+            "[launcher.umu] runtime '%s' present but entry point missing "
+            "— removing so umu re-downloads it", variant,
+        )
+        shutil.rmtree(variant_dir, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            UMU_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            _repair_marker(variant).touch()
 def ensure_umu_runtime_ready() -> None:
     """Ensure UMU runtime ready."""
     # The Steam Linux Runtime (steamrt2/3/4, depending on which one the
@@ -277,10 +344,13 @@ async def _run_umu_once(
         # into the pressure-vessel container and shadows the container's own
         # libs. The container then can't start ``python3`` — the interpreter
         # of Proton's launch script — which dies with "error while loading
-        # shared libraries: libz.so.1" and umu exits 127. This bites hardest
-        # where Steam itself runs containerised (SteamOS 3.8+), whose
-        # LD_LIBRARY_PATH points at /usr/lib/pressure-vessel/overrides/... —
-        # paths that only resolve inside the *outer* container.
+        # shared libraries: libz.so.1" and umu exits 127.
+        #
+        # Where the stray value comes from is NOT established: it was
+        # observed on a plain Steam stable client, so the obvious guess (a
+        # containerised Steam exporting pressure-vessel override paths) is
+        # ruled out for that report. Provenance doesn't change the remedy —
+        # nothing downstream of here wants a host loader path.
         #
         # Epic was immune only because handlers/epic.py already wraps its
         # umu-run invocation in ``env -u LD_LIBRARY_PATH -u LD_PRELOAD``;

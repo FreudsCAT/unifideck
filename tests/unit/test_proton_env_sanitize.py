@@ -44,12 +44,13 @@ def test_never_restores_either_var_from_orig():
 
 
 def test_never_restores_ld_library_path_on_clean_launcher_env():
-    # The regression that broke every GOG/Amazon/Ubisoft launch on SteamOS
-    # 3.8+: bin/unifideck-launcher pops LD_LIBRARY_PATH at process start but
-    # NOT its _ORIG twin, so an inherited LD_LIBRARY_PATH_ORIG — pointing at
-    # the outer containerised Steam's pressure-vessel overrides, which only
-    # resolve inside that container — got promoted straight back and rode
-    # umu-run into the nested container. Must NOT be promoted.
+    # The regression that broke every GOG/Amazon/Ubisoft launch:
+    # bin/unifideck-launcher pops LD_LIBRARY_PATH at process start but NOT
+    # its _ORIG twin, so an inherited LD_LIBRARY_PATH_ORIG got promoted
+    # straight back and rode umu-run into the pressure-vessel container,
+    # where a host library path shadows the container's own libs. Must NOT
+    # be promoted. (Observed on plain Steam stable — the origin of the
+    # inherited value is not established, only that it must not survive.)
     env = {
         "PATH": "/usr/bin",
         "LD_LIBRARY_PATH_ORIG": (
