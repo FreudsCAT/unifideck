@@ -257,11 +257,20 @@ class AuthShortcutsRPCMixin:
         It also matched ``store_game_id`` as a substring
         (``ubisoft:4`` ⊂ ``ubisoft:46``) and returned the *first* (not the
         nearest) appid in the window.
+
+        Matches ``store_game_id`` via ``get_full_id`` (regex, word-boundary
+        anchored) rather than requiring it to be the FIRST token of
+        ``LaunchOptions``: a wrapper prefix (a user's own edit, or a
+        third-party plugin like decky-proton-launch writing
+        ``<wrapper> %command% ubisoft:<id>``, both observed in the wild via
+        tester diagnostic bundles) pushes the store id token past position
+        0, and RunGame silently never fired because this returned 0.
         """
         from pathlib import Path
 
         import vdf
 
+        from unifideck.services.shortcut.launch_options import get_full_id
         from unifideck.steam.library import find_steam_path
         from unifideck.steam.steam_user import get_active_steam_user
         # Probe the cross-distro candidate roots (no config here — this is a
@@ -288,10 +297,7 @@ class AuthShortcutsRPCMixin:
         entries = shortcuts.values() if isinstance(shortcuts, dict) else []
         for entry in entries:
             launch_options = entry.get("LaunchOptions", "") or ""
-            first_token = (
-                launch_options.split(maxsplit=1)[0] if launch_options else ""
-            )
-            if first_token != store_game_id:
+            if get_full_id(launch_options) != store_game_id:
                 continue
             appid = entry.get("appid")
             if appid is None:

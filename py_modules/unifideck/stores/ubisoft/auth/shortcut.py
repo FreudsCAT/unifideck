@@ -402,7 +402,16 @@ class _AuthShortcut:
 
     @staticmethod
     def extract_store_id(launch_options: str) -> str:
-        """Extract store ID."""
-        if not launch_options:
-            return ""
-        return launch_options.split(maxsplit=1)[0]
+        """Extract the canonical ``"<store>:<id>"`` token from LaunchOptions.
+
+        Delegates to the shared, wrapper-tolerant regex matcher
+        (``services.shortcut.launch_options.get_full_id``) instead of
+        assuming the store id is the FIRST whitespace token — a wrapper
+        prefix (user-edited, or written by a third-party plugin such as
+        decky-proton-launch: ``<wrapper> %command% ubisoft:<id>``) pushes
+        the store id token past position 0, which made this auth shortcut
+        invisible to VDF validation/lookup and could spawn a duplicate.
+        """
+        from unifideck.services.shortcut.launch_options import get_full_id
+
+        return get_full_id(launch_options) or ""

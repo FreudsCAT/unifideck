@@ -91,7 +91,7 @@ def _reap_prefix_wineserver(env: dict[str, str] | None) -> None:
         logger.exception("[launcher.umu] wineserver reap failed for %s", prefix)
 
 
-def _open_game_log() -> Any:
+def open_game_log() -> Any:
     """Open the per-launch game-output log for umu stdout+stderr.
 
     Proton / Wine / the game itself write to stdout+stderr, which the
@@ -206,7 +206,7 @@ async def run_umu_with_retry(
     a hung Proton fails the step instead of retrying into the same hang.
     """
     last_rc = 1
-    game_log = _open_game_log()
+    game_log = open_game_log()
     out = game_log if game_log is not None else None
     try:
         for attempt in range(1, max_attempts + 1):
@@ -266,11 +266,29 @@ async def _run_umu_once(
     orphaned wineserver is left spinning.
     """
     if env is not None:
-        # Belt-and-suspenders: LD_PRELOAD must never reach umu-run/pressure-
-        # vessel here regardless of what built ``env`` — re-exporting the
-        # host's gameoverlayrenderer.so crashes the game process with
-        # "WARNING: Keyboard Interrupt". See sanitize_frozen_loader_env.
+        # Belt-and-suspenders: neither loader variable may reach umu-run/
+        # pressure-vessel here, regardless of what built ``env``.
+        #
+        # LD_PRELOAD — re-exporting the host's gameoverlayrenderer.so crashes
+        # the game process with "WARNING: Keyboard Interrupt".
+        #
+        # LD_LIBRARY_PATH — umu copies it into STEAM_RUNTIME_LIBRARY_PATH
+        # (umu_run.enable_steam_game_drive), so a *host* library path rides
+        # into the pressure-vessel container and shadows the container's own
+        # libs. The container then can't start ``python3`` — the interpreter
+        # of Proton's launch script — which dies with "error while loading
+        # shared libraries: libz.so.1" and umu exits 127. This bites hardest
+        # where Steam itself runs containerised (SteamOS 3.8+), whose
+        # LD_LIBRARY_PATH points at /usr/lib/pressure-vessel/overrides/... —
+        # paths that only resolve inside the *outer* container.
+        #
+        # Epic was immune only because handlers/epic.py already wraps its
+        # umu-run invocation in ``env -u LD_LIBRARY_PATH -u LD_PRELOAD``;
+        # GOG/Amazon/Ubisoft/raw-exe reach this spawn point directly. Doing
+        # it here covers every store at the single choke point.
+        # See sanitize_frozen_loader_env.
         env.pop("LD_PRELOAD", None)
+        env.pop("LD_LIBRARY_PATH", None)
     proc = await asyncio.create_subprocess_exec(
         *argv,
         env=env,

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from unifideck.core.types import Result
 
 if TYPE_CHECKING:
+    from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
     from unifideck.launcher.types.context import LaunchContext, RuntimeState
 
     from .service import LauncherService
@@ -71,40 +72,60 @@ async def launch_windows(
             app_id=0  # No app_id on LaunchContext
         )
 
-        # Phase 3: Run Subprocess
-        try:
-            rc = await svc._run_game_subprocess(plan, ctx, state)
-            state.rc = rc
-        finally:
-            # NOTE: this fires on the launcher SUBPROCESS bus (dispatcher.py),
-            # which only forwards LAUNCHER_STAGE — it does NOT reach the
-            # plugin's PlaytimeService. Playtime is recorded on the plugin bus
-            # via the frontend lifetime listener → notify_game_stopped RPC.
-            # Kept only for any future in-subprocess subscriber.
-            await svc._bus.emit(Events.GAME_STOPPED, store=store, game_id=game_id)
-
-        # Phase 4: Cloud Sync Up
-        await svc._cloud_sync_phase(ctx, "up")
-
-        exit_code = svc._resolve_exit_code(state)
-        # ``Result`` has no ``rc`` field — its public surface is
-        # ``success``, ``error``, ``error_code``, ``store``,
-        # ``metadata``. The dispatcher's ``_map_result_to_exitcode``
-        # parses ``error_code`` and extracts the integer from any
-        # ``exit_<N>`` prefix; encoding the exit code there is the
-        # documented round-trip channel for subprocess return codes.
-        # The earlier ``rc=exit_code`` form raised
-        # ``TypeError: Result.__init__() got an unexpected keyword
-        # argument 'rc'`` on every launch — Windows games could
-        # never report their exit code back to the launcher.
-        return Result(
-            success=(exit_code == 0),
-            error_code=None if exit_code == 0 else f"exit_{exit_code}",
-        )
+        # Phases 3-4: Run Subprocess, then Cloud Sync Up
+        return await _run_and_finalize(svc, ctx, state, plan, store, game_id)
 
     except Exception:
         logger.exception("[Orchestrator] Windows launch failed")
         raise  # Let the outer _handle_launcher_error catch and toast it
+
+
+async def _run_and_finalize(
+    svc: LauncherService,
+    ctx: LaunchContext,
+    state: RuntimeState,
+    plan: ProtonLaunchPlan,
+    store: str,
+    game_id: str,
+) -> Result:
+    """Phases 3-4 of :func:`launch_windows` — run the game, then sync up.
+
+    Split out purely to keep ``launch_windows`` under the function-length
+    cap; the ordering (GAME_STOPPED in a ``finally``, sync-up after it,
+    exit code encoded last) is load-bearing and unchanged.
+    """
+    from unifideck.core.types.events import Events
+
+    # Phase 3: Run Subprocess
+    try:
+        rc = await svc._run_game_subprocess(plan, ctx, state)
+        state.rc = rc
+    finally:
+        # NOTE: this fires on the launcher SUBPROCESS bus (dispatcher.py),
+        # which only forwards LAUNCHER_STAGE — it does NOT reach the
+        # plugin's PlaytimeService. Playtime is recorded on the plugin bus
+        # via the frontend lifetime listener → notify_game_stopped RPC.
+        # Kept only for any future in-subprocess subscriber.
+        await svc._bus.emit(Events.GAME_STOPPED, store=store, game_id=game_id)
+
+    # Phase 4: Cloud Sync Up
+    await svc._cloud_sync_phase(ctx, "up")
+
+    exit_code = svc._resolve_exit_code(state)
+    # ``Result`` has no ``rc`` field — its public surface is
+    # ``success``, ``error``, ``error_code``, ``store``,
+    # ``metadata``. The dispatcher's ``_map_result_to_exitcode``
+    # parses ``error_code`` and extracts the integer from any
+    # ``exit_<N>`` prefix; encoding the exit code there is the
+    # documented round-trip channel for subprocess return codes.
+    # The earlier ``rc=exit_code`` form raised
+    # ``TypeError: Result.__init__() got an unexpected keyword
+    # argument 'rc'`` on every launch — Windows games could
+    # never report their exit code back to the launcher.
+    return Result(
+        success=(exit_code == 0),
+        error_code=None if exit_code == 0 else f"exit_{exit_code}",
+    )
 
 
 async def launch_native(

@@ -6,10 +6,17 @@ umu-run started. legendary (bin/legendary) is a PyInstaller onefile binary
 that spawns the ``--wrapper`` command (python3 + umu-run) as its own
 subprocess; if it hands down its own bundled LD_LIBRARY_PATH/LD_PRELOAD
 instead of the clean env it was launched with, that pollution rides
-umu-run straight into the Steam Runtime container. GOG/Amazon/Ubisoft are
-unaffected — they spawn umu-run directly with Unifideck's own sanitized
-env, never going through a vendored CLI's own wrapper mechanism. The fix
-force-clears both vars right at the legendary -> umu-run boundary.
+umu-run straight into the Steam Runtime container. The fix force-clears
+both vars right at the legendary -> umu-run boundary.
+
+NOTE: this file originally claimed "GOG/Amazon/Ubisoft are unaffected —
+they spawn umu-run directly with Unifideck's own sanitized env". That was
+wrong: the sanitizer restored LD_LIBRARY_PATH from LD_LIBRARY_PATH_ORIG,
+so those stores DID inherit a host library path and hit the identical
+libz.so.1 failure once Steam itself went containerised (SteamOS 3.8+).
+Epic's ``env -u`` here was simply masking it. Both vars are now stripped
+at the shared umu spawn point too — see test_umu_runtime_env_scrub.py and
+test_proton_env_sanitize.py.
 """
 from __future__ import annotations
 
