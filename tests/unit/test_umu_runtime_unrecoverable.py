@@ -1,17 +1,17 @@
 """Regression: a runtime umu cannot re-download must fail loudly, not spin.
 
-Field report. umu fetches the Steam Linux Runtime from
-``repo.steampowered.com/<variant>/images/latest-public-beta``. Those
-``latest-*`` entries are symlinks, and the repo now answers them with
+Field report, against umu <=1.4.1. It fetched the Steam Linux Runtime from
+``repo.steampowered.com/<variant>/images/latest-public-beta[/VERSION.txt]``.
+Those ``latest-*`` entries are symlinks, and the repo answers them with
 HTTP 403 while real numbered version dirs still return 200::
 
     steamrt3/images/3.0.20260714.251853/SHA256SUMS  -> 200
     steamrt3/images/latest-public-beta/SHA256SUMS   -> 403
 
-umu handles that asymmetrically: its *update* path logs the 403 and keeps
-using the runtime already on disk, but its *install* path RAISES. So a
-variant that is present keeps working, while a variant that has been
-deleted can never come back.
+umu handled that asymmetrically: its *update* path logged the 403 and kept
+using the runtime already on disk, but its *install* path RAISED. So a
+variant that was present kept working, while a variant that had been
+deleted could never come back.
 
 That made ``repair_incomplete_umu_runtime`` — which deletes a broken
 variant expecting umu to re-fetch it — a spin: umu leaves a fresh stub,
@@ -19,6 +19,15 @@ we delete it, forever. Field logs showed it fire three times in a single
 launch. Worse, umu exits **0** on the resulting
 ``FileNotFoundError: ... Runtime Platform missing or download incomplete``,
 so the launcher reported SUCCESS for a game that never started.
+
+CURRENT STATE: the bundled umu is >=1.4.3, which reads
+``images/latest-public-beta.txt`` and fetches from the numbered dir that
+file names — both serve, so a wipe is recoverable again and the spin
+cannot occur for this reason. These tests still hold, because the guard was
+deliberately kept as a general loop breaker: "umu cannot install this
+runtime" still happens with no network, a full disk, or a future repo
+change. What changed is the TTL, now short enough that a transient cause
+self-heals on the next launch instead of failing launches for ten minutes.
 """
 from __future__ import annotations
 
@@ -69,6 +78,14 @@ def _healthy(cache, variant: str):
     return d
 
 
+def _marker_only(cache, variant: str):
+    """umu >=1.4.0's own "install finished" marker, without the entry point."""
+    d = cache / variant
+    d.mkdir(parents=True, exist_ok=True)
+    (d / ur._UMU_INSTALL_MARKER).write_text("ok\n")
+    return d
+
+
 def test_first_repair_deletes_the_broken_variant(_isolated_cache):
     broken = _broken(_isolated_cache, "steamrt4")
 
@@ -115,6 +132,73 @@ def test_variant_that_repairs_successfully_clears(_isolated_cache):
     _healthy(_isolated_cache, "steamrt4")  # umu succeeded this time
 
     assert ur.unrecoverable_runtime_variants() == []
+
+
+def test_umu_install_marker_alone_counts_as_healthy(_isolated_cache):
+    """umu >=1.4.0's ``.installed.ok`` is authoritative on its own.
+
+    It is written only after ``check_runtime()`` validates the payload, so
+    a runtime carrying it is complete even if the entry point is not laid
+    out the way pre-1.4 umu did it.
+    """
+    d = _marker_only(_isolated_cache, "steamrt4")
+
+    ur.repair_incomplete_umu_runtime()
+
+    assert d.exists(), "a marked-installed runtime must never be wiped"
+    assert ur.unrecoverable_runtime_variants() == []
+
+
+def test_pre_1_4_entry_point_still_counts_as_healthy(_isolated_cache):
+    """A runtime installed by old umu has no marker — don't wipe it."""
+    _healthy(_isolated_cache, "steamrt3")
+
+    ur.repair_incomplete_umu_runtime()
+
+    assert (_isolated_cache / "steamrt3").exists()
+    assert ur.unrecoverable_runtime_variants() == []
+
+
+def test_dangling_entry_point_without_marker_is_repaired(_isolated_cache):
+    """UD-084's actual shape: symlink present, target gone, no marker.
+
+    umu 1.4.x creates the ``umu -> _v2-entry-point`` symlink in a
+    ``finally:`` block, so it exists even when validation FAILED — which is
+    exactly why the marker has to win over the symlink.
+    """
+    d = _isolated_cache / "steamrt4"
+    d.mkdir(parents=True)
+    (d / "umu").symlink_to(d / "_v2-entry-point")  # target never created
+
+    ur.repair_incomplete_umu_runtime()
+
+    assert not d.exists(), "dangling entry point with no marker must be wiped"
+
+
+def test_repair_ttl_is_short_enough_to_self_heal(_isolated_cache):
+    """The TTL must outlast one launch's retries, not a whole session.
+
+    Under the bundled umu a wipe IS recoverable, so a long TTL only means a
+    transient failure keeps failing launches after the cause has cleared.
+    """
+    assert ur._REPAIR_MARKER_TTL_SECONDS <= 300, (
+        "TTL was tuned for umu <=1.4.1, where a wiped runtime could never "
+        "be re-downloaded; the bundled umu can re-download, so a long "
+        "suppression window now blocks legitimate self-heal"
+    )
+
+
+def test_arm64_variant_participates_in_the_scans(_isolated_cache):
+    """steamrt4-arm64 is a real umu variant — it must not be a silent no-op."""
+    assert "steamrt4-arm64" in ur.UMU_RUNTIME_VARIANTS
+
+    broken = _broken(_isolated_cache, "steamrt4-arm64")
+    ur.repair_incomplete_umu_runtime()
+    assert not broken.exists(), "arm64 variant must be repairable too"
+
+    _broken(_isolated_cache, "steamrt4-arm64")
+    ur.repair_incomplete_umu_runtime()
+    assert ur.unrecoverable_runtime_variants() == ["steamrt4-arm64"]
 
 
 async def test_dispatch_raises_instead_of_reporting_false_success(

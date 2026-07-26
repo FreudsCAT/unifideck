@@ -2,12 +2,16 @@
 
 Bug report: an Epic launch failed with "python3: error while loading shared
 libraries: libz.so.1" inside the pressure-vessel container, right after
-umu-run started. legendary (bin/legendary) is a PyInstaller onefile binary
-that spawns the ``--wrapper`` command (python3 + umu-run) as its own
-subprocess; if it hands down its own bundled LD_LIBRARY_PATH/LD_PRELOAD
-instead of the clean env it was launched with, that pollution rides
-umu-run straight into the Steam Runtime container. The fix force-clears
-both vars right at the legendary -> umu-run boundary.
+umu-run started. legendary (bin/legendary) spawns the ``--wrapper`` command
+(python3 + umu-run) as its own subprocess; if it hands down its own
+LD_LIBRARY_PATH/LD_PRELOAD instead of the clean env it was launched with,
+that pollution rides umu-run straight into the Steam Runtime container.
+The fix force-clears both vars right at the legendary -> umu-run boundary.
+
+(bin/legendary was a PyInstaller onefile binary when this was written; it
+is a Python zipapp as of 0.20.40. The boundary and the fix are unchanged —
+if anything a zipapp is MORE sensitive to a polluted env, since it runs
+under the system python3 rather than carrying its own libraries.)
 
 NOTE: this file originally claimed "GOG/Amazon/Ubisoft are unaffected —
 they spawn umu-run directly with Unifideck's own sanitized env". That was

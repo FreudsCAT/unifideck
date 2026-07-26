@@ -38,6 +38,11 @@ CMDLINE_ALLOWED: frozenset[str] = frozenset({
     "wineserver", "wine", "wineserver64", "umu-run", "upc.exe",
     "legendary", "gogdl", "nile", "comet", "proton", "srt-bwrap",
 })
+# NB: matching on ``comm`` survives the legendary/gogdl switch to zipapps.
+# The kernel sets ``comm`` from the file passed to ``execve``, not from the
+# shebang interpreter it goes on to load, so a zipapp still reports
+# ``legendary``/``gogdl`` (verified on-device) even though its argv reads
+# ``/usr/bin/env python3 bin/legendary``. Nothing to special-case here.
 
 
 @dataclass(frozen=True)

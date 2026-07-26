@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from unifideck.core.binaries import clean_cli_env
 from unifideck.launcher.proton.infrastructure.prefix_layout import resolve_drive_c
 from unifideck.services.cloud_save import safety
 from unifideck.services.cloud_save.gog_cloud_api import (
@@ -359,6 +360,7 @@ class GOGCloudSaveStrategy(GOGStateMixin, CloudSaveStrategy):
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
             stdout, stderr = await proc.communicate()
             if proc.returncode != 0:

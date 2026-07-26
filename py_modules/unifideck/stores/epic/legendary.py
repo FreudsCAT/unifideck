@@ -27,6 +27,8 @@ import json
 import logging
 from typing import Any, cast
 
+from unifideck.core.binaries import clean_cli_env
+
 _logger = logging.getLogger(__name__)
 
 
@@ -42,6 +44,7 @@ async def fetch_info(cli_path: str, game_id: str, *, timeout: float, log_prefix:
             "--json",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=clean_cli_env(),
         )
         stdout, _ = await asyncio.wait_for(
             proc.communicate(),

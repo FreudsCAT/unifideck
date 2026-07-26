@@ -78,12 +78,28 @@ def _patch_compat(monkeypatch, timed_out_sequence):
     return calls
 
 
-def _patch_selectors(monkeypatch, *, default_tool, ge_tool):
+def _capable_proton(tmp_path, name):
+    """A Proton dir that CAN run umu's winetricks verb.
+
+    ``setup_prefix`` short-circuits to managed GE for a Proton with no
+    ``protonfixes/`` (it could never run the compat step — see
+    test_prefix_setup_winetricks_capable.py). These tests exercise the
+    *timeout* ladder, which only applies to a Proton that genuinely could
+    have worked, so the fakes have to carry the payload.
+    """
+    root = tmp_path / name
+    (root / "protonfixes").mkdir(parents=True, exist_ok=True)
+    (root / "protonfixes" / "winetricks").write_text("#!/bin/sh\n")
+    return root
+
+
+def _patch_selectors(monkeypatch, tmp_path, *, default_tool, ge_tool):
+    default_path = _capable_proton(tmp_path, default_tool)
     monkeypatch.setattr(
         proton_pkg, "select_proton_version",
-        lambda steam_app_id, store_game_id: ("/p/default", default_tool),
+        lambda steam_app_id, store_game_id: (str(default_path), default_tool),
     )
-    ge = MagicMock(return_value=("/p/ge", ge_tool))
+    ge = MagicMock(return_value=(str(_capable_proton(tmp_path, ge_tool)), ge_tool))
     monkeypatch.setattr(proton_pkg, "select_managed_ge_proton", ge)
     return ge
 
@@ -92,7 +108,7 @@ async def test_retry_with_ge_on_compat_timeout(tmp_path, wired, monkeypatch):
     # default Proton hangs (timed_out=True), then GE retry succeeds (False).
     calls = _patch_compat(monkeypatch, [True, False])
     ge = _patch_selectors(
-        monkeypatch, default_tool="proton_experimental", ge_tool="GE-Proton11-1",
+        monkeypatch, tmp_path, default_tool="proton_experimental", ge_tool="GE-Proton11-1",
     )
 
     tool, recovered = await setup_mod.setup_prefix(_ctx(tmp_path), SimpleNamespace())
@@ -111,7 +127,7 @@ async def test_no_retry_when_hung_proton_was_already_ge(tmp_path, wired, monkeyp
     # GE itself hung — retrying with GE again would loop, so we must NOT.
     calls = _patch_compat(monkeypatch, [True])
     ge = _patch_selectors(
-        monkeypatch, default_tool="GE-Proton11-1", ge_tool="GE-Proton11-1",
+        monkeypatch, tmp_path, default_tool="GE-Proton11-1", ge_tool="GE-Proton11-1",
     )
 
     tool, recovered = await setup_mod.setup_prefix(_ctx(tmp_path), SimpleNamespace())
@@ -128,7 +144,7 @@ async def test_no_retry_when_hung_proton_was_already_ge(tmp_path, wired, monkeyp
 async def test_no_retry_on_clean_run(tmp_path, wired, monkeypatch):
     calls = _patch_compat(monkeypatch, [False])
     ge = _patch_selectors(
-        monkeypatch, default_tool="proton_experimental", ge_tool="GE-Proton11-1",
+        monkeypatch, tmp_path, default_tool="proton_experimental", ge_tool="GE-Proton11-1",
     )
 
     tool, recovered = await setup_mod.setup_prefix(_ctx(tmp_path), SimpleNamespace())

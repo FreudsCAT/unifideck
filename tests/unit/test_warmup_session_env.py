@@ -2,13 +2,20 @@
 
 Root cause of the recurring fresh-install hang: the Decky backend is a
 headless service whose environment has NO user session vars (DISPLAY,
-WAYLAND_DISPLAY, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS). winetricks/
-vcredist under ntsync-era Protons hangs or fails without them — while the
-SAME command with those four vars restored completes in ~55s (proven A/B
-on-device). Warmup borrows them from the running Steam client (the pure
+WAYLAND_DISPLAY, XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS, XAUTHORITY).
+winetricks/vcredist under ntsync-era Protons hangs or fails without them —
+while the SAME command with those vars restored completes in ~55s (proven
+A/B on-device). Warmup borrows them from the running Steam client (the pure
 parser ``_session_env_from_environ`` lives in ``prefix_warmup``) and passes
 them into the canonical ``setup_prefix``/``_run_one`` (in ``prefix_setup``),
 which merges with ``setdefault`` so launch-provided values are never clobbered.
+
+``XAUTHORITY`` was missing from the original list, and its absence brought
+the hang back in a subtler form: plugin_loader runs as ROOT, so a grafted
+``DISPLAY=:0`` with no auth cookie means every X connection is refused
+("Authorization required, but no authorization protocol specified" in
+game.log) and wine blocks until the 120s compat-step killpg — twice per
+install, reported only as a timeout.
 """
 from __future__ import annotations
 
@@ -29,6 +36,7 @@ def test_parser_extracts_only_session_keys():
         b"DISPLAY=:0\0WAYLAND_DISPLAY=wayland-0\0"
         b"XDG_RUNTIME_DIR=/run/user/1000\0"
         b"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus\0"
+        b"XAUTHORITY=/run/user/1000/xauth_EyYBiQ\0"
         b"HOME=/home/deck\0PATH=/usr/bin\0SECRET_TOKEN=hunter2\0"
     )
     env = warmup_mod._session_env_from_environ(blob)
@@ -37,7 +45,18 @@ def test_parser_extracts_only_session_keys():
         "WAYLAND_DISPLAY": "wayland-0",
         "XDG_RUNTIME_DIR": "/run/user/1000",
         "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+        "XAUTHORITY": "/run/user/1000/xauth_EyYBiQ",
     }
+
+
+def test_parser_extracts_xauthority():
+    """Without the auth cookie, root's X connections are refused and wine
+    blocks until the compat-step timeout — the graft is incomplete without it.
+    """
+    blob = b"DISPLAY=:0\0XAUTHORITY=/run/user/1000/xauth_abc123\0"
+    env = warmup_mod._session_env_from_environ(blob)
+    assert env["XAUTHORITY"] == "/run/user/1000/xauth_abc123"
+    assert "XAUTHORITY" in warmup_mod._SESSION_ENV_KEYS
 
 
 def test_parser_skips_empty_values_and_junk():

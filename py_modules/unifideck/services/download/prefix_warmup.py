@@ -84,19 +84,33 @@ def _reap_stale_prefix_wineserver(game_id: str) -> None:
 
 # Session vars the install-time umu runs need. The Decky backend is a
 # headless service (spawned by plugin_loader) whose environment carries NO
-# user session — none of these four are set there. winetricks/vcredist under
+# user session — none of these are set there. winetricks/vcredist under
 # ntsync-era Proton builds (GE-Proton11+, Proton Exp 2026-07) hangs
 # indefinitely or fails in that context, which wedged the serial install
 # queue on every fresh-prefix install. Proven by A/B on-device: backend env →
-# rc=1 / indefinite hang at vcredist_x86.EXE; backend env + these four vars →
+# rc=1 / indefinite hang at vcredist_x86.EXE; backend env + these vars →
 # rc=0 in ~55s. At launch time Steam provides them to the launcher (why the
 # same winetricks always worked at launch, incl. all of 0.6.1); at install
 # time we borrow them from the running Steam client so warmup matches launch.
+#
+# XAUTHORITY was the one this list originally missed, and its absence brought
+# the hang straight back in a subtler form. plugin_loader runs as ROOT, so
+# with DISPLAY=:0 grafted but no auth cookie every X connection is refused:
+#
+#     Authorization required, but no authorization protocol specified
+#
+# wine then blocks on that connection until the 120s compat-step killpg, so
+# the step "times out" with no error of its own — twice per install, once for
+# createprefix and once for regedit. Root can read the cookie despite its
+# 0600 deck:deck mode, so grafting the path is sufficient; the value is a
+# per-session file under XDG_RUNTIME_DIR (e.g. /run/user/1000/xauth_XXXXXX),
+# which is why it has to be borrowed from Steam rather than guessed.
 _SESSION_ENV_KEYS = (
     "DISPLAY",
     "WAYLAND_DISPLAY",
     "XDG_RUNTIME_DIR",
     "DBUS_SESSION_BUS_ADDRESS",
+    "XAUTHORITY",
 )
 
 

@@ -28,7 +28,14 @@ _LAUNCHES_DIR = Path("~/.local/share/unifideck/launches").expanduser()
 # cache checks/wipes a silent no-op for anyone on a build that resolved to
 # a different variant — covering all three keeps them meaningful
 # regardless of which runtime a given Proton build actually uses.
-UMU_RUNTIME_VARIANTS = ("steamrt2", "steamrt3", "steamrt4")
+UMU_RUNTIME_VARIANTS = ("steamrt2", "steamrt3", "steamrt4", "steamrt4-arm64")
+# Name of the marker umu >=1.4.0 writes inside a runtime variant directory
+# once, and only once, ``check_runtime()`` has validated the extracted payload
+# (see ``umu/umu_util.py``'s ``write_install_marker`` in the bundled zipapp).
+# It is umu's OWN definition of "this runtime finished installing", which
+# makes it strictly better evidence than probing for the entry point — see
+# :func:`_runtime_entry_point_ok`.
+_UMU_INSTALL_MARKER = ".installed.ok"
 # How long a failed repair suppresses another attempt on the same variant.
 # Deliberately an on-disk marker with a TTL rather than in-memory state: the
 # prefix warmup runs in the long-lived Decky BACKEND while launches run in a
@@ -36,7 +43,14 @@ UMU_RUNTIME_VARIANTS = ("steamrt2", "steamrt3", "steamrt4")
 # process-scoped state would both miss the cross-process case and, in the
 # backend, disable UD-084 self-heal permanently after one unrelated failure.
 # The TTL means a genuinely fixable runtime starts self-healing again.
-_REPAIR_MARKER_TTL_SECONDS = 600
+#
+# Short (2 min) because under the bundled umu a wipe IS recoverable: umu
+# re-downloads the variant on the next run. The TTL only has to outlast the
+# retries of a single launch so one launch cannot spin; anything longer just
+# means a transient failure (network blip, disk full) keeps failing launches
+# after the cause has cleared. It was 10 min when a wiped runtime could never
+# come back — see :func:`repair_incomplete_umu_runtime`.
+_REPAIR_MARKER_TTL_SECONDS = 120
 _RECOVERABLE_CODES = {2, 74, 127}
 # Recoverable codes whose likely cause is a corrupt/incomplete steamrt
 # runtime bootstrap — the only ones that justify wiping the *shared*
@@ -133,16 +147,33 @@ def cleanup_umu_runtime_cache() -> None:
                 target.unlink()
     logger.info("[launcher.umu] cache cleaned: %s", UMU_CACHE_DIR)
 def _runtime_entry_point_ok(variant_dir: Path) -> bool:
-    """Return whether ``variant_dir`` has a usable umu entry point.
+    """Return whether ``variant_dir`` holds a completely installed runtime.
 
-    Mirrors umu's OWN launch-time gate (``build_command`` does
-    ``entry_point.is_file()`` on ``<variant>/umu``): the ``umu`` symlink
-    must resolve to an existing ``_v2-entry-point``. ``Path.is_file()``
-    follows symlinks, so a *missing* ``umu`` file AND a *dangling* ``umu``
-    symlink both return ``False`` — exactly the two states that make umu
-    raise "Runtime Platform missing or download incomplete" *after* it has
-    already logged "<variant> is up to date".
+    Two signals, newest first:
+
+    ``.installed.ok`` — umu >=1.4.0 writes this marker only after
+    ``check_runtime()`` has validated the extracted payload against its
+    mtree. It is umu's own answer to "did this install finish?", and
+    ``has_umu_setup`` consults it rather than inspecting the tree. Prefer it,
+    because the entry-point probe below became unreliable in 1.4.x: umu now
+    creates the ``umu -> _v2-entry-point`` symlink inside a ``finally:``
+    block, so the link is present even when validation FAILED — the very
+    half-installed state UD-084 is about. Checking only the link would have
+    declared those runtimes healthy and skipped the repair.
+
+    ``<variant>/umu`` — the pre-1.4 layout, kept as a fallback so a runtime
+    installed by an older umu (no marker) is not needlessly wiped on first
+    launch after the upgrade. Mirrors umu's launch-time gate (``build_command``
+    does ``entry_point.is_file()``); ``Path.is_file()`` follows symlinks, so a
+    *missing* file and a *dangling* symlink both read as False — the two
+    states that make umu raise "Runtime Platform missing or download
+    incomplete" *after* it has already logged "<variant> is up to date".
+
+    Our own ``.unifideck-repair-<variant>`` marker lives in the cache ROOT,
+    not inside a variant dir, so it can never be confused with umu's.
     """
+    if (variant_dir / _UMU_INSTALL_MARKER).is_file():
+        return True
     return (variant_dir / "umu").is_file()
 def _repair_marker(variant: str) -> Path:
     """Path of the "we already tried repairing this" marker for ``variant``."""
@@ -199,18 +230,29 @@ def repair_incomplete_umu_runtime() -> None:
     without locking: launches run serially and this runs before any umu
     process is spawned, so no concurrent umu holds ``umu.lock`` here.
 
-    ONCE PER VARIANT PER LAUNCH. The repair assumes umu can re-download what
-    we delete. That assumption can be false: umu fetches the runtime from
-    ``repo.steampowered.com/<variant>/images/latest-public-beta``, and those
-    ``latest-*`` paths are symlinks that the repo now answers with HTTP 403
-    (real numbered version dirs still return 200). umu's *update* path
-    treats a 403 as non-fatal and keeps using the runtime it already has,
-    but its *install* path RAISES — so once a variant is gone it cannot come
-    back, and re-deleting the stub umu leaves behind just spins: field logs
-    showed this fire three times in one launch, each time deleting a fresh
-    403 stub. After one failed repair we leave the variant alone and let
-    :func:`unrecoverable_runtime_variants` turn it into a real error instead
-    of an infinite silent retry.
+    ONCE PER VARIANT PER TTL. The repair assumes umu can re-download what we
+    delete, and that assumption is only as good as the bundled umu.
+
+    It was FALSE up to umu 1.4.1, which fetched from
+    ``repo.steampowered.com/<variant>/images/latest-public-beta[/VERSION.txt]``
+    — ``latest-*`` symlink paths the repo answers with HTTP 403 (numbered
+    version dirs still return 200). umu's *update* path treats a 403 as
+    non-fatal and keeps the runtime it already has, but its *install* path
+    RAISES, so once a variant was gone it could never come back; re-deleting
+    the stub umu left behind merely spun, and field logs showed this fire
+    three times in a single launch.
+
+    The bundled umu (>=1.4.3) reads ``images/latest-public-beta.txt`` and
+    fetches from the numbered directory that file names, which serves
+    normally — so a wipe is now genuinely recoverable and this guard is no
+    longer working around a dead endpoint.
+
+    The single-attempt rule stays anyway, because "umu cannot install this
+    runtime" has other causes (no network, full disk, a future repo change).
+    It is a loop breaker, not a 403 workaround: after one failed repair we
+    leave the variant alone and let :func:`unrecoverable_runtime_variants`
+    turn it into a real error rather than an infinite silent retry. The TTL
+    is deliberately short so a transient cause self-heals on the next launch.
     """
     for variant in UMU_RUNTIME_VARIANTS:
         variant_dir = UMU_CACHE_DIR / variant

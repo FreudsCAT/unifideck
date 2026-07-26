@@ -297,10 +297,11 @@ def _system_proton(tmp_path: Path, name: str) -> Path:
     """Create ``<tmp>/system/<name>/proton`` and return the compat root dir.
 
     Builds a *structurally complete* install (executable ``proton``,
-    non-empty ``files/bin/wine`` payload, ``version``) so it passes the
-    selector's install-completeness validation — the selection tiers
-    now skip a truncated/half-extracted Proton, so a stub would be
-    (correctly) rejected and fall through to GE.
+    non-empty ``files/bin/wine`` payload, ``version``, and a
+    ``toolmanifest.vdf`` — every real Proton ships one, and umu parses it on
+    every launch) so it passes the selector's install-completeness
+    validation. The selection tiers skip a truncated/half-extracted Proton,
+    so a stub would be (correctly) rejected and fall through to GE.
     """
     import os
     import stat
@@ -313,6 +314,9 @@ def _system_proton(tmp_path: Path, name: str) -> Path:
     os.chmod(proton, proton.stat().st_mode | stat.S_IXUSR)
     (tool / "files" / "bin" / "wine").write_text("")
     (tool / "version").write_text("1.0\n")
+    (tool / "toolmanifest.vdf").write_text(
+        '"manifest"\n{\n  "commandline" "/proton run"\n}\n',
+    )
     return root
 
 

@@ -101,13 +101,13 @@
   "remote_binary_bundling": true,
   "remote_binary": [
     {
-      "sha256hash": "5663b221d46ffd98ed4ca1bbaa803af9ac22b371fa1af8261b11758cb9b20893",
-      "url": "https://github.com/Heroic-Games-Launcher/legendary/releases/download/0.20.38/legendary_linux_x86_64",
+      "sha256hash": "2b82497051afd95670994146e6038d6e1c98a1c60c21949def668b52aef7d3f7",
+      "url": "https://github.com/Heroic-Games-Launcher/legendary/releases/download/0.20.43/legendary_linux_x86_64",
       "name": "legendary"
     },
     {
-      "sha256hash": "01d7e42821d5310cdc59f09d1b573af7a1e2e35f56741a1076dab9da05fd0cd8",
-      "url": "https://github.com/Heroic-Games-Launcher/heroic-gogdl/releases/download/v1.1.2/gogdl_linux_x86_64",
+      "sha256hash": "d1f9f9a730ff442409bc11b14ae9ec410e5e45492f32899076481e58dd451117",
+      "url": "https://github.com/Heroic-Games-Launcher/heroic-gogdl/releases/download/v1.2.2/gogdl_linux_x86_64",
       "name": "gogdl"
     },
     {

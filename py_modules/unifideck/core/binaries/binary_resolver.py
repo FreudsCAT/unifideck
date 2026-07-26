@@ -29,7 +29,39 @@ from typing import Any
 
 from unifideck.core.types.domain import CLITool
 
+from .binary_signatures import verify_bundled_binary
+from .cli_env import clean_cli_env
+
 logger = logging.getLogger(__name__)
+
+
+def _log_signature_mismatch(name: str, path: str) -> None:
+    """Log loudly when a bundled binary does not match its declared hash.
+
+    FAIL-OPEN by design: this reports, it does not block. A mismatch means
+    the file on disk is not the version the manifest pins — a half-applied
+    update, a hand-copied binary, a user-swapped one — and the symptoms
+    (unknown CLI flags, unparsable output) are otherwise attributed to the
+    store rather than to the binary. One ERROR line in the log turns days
+    of misdirected triage into a one-line answer.
+
+    Refusing to run instead would be worse: an over-strict check that
+    bricks every store on a hash the maintainer forgot to bump is a far
+    likelier outcome than a maliciously swapped binary on a Deck where the
+    user already owns the plugin directory.
+
+    Only Tier-1 (bundled) hits are checked. A PATH or ~/.local/bin binary
+    is deliberately the user's own and has no expected hash.
+    """
+    verdict = verify_bundled_binary(name, path)
+    if verdict is False:
+        logger.error(
+            "[BinaryResolver] %s at %s does NOT match its declared SHA256 "
+            "— it is not the version package.json pins. Store failures "
+            "from here are most likely this, not the store. Reinstall the "
+            "plugin to restore the bundled binary.",
+            name, path,
+        )
 
 
 def _is_executable(path: str) -> bool:
@@ -93,6 +125,7 @@ class BinaryResolver:
                     "%s",
                     tool.name, expanded,
                 )
+                _log_signature_mismatch(tool.name, expanded)
                 return expanded
 
         # Tier 2 — system PATH
@@ -139,6 +172,10 @@ class BinaryResolver:
                 capture_output=True,
                 text=True,
                 timeout=self._version_timeout,
+                # Same scrubbed env the real invocations get — otherwise the
+                # probe can succeed (or fail) under conditions the actual run
+                # never sees, which is worse than not probing at all.
+                env=clean_cli_env(),
                 check=False,
             )
         except (

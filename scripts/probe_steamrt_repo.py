@@ -10,22 +10,34 @@ reporter's Deck) and run it with no venv, no project imports, no install.
 
 WHY THIS EXISTS
 ---------------
-umu installs the Steam Linux Runtime from
+How umu reaches the Steam Linux Runtime changed, and the two generations
+fail in completely different places:
 
-    https://repo.steampowered.com/<variant>/images/latest-public-beta/
+  * umu <=1.4.1 fetched straight out of the ``latest-*`` SYMLINK DIRECTORY::
 
-Those ``latest-*`` entries are symlinks. If the repo stops serving them the
-failure is asymmetric and easy to misread:
+        https://repo.steampowered.com/<variant>/images/latest-public-beta/...
 
-  * ``_update_umu``  (runtime already on disk) logs the error and carries on
-    -> machines that already have a runtime keep working indefinitely.
-  * ``_install_umu`` (runtime absent) raises
-    -> a machine that has LOST its runtime can never get one back.
+    The repo now answers those with HTTP 403, which is fatal but asymmetric
+    and easy to misread: ``_update_umu`` (runtime already on disk) logs the
+    error and carries on, so those machines keep working indefinitely, while
+    ``_install_umu`` (runtime absent) raises — a machine that has LOST its
+    runtime can never get one back.
 
-So "it works for me" proves nothing about whether a fresh install works.
-This script asks the question directly, and separates a *path* problem
-(the repo refuses that URL for everyone) from a *client* problem (our UA,
-token, TLS, or network), which the raw umu error cannot distinguish.
+  * umu >=1.4.3 (what Unifideck bundles) reads a small VERSION FILE::
+
+        https://repo.steampowered.com/<variant>/images/latest-public-beta.txt
+
+    then fetches from the numbered directory that file names. Both serve
+    normally, so this generation installs fine.
+
+That difference is why this script probes BOTH shapes and decides on the
+``.txt`` one: judging a modern umu by the symlink directories reports a
+false "umu cannot install" on a perfectly healthy machine.
+
+"It works for me" proves nothing about whether a fresh install works. This
+script asks the question directly, and separates a *path* problem (the repo
+refuses that URL for everyone) from a *client* problem (our UA, token, TLS,
+or network), which the raw umu error cannot distinguish.
 
 It replicates umu's own derivations exactly, including the non-obvious one:
 the archive filename comes from the CODENAME, not the variant, so steamrt3
@@ -52,9 +64,15 @@ VARIANTS: dict[str, str] = {
     "steamrt4": "steamrt4",
 }
 
-# Every named channel that appears in the images/ index.
+# The version file umu >=1.4.3 reads. THIS is the deciding probe: it names
+# the numbered dir everything else is fetched from, so if it serves and that
+# dir serves, the bundled umu can install.
+VERSION_FILE = "latest-public-beta.txt"
+
+# Named channel directories, used by umu <=1.4.1 and kept only as context —
+# they are expected to 403 now and that is no longer a blocker on its own.
 CHANNELS: tuple[str, ...] = (
-    "latest-public-beta",  # <- the one umu hardcodes
+    "latest-public-beta",  # <- what umu <=1.4.1 hardcoded
     "latest-public-stable",
     "latest-container-runtime-public-beta",
     "latest-container-runtime-depot",
@@ -157,7 +175,25 @@ def check_variant(variant: str, timeout: float, download: bool) -> dict[str, boo
     print(f"  numbered versions listed: {len(versions)}"
           f"{f', newest {newest}' if newest else ''}")
 
-    print("\n  named channels (what umu uses):")
+    # The deciding probe for the bundled umu (>=1.4.3).
+    print(f"\n  version file (what umu >=1.4.3 uses):")
+    vf_url = f"{HOST}/{variant}/images/{VERSION_FILE}"
+    vf_status, _, vf_body = probe(vf_url, timeout=timeout, read=True)
+    pinned = vf_body.decode("utf-8", "replace").strip() if vf_body else ""
+    print(f"    {mark(vf_status)} {vf_status!s:<6} {VERSION_FILE}"
+          f"{f'  -> {pinned}' if pinned else ''}")
+
+    # Follow it exactly as umu does: the version it names must also serve.
+    version_file_ok = False
+    if vf_status == 200 and pinned:
+        for f in META_FILES:
+            status, _, _ = probe(
+                f"{HOST}/{variant}/images/{pinned}/{f}", timeout=timeout,
+            )
+            version_file_ok = version_file_ok or status == 200
+            print(f"    {mark(status)} {status!s:<6} {pinned}/{f}")
+
+    print("\n  named channels (what umu <=1.4.1 used — legacy context):")
     channel_ok = False
     for ch in CHANNELS:
         row = []
@@ -189,7 +225,11 @@ def check_variant(variant: str, timeout: float, download: bool) -> dict[str, boo
             got = _stream_probe(f"{HOST}/{variant}/images/{newest}/{arc}", timeout)
             print(f"      read {got} bytes")
 
-    return {"channel": channel_ok, "numeric": numeric_ok}
+    return {
+        "version_file": version_file_ok,
+        "channel": channel_ok,
+        "numeric": numeric_ok,
+    }
 
 
 def _stream_probe(url: str, timeout: float) -> int:
@@ -204,9 +244,14 @@ def _stream_probe(url: str, timeout: float) -> int:
 
 
 def check_client_shape(timeout: float) -> None:
-    """Vary only the CLIENT against one URL, to rule client factors in/out."""
+    """Vary only the CLIENT against one URL, to rule client factors in/out.
+
+    Aimed at the version file the bundled umu actually requests. Pointed at
+    a ``latest-*`` directory it only ever demonstrated that the directory
+    403s for every client shape — true, but no longer the question.
+    """
     section("CLIENT-SHAPE MATRIX (same URL, different request shapes)")
-    url = f"{HOST}/steamrt4/images/latest-public-beta/SHA256SUMS"
+    url = f"{HOST}/steamrt4/images/{VERSION_FILE}"
     cases = (
         ("umu UA + token", f"{url}?versions={token_urlsafe(16)}", UMU_UA),
         ("umu UA, no token", url, UMU_UA),
@@ -227,25 +272,39 @@ def check_client_shape(timeout: float) -> None:
 
 
 def verdict(results: dict[str, dict[str, bool]]) -> int:
-    """Summarise into the one conclusion that drives the fix."""
+    """Summarise into the one conclusion that drives the fix.
+
+    Decided on the VERSION FILE, because that is what the bundled umu
+    (>=1.4.3) actually uses. The ``latest-*`` channel directories are
+    reported for context only: they are expected to 403 now, and treating
+    that as the failure signal — as this script originally did — reports
+    "umu cannot install" on a machine where umu installs perfectly well.
+    """
     section("VERDICT")
+    any_version_file = any(r["version_file"] for r in results.values())
     any_channel = any(r["channel"] for r in results.values())
     any_numeric = any(r["numeric"] for r in results.values())
 
-    if any_channel:
-        print("  Named channels are SERVING. umu can install normally;")
-        print("  a runtime failure here is NOT this repo issue.")
+    if any_version_file:
+        print("  Version file + the numbered dir it names are SERVING.")
+        print("  -> The bundled umu (>=1.4.3) CAN install the runtime.")
+        if not any_channel:
+            print("  -> Legacy latest-* channel dirs are blocked, which is")
+            print("     expected and affects only umu <=1.4.1.")
+        print("  -> A runtime failure here is NOT a repo-access issue.")
         return 0
-    if any_numeric:
-        print("  Named channels are BLOCKED, numbered dirs are SERVING.")
-        print("  -> umu's hardcoded images/latest-public-beta cannot install.")
-        print("  -> Machines with a cached runtime keep working (update path")
-        print("     tolerates the error); machines without one are stuck.")
-        print("  -> Fix must reach a numbered dir: bump umu if upstream")
-        print("     repointed it, else pin a version and install it ourselves.")
+    if any_channel or any_numeric:
+        print("  Version file is BLOCKED, but other paths still serve"
+              f" ({'channels' if any_channel else 'numbered dirs'}).")
+        print("  -> The bundled umu cannot install: it reads")
+        print(f"     images/{VERSION_FILE} first and gives up if that fails.")
+        print("  -> Machines with a cached runtime keep working (the update")
+        print("     path tolerates the error); machines without one are stuck.")
+        print("  -> Check whether upstream repointed the URL again, and bump")
+        print("     umu to match; else pin a version and install it ourselves.")
         return 1
-    print("  NOTHING is serving — including numbered dirs and the index.")
-    print("  Suspect local network/DNS/TLS or a full outage, not the symlinks.")
+    print("  NOTHING is serving — version file, channels, numbered dirs and")
+    print("  the index alike. Suspect local network/DNS/TLS or a full outage.")
     return 2
 
 

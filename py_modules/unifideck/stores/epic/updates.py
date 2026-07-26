@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
+from unifideck.core.binaries import clean_cli_env
 from unifideck.core.types import InstallResult
 from unifideck.event_bus.event_bus import EventBus
 
@@ -74,6 +75,7 @@ class EpicUpdateChecker:
                 "--check-updates",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
             stdout, _ = await asyncio.wait_for(
                 proc.communicate(),

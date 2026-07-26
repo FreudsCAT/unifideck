@@ -120,6 +120,82 @@ def _pin_final_tool(ctx: LaunchContext, tool: str) -> None:
         )
 
 
+def _can_run_winetricks_verb(proton_path: Path | str | None) -> bool:
+    """Whether ``umu-run winetricks`` can work with this Proton.
+
+    umu execs ``<PROTONPATH>/protonfixes/winetricks``. GE-Proton and
+    UMU-Proton bundle that; official Valve Protons do not ship a
+    ``protonfixes`` directory at all, so the verb dies with a
+    FileNotFoundError from inside umu rather than reporting anything useful.
+
+    Returns True when there is no path to judge (``None``) or the check
+    itself errors, so this gate can only ever skip an attempt that was
+    certain to fail — it never becomes a new way to reject a Proton that
+    might have worked. A path that exists but has no ``protonfixes/``
+    returns False, which includes the "selector handed us something that
+    isn't there" case: routing that to managed GE is the same outcome the
+    timeout ladder would have reached, just sooner.
+    """
+    if not proton_path:
+        return True
+    try:
+        root = Path(proton_path)
+        if root.is_file():  # the `proton` script itself was passed
+            root = root.parent
+        return (root / "protonfixes").is_dir()
+    except OSError:
+        return True
+
+
+async def _preempt_incapable_proton(
+    ctx: LaunchContext,
+    state: RuntimeState,
+    python_bin: Path | str,
+    default: tuple[Path | str | None, str],
+    session_env: dict[str, str] | None,
+) -> str | None:
+    """Run setup under managed GE when the default can't do compat at all.
+
+    Returns the GE tool id if it took over, else ``None`` (caller proceeds
+    with the default as usual).
+
+    umu's winetricks verb execs ``<PROTONPATH>/protonfixes/winetricks``,
+    which only GE-Proton and UMU-Proton ship — umu's own ``--help`` says
+    "requires UMU-Proton or GE-Proton". Under an official Valve Proton
+    (Experimental, Proton 9, proton-cachyos…) that path does not exist, so
+    the step cannot succeed no matter how long it is given.
+
+    Attempting it anyway is not merely futile, it is expensive: the missing
+    directory surfaces as a FileNotFoundError *inside* umu, the wine child is
+    left holding the prefix, and each step burns its full timeout before
+    being killed — twice per install — after which the caller's ladder
+    switches to GE and RESETS the prefix, discarding everything it just
+    built. The end state was always GE, so checking first costs one ``stat``
+    and saves minutes plus a wasted prefix build on every fresh install.
+    """
+    default_path, default_tool = default
+    if _can_run_winetricks_verb(default_path):
+        return None
+
+    from unifideck.launcher.proton import select_managed_ge_proton
+
+    ge_path, ge_tool = select_managed_ge_proton()
+    if ge_tool == default_tool:
+        # Nothing better to switch to; let the normal path report whatever
+        # actually happens rather than silently doing nothing.
+        return None
+
+    logger.info(
+        "[prefix_setup] proton=%s cannot run umu's winetricks verb (no "
+        "protonfixes/ — official Valve Protons don't ship it); using managed "
+        "GE-Proton %s for %s instead of timing out",
+        default_tool, ge_tool, ctx.game_key,
+    )
+    await _run_one(ctx, state, python_bin, (ge_path, ge_tool), session_env)
+    _pin_final_tool(ctx, ge_tool)
+    return ge_tool
+
+
 async def setup_prefix(
     ctx: LaunchContext,
     state: RuntimeState,
@@ -158,6 +234,13 @@ async def setup_prefix(
     default_path, default_tool = select_proton_version(
         steam_app_id=ctx.steam_app_id, store_game_id=ctx.game_key,
     )
+
+    preempted = await _preempt_incapable_proton(
+        ctx, state, python_bin, (default_path, default_tool), session_env,
+    )
+    if preempted is not None:
+        return preempted, True
+
     if not await _run_one(
         ctx, state, python_bin, (default_path, default_tool), session_env,
     ):

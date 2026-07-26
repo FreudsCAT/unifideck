@@ -42,6 +42,15 @@ _ENV_ALLOWLIST = (
     "HOME", "USER", "LOGNAME", "SHELL", "LANG", "PATH",
     "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP", "XDG_DATA_HOME",
     "XDG_CONFIG_HOME", "SteamDeck", "SteamGamepadUI", "SteamOS",
+    # Whether a bundled CLI can start at all now depends on these. legendary
+    # and gogdl ship as zipapps run by the system python3, so PYTHONHOME /
+    # PYTHONPATH decide which interpreter and which packages they get, and
+    # XDG_CACHE_HOME decides where they extract their native modules. The
+    # loader pair is the long-running "umu exits 127 / curl picks the wrong
+    # libssl" culprit. All are non-secret paths, and without them a bundle
+    # from a CLI that refused to launch shows nothing about why.
+    "XDG_CACHE_HOME", "PYTHONPATH", "PYTHONHOME",
+    "LD_LIBRARY_PATH", "LD_PRELOAD",
 )
 # Presence only: a proxy can break store sync, but its URL may embed
 # credentials, so the value never leaves the device.
@@ -133,7 +142,25 @@ def plugin_block(plugin_dir: str | None) -> dict[str, Any]:
         "defaults_config": (base / "defaults" / "config.json").is_file(),
         "flattened_config": (base / "config.json").is_file(),
         "binaries": binaries,
+        "umu_version": _bundled_umu_version(base),
     }
+
+
+def _bundled_umu_version(base: Path) -> str:
+    """Version of the bundled umu zipapp, or ``"unknown"``.
+
+    umu is committed to the repo rather than downloaded, so it has no entry
+    in package.json's ``remote_binary`` manifest and nothing else in a
+    bundle records which one shipped. Since umu chooses the Steam Linux
+    Runtime and how it is fetched (the <=1.4.1 URL is permanently 403'd),
+    that is the first thing worth knowing about any launch failure.
+    """
+    try:
+        return (base / "bin" / "umu" / "VERSION").read_text(
+            encoding="utf-8",
+        ).strip() or "unknown"
+    except OSError:
+        return "unknown"
 
 
 def steam_block(steam_root: str | None, root_source: str) -> dict[str, Any]:
