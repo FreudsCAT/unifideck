@@ -346,6 +346,8 @@
       "signingInUbisoftMessage": "Apertura di Ubisoft Connect — accedi lì, poi torna indietro.",
       "ubisoftPrefixNotReady": "Ubisoft Connect non è pronto",
       "ubisoftPrefixNotReadyMessage": "Impossibile preparare il prefix di Ubisoft Connect per questo gioco. Prova a installare di nuovo; se continua a non riuscire, esegui di nuovo una sincronizzazione della libreria.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect non è pronto",
+      "ubisoftAuthPrefixNotReadyMessage": "Impossibile preparare Ubisoft Connect per l'accesso. Riprova tra un istante.",
       "ubisoftLaunchIdMissing": "Apertura di Ubisoft Connect",
       "ubisoftLaunchIdMissingMessage": "Impossibile risolvere l'ID di avvio di questo gioco — verrà aperto Ubisoft Connect per poterlo avviare dalla tua libreria. Esegui di nuovo una sincronizzazione della libreria per correggere l'avvio diretto."
     },

@@ -346,6 +346,8 @@
       "signingInUbisoftMessage": "Ubisoft Connect açılıyor — orada oturum açın, sonra geri dönün.",
       "ubisoftPrefixNotReady": "Ubisoft Connect hazır değil",
       "ubisoftPrefixNotReadyMessage": "Bu oyun için Ubisoft Connect ön eki hazırlanamadı. Tekrar yüklemeyi deneyin; sorun devam ederse kitaplık eşitlemesini yeniden çalıştırın.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect hazır değil",
+      "ubisoftAuthPrefixNotReadyMessage": "Ubisoft Connect oturum açma için hazırlanamadı. Lütfen birazdan tekrar deneyin.",
       "ubisoftLaunchIdMissing": "Ubisoft Connect açılıyor",
       "ubisoftLaunchIdMissingMessage": "Bu oyunun başlatma kimliği çözümlenemedi — kitaplığınızdan başlatabilmeniz için Ubisoft Connect açılıyor. Doğrudan başlatmayı düzeltmek için kitaplık eşitlemesini yeniden çalıştırın."
     },

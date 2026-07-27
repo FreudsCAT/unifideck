@@ -346,6 +346,8 @@
       "signingInUbisoftMessage": "Ubisoft Connect を開いています — そこでサインインしてから戻ってください。",
       "ubisoftPrefixNotReady": "Ubisoft Connect の準備ができていません",
       "ubisoftPrefixNotReadyMessage": "このゲームの Ubisoft Connect プレフィックスを準備できませんでした。もう一度インストールしてみてください。それでも失敗する場合は、ライブラリの同期を再実行してください。",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect の準備ができていません",
+      "ubisoftAuthPrefixNotReadyMessage": "サインイン用に Ubisoft Connect を準備できませんでした。しばらくしてからもう一度お試しください。",
       "ubisoftLaunchIdMissing": "Ubisoft Connect を開いています",
       "ubisoftLaunchIdMissingMessage": "このゲームの起動IDを解決できませんでした — ライブラリから起動できるように Ubisoft Connect を開いています。直接起動を修復するには、ライブラリの同期を再実行してください。"
     },

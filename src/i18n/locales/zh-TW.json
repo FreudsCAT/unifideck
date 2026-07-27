@@ -346,6 +346,8 @@
       "signingInUbisoftMessage": "正在開啟 Ubisoft Connect — 請在那裡登入後返回。",
       "ubisoftPrefixNotReady": "Ubisoft Connect 尚未就緒",
       "ubisoftPrefixNotReadyMessage": "無法為此遊戲準備 Ubisoft Connect 前綴。請重試安裝；若仍然失敗，請重新執行庫同步。",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect 尚未就緒",
+      "ubisoftAuthPrefixNotReadyMessage": "無法為登入準備 Ubisoft Connect。請稍後重試。",
       "ubisoftLaunchIdMissing": "正在開啟 Ubisoft Connect",
       "ubisoftLaunchIdMissingMessage": "無法解析此遊戲的啟動 ID — 正在開啟 Ubisoft Connect，以便您從庫中啟動它。請重新執行庫同步以修復直接啟動。"
     },

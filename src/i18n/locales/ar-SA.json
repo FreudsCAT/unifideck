@@ -346,6 +346,8 @@
       "signingInUbisoftMessage": "جارٍ فتح Ubisoft Connect — سجّل الدخول هناك ثم عُد.",
       "ubisoftPrefixNotReady": "Ubisoft Connect غير جاهز",
       "ubisoftPrefixNotReadyMessage": "تعذّر تجهيز بادئة Ubisoft Connect لهذه اللعبة. حاول التثبيت مرة أخرى؛ وإذا استمر الفشل، فأعد تشغيل مزامنة المكتبة.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect غير جاهز",
+      "ubisoftAuthPrefixNotReadyMessage": "تعذّر تجهيز Ubisoft Connect لتسجيل الدخول. يُرجى المحاولة مرة أخرى بعد قليل.",
       "ubisoftLaunchIdMissing": "جارٍ فتح Ubisoft Connect",
       "ubisoftLaunchIdMissingMessage": "تعذّر تحديد معرّف تشغيل هذه اللعبة — جارٍ فتح Ubisoft Connect لتتمكن من تشغيلها من مكتبتك. أعد تشغيل مزامنة المكتبة لإصلاح التشغيل المباشر."
     },

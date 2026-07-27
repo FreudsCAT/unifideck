@@ -346,6 +346,8 @@
       "signingInUbisoftMessage": "Ubisoft Connect wird geöffnet – melde dich dort an und kehre dann zurück.",
       "ubisoftPrefixNotReady": "Ubisoft Connect ist nicht bereit",
       "ubisoftPrefixNotReadyMessage": "Das Ubisoft-Connect-Prefix für dieses Spiel konnte nicht vorbereitet werden. Versuche die Installation erneut; wenn es weiterhin fehlschlägt, führe eine Bibliotheks-Synchronisierung erneut aus.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect ist nicht bereit",
+      "ubisoftAuthPrefixNotReadyMessage": "Ubisoft Connect konnte nicht für die Anmeldung vorbereitet werden. Versuche es in einem Moment erneut.",
       "ubisoftLaunchIdMissing": "Ubisoft Connect wird geöffnet",
       "ubisoftLaunchIdMissingMessage": "Die Start-ID für dieses Spiel konnte nicht ermittelt werden – Ubisoft Connect wird geöffnet, damit du es aus deiner Bibliothek starten kannst. Führe eine Bibliotheks-Synchronisierung erneut aus, um den Direktstart zu reparieren."
     },
