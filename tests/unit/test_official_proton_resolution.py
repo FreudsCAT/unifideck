@@ -220,6 +220,42 @@ def test_library_dirs_degrade_without_libraryfolders(tmp_path, monkeypatch):
     assert vc.steam_library_dirs() == []
 
 
+def test_third_party_proton_whose_dir_name_differs_from_steam_name(tmp_path):
+    """Custom Protons where the id Steam stores != the directory name.
+
+    Straight from a field bundle (Flatpak Steam desktop): ``CompatToolMapping``
+    held ``proton-cachyos-slr`` and ``cachyos_11.0_20260702-LinUwUx-proton``
+    while the dirs were ``proton-cachyos-11.0-20260703-slr-x86_64_v3`` and
+    ``cachyos_11.0_20260702-LinUwUx``. Resolution must go through the
+    ``compatibilitytool.vdf`` manifest, not the folder name — the "any Proton,
+    including third-party" requirement. A half-finished download dir alongside
+    them must not break the scan either.
+    """
+    root = tmp_path / "compatibilitytools.d"
+    root.mkdir()
+    cases = [
+        ("proton-cachyos-11.0-20260703-slr-x86_64_v3", "proton-cachyos-slr"),
+        ("cachyos_11.0_20260702-LinUwUx",
+         "cachyos_11.0_20260702-LinUwUx-proton"),
+        ("GE-Proton11-1-LinUwUx", "GE-Proton11-1-LinUwUx"),
+    ]
+    for dir_name, internal in cases:
+        d = root / dir_name
+        d.mkdir()
+        (d / "proton").write_text("#!/bin/sh\n")
+        (d / "compatibilitytool.vdf").write_text(
+            '"compatibilitytools"\n{\n\t"compat_tools"\n\t{\n'
+            f'\t\t"{internal}"\n\t\t{{\n'
+            '\t\t\t"install_path"\t"."\n'
+            '\t\t}\n\t}\n}\n',
+        )
+    (root / ".GE-Proton11-3.dl-p_36va1k").mkdir()  # partial download
+
+    for dir_name, internal in cases:
+        resolved = vc.resolve_compat_tool(internal, [root])
+        assert resolved == root / dir_name / "proton", internal
+
+
 def test_manifest_declared_id_wins_over_derived_alias(tmp_path):
     """A dir with a real manifest keeps its declared id (setdefault order)."""
     d = tmp_path / "Proton-CachyOS"

@@ -120,6 +120,41 @@ def _steam_library_commons() -> list[Path]:
     return unique
 
 
+def _official_proton_in_library(lib_dir: Path, tool_id: str) -> Path | None:
+    """Find ``tool_id``'s ``proton`` script inside one ``steamapps/common``.
+
+    Official Proton tools live under a display-name dir that differs from
+    Steam's internal tool id ("proton_experimental" -> "Proton - Experimental",
+    "proton_9" -> "Proton 9.0 (Beta)"), and they carry no
+    ``compatibilitytool.vdf`` to declare that id, so the compat-tool roots can
+    never match them.
+
+    This used to be a hardcoded id->dirname table, which silently rotted: it
+    stopped at proton_10, so once Proton 11 shipped, a user selecting it in
+    Steam's own Properties > Compatibility got no match here, fell through to
+    the remaining tiers, and launched under GE-Proton instead — their choice
+    ignored with nothing in the log to say so. Deriving the id from each
+    installed dir name instead (see ``vdf_compat.official_proton_alias``)
+    covers every past and future Proton release with no table to maintain.
+    """
+    verbatim = lib_dir / tool_id / "proton"
+    if verbatim.is_file():
+        return verbatim
+    if not lib_dir.is_dir():
+        return None
+    try:
+        entries = sorted(lib_dir.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        if vdf_compat.official_proton_alias(entry.name) != tool_id:
+            continue
+        candidate = entry / "proton"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def resolve_proton_path(tool_id: str) -> Path | None:
     """Resolve PROTON path."""
     if not tool_id:
@@ -131,36 +166,10 @@ def resolve_proton_path(tool_id: str) -> Path | None:
     resolved = vdf_compat.resolve_compat_tool(tool_id, _compat_tool_roots())
     if resolved is not None:
         return resolved
-    # Official Proton tools live in steamapps/common under a display-name
-    # dir that differs from Steam's internal tool id ("proton_experimental"
-    # -> "Proton - Experimental", "proton_9" -> "Proton 9.0 (Beta)"), and
-    # they carry no compatibilitytool.vdf to declare that id, so the compat
-    # roots above can never match them.
-    #
-    # This used to be a hardcoded id->dirname table, which silently rotted:
-    # it stopped at proton_10, so once Proton 11 shipped, a user selecting
-    # it in Steam's own Properties > Compatibility got no match here, fell
-    # through to the remaining tiers, and launched under GE-Proton instead —
-    # their choice ignored with nothing in the log to say so. Deriving the
-    # id from each installed dir name instead (see
-    # ``vdf_compat.official_proton_alias``) covers every past and future
-    # Proton release with no table to maintain.
     for lib_dir in _steam_library_commons():
-        verbatim = lib_dir / tool_id / "proton"
-        if verbatim.is_file():
-            return verbatim
-        if not lib_dir.is_dir():
-            continue
-        try:
-            entries = sorted(lib_dir.iterdir())
-        except OSError:
-            continue
-        for entry in entries:
-            if vdf_compat.official_proton_alias(entry.name) != tool_id:
-                continue
-            candidate = entry / "proton"
-            if candidate.is_file():
-                return candidate
+        official = _official_proton_in_library(lib_dir, tool_id)
+        if official is not None:
+            return official
     return None
 def get_unifideck_proton_tool() -> str | None:
     """Get unifideck PROTON tool."""

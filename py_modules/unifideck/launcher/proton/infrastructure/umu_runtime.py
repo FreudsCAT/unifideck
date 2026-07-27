@@ -366,6 +366,56 @@ async def run_umu_with_retry(
                 game_log.close()
 
 
+def _strip_loader_env(env: dict[str, str] | None) -> None:
+    """Drop both dynamic-loader variables from a spawn environment.
+
+    Belt-and-suspenders: neither may reach umu-run/pressure-vessel,
+    regardless of what built ``env``.
+
+    ``LD_PRELOAD`` — re-exporting the host's gameoverlayrenderer.so crashes
+    the game process with "WARNING: Keyboard Interrupt".
+
+    ``LD_LIBRARY_PATH`` — umu copies it into ``STEAM_RUNTIME_LIBRARY_PATH``
+    (``umu_run.enable_steam_game_drive``), so a *host* library path rides
+    into the pressure-vessel container and shadows the container's own libs.
+    The container then can't start ``python3`` — the interpreter of Proton's
+    launch script — which dies with "error while loading shared libraries:
+    libz.so.1" and umu exits 127.
+
+    Where the stray value comes from is NOT established: it was observed on
+    a plain Steam stable client, so the obvious guess (a containerised Steam
+    exporting pressure-vessel override paths) is ruled out for that report.
+    Provenance doesn't change the remedy — nothing downstream of here wants
+    a host loader path.
+
+    Epic was immune only because ``handlers/epic.py`` already wraps its
+    umu-run invocation in ``env -u LD_LIBRARY_PATH -u LD_PRELOAD``;
+    GOG/Amazon/Ubisoft/raw-exe reach this spawn point directly. Doing it
+    here covers every store at the single choke point.
+    See ``sanitize_frozen_loader_env``.
+    """
+    if env is None:
+        return
+    env.pop("LD_PRELOAD", None)
+    env.pop("LD_LIBRARY_PATH", None)
+
+
+async def _reap_umu_tree(
+    proc: asyncio.subprocess.Process,
+    env: dict[str, str] | None,
+) -> None:
+    """Kill umu's whole process group plus its prefix wineserver, then wait.
+
+    ``start_new_session=True`` detaches the umu-run / pressure-vessel /
+    wineserver descendants, so without this they outlive both the timeout
+    and the cancellation path and keep spinning.
+    """
+    _kill_process_group(proc)
+    _reap_prefix_wineserver(env)
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(proc.wait(), timeout=5)
+
+
 async def _run_umu_once(
     argv: list[str],
     env: dict[str, str] | None,
@@ -383,33 +433,7 @@ async def _run_umu_once(
     install) also reaps the process group before propagating, so no
     orphaned wineserver is left spinning.
     """
-    if env is not None:
-        # Belt-and-suspenders: neither loader variable may reach umu-run/
-        # pressure-vessel here, regardless of what built ``env``.
-        #
-        # LD_PRELOAD — re-exporting the host's gameoverlayrenderer.so crashes
-        # the game process with "WARNING: Keyboard Interrupt".
-        #
-        # LD_LIBRARY_PATH — umu copies it into STEAM_RUNTIME_LIBRARY_PATH
-        # (umu_run.enable_steam_game_drive), so a *host* library path rides
-        # into the pressure-vessel container and shadows the container's own
-        # libs. The container then can't start ``python3`` — the interpreter
-        # of Proton's launch script — which dies with "error while loading
-        # shared libraries: libz.so.1" and umu exits 127.
-        #
-        # Where the stray value comes from is NOT established: it was
-        # observed on a plain Steam stable client, so the obvious guess (a
-        # containerised Steam exporting pressure-vessel override paths) is
-        # ruled out for that report. Provenance doesn't change the remedy —
-        # nothing downstream of here wants a host loader path.
-        #
-        # Epic was immune only because handlers/epic.py already wraps its
-        # umu-run invocation in ``env -u LD_LIBRARY_PATH -u LD_PRELOAD``;
-        # GOG/Amazon/Ubisoft/raw-exe reach this spawn point directly. Doing
-        # it here covers every store at the single choke point.
-        # See sanitize_frozen_loader_env.
-        env.pop("LD_PRELOAD", None)
-        env.pop("LD_LIBRARY_PATH", None)
+    _strip_loader_env(env)
     # If Steam wrapped our launcher in its OWN pressure-vessel (the user set
     # Properties > Compatibility on this shortcut — a supported workflow),
     # hop back out to the host first: Proton's python3 cannot load libz.so.1
@@ -439,17 +463,9 @@ async def _run_umu_once(
                 "[launcher.umu] %s exceeded %ds — killing process group",
                 argv[:3], int(timeout),
             )
-            _kill_process_group(proc)
-            _reap_prefix_wineserver(env)
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(proc.wait(), timeout=5)
+            await _reap_umu_tree(proc, env)
             return UMU_TIMEOUT_RC
     except asyncio.CancelledError:
-        # Reap the whole tree before unwinding, else the umu-run /
-        # pressure-vessel / wineserver descendants outlive the cancelled
-        # task and keep spinning (start_new_session=True detaches them).
-        _kill_process_group(proc)
-        _reap_prefix_wineserver(env)
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(proc.wait(), timeout=5)
+        # Reap the whole tree before unwinding the cancellation.
+        await _reap_umu_tree(proc, env)
         raise
