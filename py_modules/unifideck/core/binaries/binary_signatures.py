@@ -42,9 +42,28 @@ _KNOWN_HASHES: dict[str, str] = {
     # Populated per-release. Empty string means "no reference
     # hash declared yet" — verify_bundled_binary returns None in
     # that case so early development doesn't fail builds.
-    "legendary": "",
-    "nile": "",
-    "gogdl": "",
+    #
+    # These MUST equal the ``sha256hash`` of the matching entry in
+    # package.json's ``remote_binary`` array: Decky verifies the download
+    # against that value at install time, and this verifies the file on disk
+    # at resolve time. tests/unit/_tooling/test_binary_manifest_sync.py
+    # asserts the two agree, so a bump that updates only one side fails CI.
+    # legendary 0.20.43
+    "legendary": (
+        "2b82497051afd95670994146e6038d6e1c98a1c60c21949def668b52aef7d3f7"
+    ),
+    # nile 1.1.2 — deliberately held back; 1.2.0 migrates auth to an
+    # encrypted store and DELETES ~/.config/nile/user.json, which
+    # AmazonStore._check_nile_authenticated reads to decide the store is
+    # available. Bumping it without that migration silently empties the
+    # Amazon library for authenticated users.
+    "nile": (
+        "3a8c080c864a5952a01d7661693c60727b34a355ae21e9eab2047096b606c1df"
+    ),
+    # gogdl 1.2.2
+    "gogdl": (
+        "d1f9f9a730ff442409bc11b14ae9ec410e5e45492f32899076481e58dd451117"
+    ),
 }
 
 

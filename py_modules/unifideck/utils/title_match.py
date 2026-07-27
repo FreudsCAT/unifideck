@@ -254,15 +254,15 @@ def clean_search_query(title: str) -> str:
     # and en-dash separators. RUF001 flags it as ambiguous; we know.
     patterns = (
         r"\s*[-–:]\s*(?:CE|SE|DE|GE)\s*$",  # noqa: RUF001
-        r"\s*\((?:Xbox (?:One|Series X\|?S)|PC|Windows|PS[45]|"
-        r"Nintendo Switch|Game Preview)\)\s*$",
+        (r"\s*\((?:Xbox (?:One|Series X\|?S)|PC|Windows|PS[45]|"
+         r"Nintendo Switch|Game Preview)\)\s*$"),
         r"\s*[-–:]\s*Xbox (?:One|Series X\|?S)(?:\s+Edition)?\s*$",  # noqa: RUF001
         r"\s+for\s+Xbox\s*$",
         r"\s+Xbox\s+(?:One|Series\s+X\|?S)(?:\s+Edition)?\s*$",
-        r"\s*[-–:]\s*(?:Cross[- ]Gen\s+(?:Bundle|Edition)|"  # noqa: RUF001
-        r"The\s+Complete(?:\s+First)?\s+Season)\s*$",
-        r"\s*[-–:]\s*(?:Standard|Console)\s+Edition"  # noqa: RUF001
-        r"(?:\s*\(Windows\))?\s*$",
+        (r"\s*[-–:]\s*(?:Cross[- ]Gen\s+(?:Bundle|Edition)|"  # noqa: RUF001
+         r"The\s+Complete(?:\s+First)?\s+Season)\s*$"),
+        (r"\s*[-–:]\s*(?:Standard|Console)\s+Edition"  # noqa: RUF001
+         r"(?:\s*\(Windows\))?\s*$"),
         r"\s*\(\d{4}\)",
         r"\s*\(X\|?S\)",
         r"\s*\((?:Episodes?|Chapters?)\s+[\d\-\s]+\)",

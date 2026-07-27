@@ -15,23 +15,40 @@ logger = logging.getLogger(__name__)
 
 
 def _rockstar_play_exe_rel(plan: ProtonLaunchPlan) -> str | None:
-    """The Rockstar Play-launcher exe (relative) for RDR2/GTA5, else None.
+    """The ``--override-exe`` target (relative) for RDR2/GTA5, else None.
 
-    Used as the default ``--override-exe`` for these titles so legendary
-    launches ``PlayRDR2.exe``/``PlayGTAV.exe`` directly instead of the
-    Epic-launcher stub. A user's explicit "Change executable" still wins
-    (checked first in ``_resolve_exe_override``).
+    Prefers the launch shim ``compat.rockstar_egs`` just wrote, which starts
+    the game **through** the fake ``EpicGamesLauncher.exe``. That indirection
+    is the whole point: launching ``PlayGTAV.exe``/``PlayRDR2.exe`` directly
+    is the reported failure (Rockstar launcher finds the game once, refuses
+    to start it, then stops finding it) because the Epic entitlement is never
+    verified.
+
+    Falls back to the bare Play exe if the shim isn't on disk — same
+    behaviour as before, so a shim-write failure degrades instead of
+    breaking the launch outright. A user's explicit "Change executable"
+    still wins (checked first in ``_resolve_exe_override``), which is what
+    lets a hand-written ``fix.bat`` keep working.
     """
+    from unifideck.launcher.proton.compat.rockstar_egs import LAUNCH_SHIM_NAME
     from unifideck.launcher.proton.fixes.game_fixes import (
-        ROCKSTAR_PLAY_EXES,
-        is_rockstar_egs,
+        resolve_rockstar_play_exe,
     )
-    game_id = plan.context.game_id
-    umu_id = plan.state.umu_id
-    if not is_rockstar_egs(game_id, umu_id):
+    work_dir = plan.context.work_dir
+    play_exe = resolve_rockstar_play_exe(
+        plan.context.game_id, plan.state.umu_id, plan.context.exe_path.name,
+        work_dir,
+    )
+    if not play_exe:
         return None
-    # ROCKSTAR_PLAY_EXES is keyed by BOTH the Epic app name and the umu id.
-    return ROCKSTAR_PLAY_EXES.get(game_id) or ROCKSTAR_PLAY_EXES.get(umu_id or "")
+    if work_dir and (Path(work_dir) / LAUNCH_SHIM_NAME).is_file():
+        return LAUNCH_SHIM_NAME
+    logger.warning(
+        "[launcher.proton.epic] Rockstar launch shim absent — falling back to "
+        "direct %s launch (Rockstar launcher may not detect the install)",
+        play_exe,
+    )
+    return play_exe
 
 
 def _resolve_exe_override(plan: ProtonLaunchPlan) -> Path | None:

@@ -40,6 +40,12 @@ export interface FacetRecord {
   recommendations_total: number | null;
   review_score: number | null;
   review_percentage: number | null;
+  /** First-seen timestamp from the backend (`_stamp_date_added`).
+   *  Deliberately NOT projected onto `AppOverview.rt_purchased_time`
+   *  — Steam's Home "Recent Games" shelf ranks on that field, so doing
+   *  so pushed every freshly-synced game to the top of the shelf. Kept
+   *  here for a future self-managed Date-Added sort; do not restore
+   *  the overview write (see `steam-bridge/overview-enrichment.ts`). */
   date_added_unix: number;
   /** Filter dimensions */
   deck_category: number; // 0 Unknown · 1 Unsupported · 2 Playable · 3 Verified

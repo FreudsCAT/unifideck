@@ -20,6 +20,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from unifideck.core.binaries import clean_cli_env
+
 from .playtime_api import fetch_epic_playtime_all, put_epic_session
 
 logger = logging.getLogger(__name__)
@@ -169,6 +171,7 @@ class EpicSessions:
                 self._cli_path, "status",
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
+                env=clean_cli_env(),
             )
             await asyncio.wait_for(proc.communicate(), timeout=self._info_timeout)
         except (TimeoutError, OSError) as e:

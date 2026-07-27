@@ -189,15 +189,19 @@ async def test_run_createprefix_with_retry_detects_success_under_pfx(
         (root / "pfx" / "system.reg").write_text("reg")
 
     monkeypatch.setattr(pi, "_run_umu", _fake_run_umu)
+    # The between-attempts hook is now the SURGICAL repair, not the
+    # whole-cache nuke (which destroyed healthy variants and wedged every
+    # store — see test_prefix_init_no_runtime_nuke.py). Either way, a
+    # first-try success must not touch the runtime at all.
     cleanup = MagicMock()
-    monkeypatch.setattr(pi, "cleanup_umu_runtime_cache", cleanup)
+    monkeypatch.setattr(pi, "repair_incomplete_umu_runtime", cleanup)
 
     ok = await pi._run_createprefix_with_retry(
         _plan(root, "GE-Proton10-34"), {}, root,
     )
 
     assert ok is True
-    cleanup.assert_not_called()  # no retry needed → cache never wiped
+    cleanup.assert_not_called()  # no retry needed → runtime never touched
     assert not any(
         c.args[0] == "toasts.launcher.retryingUmu" for c in toast_spy.call_args_list
     )

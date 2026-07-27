@@ -32,6 +32,8 @@ if TYPE_CHECKING:
     from unifideck.services.proton_service import ProtonService
     from unifideck.services.security import SecurityService
     from unifideck.services.shortcut import ShortcutService
+    from unifideck.services.support_bundle import SupportBundleService
+    from unifideck.services.user_paths_coordinator import UserPathsCoordinator
 
 
 @dataclass
@@ -56,6 +58,11 @@ class ServiceContainer:
     security: SecurityService | None = None
     launch_history: LaunchHistoryService | None = None
     launch_logs: LaunchLogsService | None = None
+    # SupportBundleService — the "Capture Logs" button. Collects every
+    # log + state file into one zip in the user's Downloads folder,
+    # audits every path the plugin can touch, and probes the device.
+    # Read-only: it describes the install, never repairs it.
+    support_bundle: SupportBundleService | None = None
     microsoft_subscription: MicrosoftSubscriptionService | None = None
     # AchievementWatcher — GOG live unlock toasts + end-of-session summary.
     # Reads achievements back from GOG (Comet does the in-game unlocking);
@@ -69,3 +76,7 @@ class ServiceContainer:
     # the four OAuth stores (Epic / GOG / Amazon / Microsoft).
     # Constructed once per plugin and shared via the injector.
     edge_browser: EdgeBrowser | None = None
+    # Re-binds per-user paths (shortcuts.vdf / grid / localconfig) onto the
+    # shortcut/artwork/proton services when the active Steam user changes —
+    # driven by ACCOUNT_SWITCHED and the set_active_steam_user RPC.
+    user_paths_coordinator: UserPathsCoordinator | None = None

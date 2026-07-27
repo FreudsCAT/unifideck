@@ -28,6 +28,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from unifideck.core.binaries import clean_cli_env
 from unifideck.core.io import async_file_ops as aio
 from unifideck.core.types import Game
 
@@ -118,15 +119,20 @@ class AmazonLibraryReader:
         logger.info("[amazon_library] library synced")
         return True
 
-    def _sync_env(self) -> dict[str, str] | None:
+    def _sync_env(self) -> dict[str, str]:
         """Env for ``nile library sync`` targeting ``self._config_dir``.
 
         nile resolves its config dir from ``XDG_CONFIG_HOME/nile`` (else
         ``$HOME/.config/nile``). When our config dir already equals the
-        ambient default we inherit the env unchanged (``None``); when it
-        differs we point ``XDG_CONFIG_HOME`` at its parent so nile reads
-        auth from and writes ``library.json`` to the same dir the reader
-        reads. nile can only be redirected to a ``nile``-basename dir.
+        ambient default we leave ``XDG_CONFIG_HOME`` alone; when it differs
+        we point it at the parent so nile reads auth from and writes
+        ``library.json`` to the same dir the reader reads. nile can only be
+        redirected to a ``nile``-basename dir.
+
+        Always built from ``clean_cli_env`` rather than inherited verbatim:
+        the Decky backend is PyInstaller-frozen and its ``os.environ``
+        carries ``LD_LIBRARY_PATH=/tmp/_MEIxxxx``, which makes a spawned
+        binary link the loader's libraries instead of its own.
         """
         target = Path(self._config_dir)
         xdg = os.environ.get("XDG_CONFIG_HOME")
@@ -136,14 +142,14 @@ class AmazonLibraryReader:
             else Path("~/.config/nile").expanduser()
         )
         if target == ambient:
-            return None
+            return clean_cli_env()
         if target.name != "nile":
             logger.debug(
                 "[amazon_library] non-nile config dir %s; inheriting env",
                 target,
             )
-            return None
-        return {**os.environ, "XDG_CONFIG_HOME": str(target.parent)}
+            return clean_cli_env()
+        return clean_cli_env({"XDG_CONFIG_HOME": str(target.parent)})
 
     async def read_installed_ids(self) -> dict[str, dict[str, Any]]:
         """Read installed ids."""

@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from unifideck.core.binaries import clean_cli_env
 from unifideck.core.manifest import write_manifest
 from unifideck.core.types import Events, InstallResult, Result
 from unifideck.event_bus.event_bus import EventBus
@@ -261,6 +262,7 @@ class EpicInstaller:
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=clean_cli_env(),
         )
         tail_buf = TailRingBuffer()
         drain_exc: BaseException | None = None
@@ -468,6 +470,7 @@ class EpicInstaller:
                 "--yes",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
         except OSError as e:
             logger.warning("[EpicUninstall] could not spawn legendary: %s", e)

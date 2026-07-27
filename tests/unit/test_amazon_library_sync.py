@@ -52,8 +52,8 @@ async def test_sync_library_runs_correct_nile_args(tmp_path):
     assert mock_exec.call_args.args == ("/plugin/bin/nile", "library", "sync")
 
 
-async def test_sync_library_inherits_env_for_default_dir(monkeypatch):
-    """Config dir == ambient default → inherit env (no XDG override)."""
+async def test_sync_library_adds_no_xdg_override_for_default_dir(monkeypatch):
+    """Config dir == ambient default → nile's own default is left to stand."""
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     reader = _reader(_DEFAULT_NILE_DIR)
     with patch(
@@ -61,7 +61,7 @@ async def test_sync_library_inherits_env_for_default_dir(monkeypatch):
     ) as mock_exec:
         await reader.sync_library("/plugin/bin/nile", 60)
 
-    assert mock_exec.call_args.kwargs.get("env") is None
+    assert "XDG_CONFIG_HOME" not in mock_exec.call_args.kwargs["env"]
 
 
 async def test_sync_library_targets_config_dir_via_xdg(tmp_path, monkeypatch):
@@ -76,6 +76,29 @@ async def test_sync_library_targets_config_dir_via_xdg(tmp_path, monkeypatch):
 
     env = mock_exec.call_args.kwargs["env"]
     assert env["XDG_CONFIG_HOME"] == str(tmp_path / "custom")
+
+
+async def test_sync_library_scrubs_the_frozen_loaders_env(tmp_path, monkeypatch):
+    """The env is never inherited verbatim, in either config-dir branch.
+
+    The Decky backend is PyInstaller-frozen, so its ``os.environ`` carries
+    ``LD_LIBRARY_PATH=/tmp/_MEIxxxx``. Passing that down makes the child link
+    the loader's libraries — the leak that made every GOG/Amazon/Ubisoft
+    launch exit 127. Epic got the scrubber; Amazon was missed.
+    """
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/_MEI123456")
+    monkeypatch.setenv("PYTHONPATH", "/plugin/py_modules")
+    for config_dir in (_DEFAULT_NILE_DIR, str(tmp_path / "custom" / "nile")):
+        reader = _reader(config_dir)
+        with patch(
+            "asyncio.create_subprocess_exec", return_value=_proc(0),
+        ) as mock_exec:
+            await reader.sync_library("/plugin/bin/nile", 60)
+
+        env = mock_exec.call_args.kwargs["env"]
+        assert "LD_LIBRARY_PATH" not in env, config_dir
+        assert "PYTHONPATH" not in env, config_dir
+        assert env.get("PATH"), config_dir
 
 
 async def test_sync_library_returns_false_on_nonzero_rc(tmp_path):

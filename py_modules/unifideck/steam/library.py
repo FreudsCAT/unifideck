@@ -34,7 +34,6 @@ STEAM_STORE_SEARCH_URL = "https://store.steampowered.com/api/storesearch"
 
 _HTTP_OK = 200
 _DEFAULT_TIMEOUT = 10.0
-_RESERVED_USERDATA_DIRS = frozenset({"0", "anonymous", "ac"})
 
 
 def _cfg(config: ConfigManager | None, key: str, default: Any) -> Any:
@@ -74,50 +73,11 @@ def find_steam_path(config: ConfigManager | None = None) -> str | None:
     return str(live) if live is not None else None
 
 
-def _find_most_recent_user(steam_path: str) -> str | None:
-    """Find most recent user."""
-    userdata = Path(steam_path) / "userdata"
-    if not userdata.is_dir():
-        return None
-    latest: tuple[float, str] | None = None
-    for entry in userdata.iterdir():
-        if not entry.is_dir() or entry.name in _RESERVED_USERDATA_DIRS:
-            continue
-        try:
-            mtime = entry.stat().st_mtime
-        except OSError:
-            continue
-        if latest is None or mtime > latest[0]:
-            latest = (mtime, entry.name)
-    return latest[1] if latest else None
-
-
-def find_grid_path(
-    steam_path: str | None = None,
-    config: ConfigManager | None = None,
-) -> str | None:
-    """Find grid path."""
-    base = steam_path or find_steam_path(config)
-    if base is None:
-        return None
-    user = _find_most_recent_user(base)
-    if user is None:
-        return None
-    return str(Path(base) / "userdata" / user / "config" / "grid")
-
-
-def find_shortcuts_vdf(
-    steam_path: str | None = None,
-    config: ConfigManager | None = None,
-) -> str | None:
-    """Find shortcuts VDF."""
-    base = steam_path or find_steam_path(config)
-    if base is None:
-        return None
-    user = _find_most_recent_user(base)
-    if user is None:
-        return None
-    return str(Path(base) / "userdata" / user / "config" / "shortcuts.vdf")
+# NOTE: the per-user path resolvers that used to live here
+# (``_find_most_recent_user`` / ``find_grid_path`` / ``find_shortcuts_vdf``)
+# were removed — they duplicated an unvalidated directory-mtime heuristic and
+# had no callers. Active-user + per-user path resolution is now owned solely by
+# :mod:`unifideck.steam.current_user`.
 
 
 @dataclass

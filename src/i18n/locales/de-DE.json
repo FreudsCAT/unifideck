@@ -181,6 +181,24 @@
     "cancel": "Abbrechen",
     "deleting": "Wird gelöscht..."
   },
+  "captureLogs": {
+    "_comment": "CaptureLogsSection + CaptureLogsConfirmModal (de-DE).",
+    "title": "Protokolle erfassen",
+    "description": "Sammelt alle Unifideck-Protokolle in einer ZIP-Datei in Ihrem Downloads-Ordner, damit Sie sie an einen Fehlerbericht anhängen können.",
+    "capture": "Protokolle erfassen",
+    "capturing": "Protokolle werden gesammelt...",
+    "savedTo": "In Ihrem Downloads-Ordner gespeichert",
+    "bundleInfo": "{{files}} Dateien · {{size}}",
+    "partialNote": "{{count}} Datei konnte nicht gelesen werden. Das Paket ist dennoch nutzbar.",
+    "partialNote_other": "{{count}} Dateien konnten nicht gelesen werden. Das Paket ist dennoch nutzbar.",
+    "copyPath": "Pfad kopieren",
+    "modalTitle": "Diagnosepaket erstellen?",
+    "modalDescription": "Unifideck sammelt seine Protokolle in einer einzigen ZIP-Datei in Ihrem Downloads-Ordner, damit Sie sie an einen Fehlerbericht anhängen können.",
+    "modalIncludes": "Enthalten: Plugin- und Spielstart-Protokolle, Synchronisierungs- und Installationsverlauf, Ihre Spieltitel und Installationspfade sowie Angaben zu Ihrem Gerät wie Modell, Betriebssystem und Speicher.",
+    "modalExcludes": "Niemals enthalten: Ihre Passwörter, Store-Anmeldetoken oder Browser-Cookies.",
+    "modalConfirm": "Paket erstellen",
+    "cancel": "Abbrechen"
+  },
   "installButton": {
     "play": "Spielen",
     "resume": "Fortsetzen",
@@ -328,6 +346,8 @@
       "signingInUbisoftMessage": "Ubisoft Connect wird geöffnet – melde dich dort an und kehre dann zurück.",
       "ubisoftPrefixNotReady": "Ubisoft Connect ist nicht bereit",
       "ubisoftPrefixNotReadyMessage": "Das Ubisoft-Connect-Prefix für dieses Spiel konnte nicht vorbereitet werden. Versuche die Installation erneut; wenn es weiterhin fehlschlägt, führe eine Bibliotheks-Synchronisierung erneut aus.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect ist nicht bereit",
+      "ubisoftAuthPrefixNotReadyMessage": "Ubisoft Connect konnte nicht für die Anmeldung vorbereitet werden. Versuche es in einem Moment erneut.",
       "ubisoftLaunchIdMissing": "Ubisoft Connect wird geöffnet",
       "ubisoftLaunchIdMissingMessage": "Die Start-ID für dieses Spiel konnte nicht ermittelt werden – Ubisoft Connect wird geöffnet, damit du es aus deiner Bibliothek starten kannst. Führe eine Bibliotheks-Synchronisierung erneut aus, um den Direktstart zu reparieren."
     },
@@ -338,6 +358,16 @@
     "updateFailed": "Update fehlgeschlagen",
     "updateFailedMessage": "Update konnte nicht gestartet werden.",
     "storeError": "Verbindung mit {{store}} fehlgeschlagen ({{errType}})",
+    "captureLogsStarted": "Protokolle werden gesammelt...",
+    "captureLogsStartedMessage": "Diagnosepaket wird in Ihrem Downloads-Ordner erstellt. Das dauert einige Sekunden.",
+    "captureLogsDone": "Protokolle erfasst",
+    "captureLogsDoneMessage": "Gespeichert unter {{path}} ({{size}}, {{files}} Dateien).",
+    "captureLogsPartial": "Protokolle erfasst (unvollständig)",
+    "captureLogsPartialMessage": "Gespeichert unter {{path}} ({{size}}, {{files}} Dateien). {{failures}} Datei(en) konnten nicht gelesen werden.",
+    "captureLogsFailed": "Protokolle konnten nicht erfasst werden",
+    "captureLogsBusy": "Eine Protokollerfassung läuft bereits",
+    "captureLogsCopied": "Pfad kopiert",
+    "captureLogsCopyFailed": "Pfad konnte nicht kopiert werden",
     "actions": {
       "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
       "openStorageManager": "Speicherplatz freigeben",
@@ -399,6 +429,7 @@
     "alreadyInQueue": "Bereits in Warteschlange",
     "download": {
       "diskSpace": "Nicht genügend freier Speicherplatz vorhanden",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Netzwerkfehler — bitte überprüfe deine Verbindung",
       "authExpired": "Anmeldung abgelaufen — bitte melde dich erneut an",
       "toolMissing": "Erforderliches Download-Werkzeug nicht gefunden",

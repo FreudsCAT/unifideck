@@ -181,6 +181,24 @@
     "cancel": "İptal Et",
     "deleting": "Siliniyor..."
   },
+  "captureLogs": {
+    "_comment": "CaptureLogsSection + CaptureLogsConfirmModal (tr-TR).",
+    "title": "Günlükleri topla",
+    "description": "Tüm Unifideck günlüklerini İndirilenler klasörünüzdeki tek bir zip dosyasında toplar, böylece bir hata bildirimine ekleyebilirsiniz.",
+    "capture": "Günlükleri topla",
+    "capturing": "Günlükler toplanıyor...",
+    "savedTo": "İndirilenler klasörünüze kaydedildi",
+    "bundleInfo": "{{files}} dosya · {{size}}",
+    "partialNote": "{{count}} dosya okunamadı. Paket yine de kullanılabilir.",
+    "partialNote_other": "{{count}} dosya okunamadı. Paket yine de kullanılabilir.",
+    "copyPath": "Yolu kopyala",
+    "modalTitle": "Tanılama paketi oluşturulsun mu?",
+    "modalDescription": "Unifideck günlüklerini İndirilenler klasörünüzdeki tek bir zip dosyasında toplayacak, böylece bir hata bildirimine ekleyebilirsiniz.",
+    "modalIncludes": "İçerir: eklenti ve oyun başlatma günlükleri, eşitleme ve kurulum geçmişi, oyun adlarınız ve kurulum yolları, ayrıca model, işletim sistemi ve depolama gibi cihaz bilgileri.",
+    "modalExcludes": "Asla içermez: şifreleriniz, mağaza oturum belirteçleriniz veya tarayıcı çerezleriniz.",
+    "modalConfirm": "Paket oluştur",
+    "cancel": "İptal"
+  },
   "installButton": {
     "play": "Oyna",
     "resume": "Devam Et",
@@ -328,6 +346,8 @@
       "signingInUbisoftMessage": "Ubisoft Connect açılıyor — orada oturum açın, sonra geri dönün.",
       "ubisoftPrefixNotReady": "Ubisoft Connect hazır değil",
       "ubisoftPrefixNotReadyMessage": "Bu oyun için Ubisoft Connect ön eki hazırlanamadı. Tekrar yüklemeyi deneyin; sorun devam ederse kitaplık eşitlemesini yeniden çalıştırın.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect hazır değil",
+      "ubisoftAuthPrefixNotReadyMessage": "Ubisoft Connect oturum açma için hazırlanamadı. Lütfen birazdan tekrar deneyin.",
       "ubisoftLaunchIdMissing": "Ubisoft Connect açılıyor",
       "ubisoftLaunchIdMissingMessage": "Bu oyunun başlatma kimliği çözümlenemedi — kitaplığınızdan başlatabilmeniz için Ubisoft Connect açılıyor. Doğrudan başlatmayı düzeltmek için kitaplık eşitlemesini yeniden çalıştırın."
     },
@@ -338,6 +358,16 @@
     "updateFailed": "Güncelleme Başarısız",
     "updateFailedMessage": "Güncelleme başlatılamadı.",
     "storeError": "{{store}} ile iletişim kurulamadı ({{errType}})",
+    "captureLogsStarted": "Günlükler toplanıyor...",
+    "captureLogsStartedMessage": "İndirilenler klasörünüzde bir tanılama paketi oluşturuluyor. Bu birkaç saniye sürer.",
+    "captureLogsDone": "Günlükler toplandı",
+    "captureLogsDoneMessage": "{{path}} konumuna kaydedildi ({{size}}, {{files}} dosya).",
+    "captureLogsPartial": "Günlükler toplandı (kısmi)",
+    "captureLogsPartialMessage": "{{path}} konumuna kaydedildi ({{size}}, {{files}} dosya). {{failures}} dosya okunamadı.",
+    "captureLogsFailed": "Günlükler toplanamadı",
+    "captureLogsBusy": "Zaten bir günlük toplama işlemi sürüyor",
+    "captureLogsCopied": "Yol kopyalandı",
+    "captureLogsCopyFailed": "Yol kopyalanamadı",
     "actions": {
       "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
       "openStorageManager": "Yer Aç",
@@ -399,6 +429,7 @@
     "alreadyInQueue": "Zaten sırada",
     "download": {
       "diskSpace": "Yetersiz disk alanı",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Ağ hatası — bağlantınızı kontrol edin",
       "authExpired": "Oturum süresi doldu — lütfen tekrar giriş yapın",
       "toolMissing": "Gerekli indirme aracı bulunamadı",

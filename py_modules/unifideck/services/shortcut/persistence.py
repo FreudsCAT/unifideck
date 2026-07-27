@@ -48,9 +48,25 @@ async def read_vdf(shortcuts_path: str) -> dict[str, Any]:
 
 
 async def write_vdf(shortcuts_path: str, data: dict[str, Any]) -> None:
-    """Persist shortcuts.vdf atomically.
+    """Persist shortcuts.vdf atomically, keeping the file executable.
 
-    Uses tmpfile + os.replace pattern to prevent corruption on crash.
+    Uses tmpfile + os.replace to prevent corruption on crash.
+
+    The final ``os.chmod(..., 0o755)`` is load-bearing for coexistence
+    with **NonSteamLaunchers (NSL)**. NSL's persistent
+    ``nslgamescanner.service`` treats the *executable bit* as its
+    "already-initialised" sentinel: on each scan, if ``shortcuts.vdf``
+    is **not** executable it overwrites the whole file with an empty
+    ``{"shortcuts": {}}`` (NSLGameScanner.py) — wiping every shortcut,
+    ours included. NSL itself always chmods the file to ``0o755`` after
+    writing. Our tmp+``os.replace`` creates the destination inode at the
+    process umask default (typically ``0o644`` — non-executable), which
+    silently disarms that sentinel and makes the next scan erase the
+    user's library ("0 games after sync"). Re-asserting ``0o755`` here —
+    on the single lowest-level byte-writer of shortcuts.vdf, so every
+    write path inherits it — matches the state Steam/NSL already leave
+    and lets the two tools coexist. (Foreign NSL entries are separately
+    preserved by :func:`merge_foreign_shortcuts`.)
     """
     def _write_sync() -> None:
         parent = str(Path(shortcuts_path).parent)
@@ -67,6 +83,30 @@ async def write_vdf(shortcuts_path: str, data: dict[str, Any]) -> None:
             if Path(tmp_path).exists():
                 with contextlib.suppress(OSError):
                     Path(tmp_path).unlink()
+            return
+
+        # Preserve the executable bit NSL's scanner uses as its
+        # "already-initialised" sentinel (see docstring). A chmod
+        # failure (exotic filesystem) must not fail the write — the
+        # bytes are already safely in place.
+        try:
+            was_exec = os.access(shortcuts_path, os.X_OK)
+            # 0o755 is required, not permissive-by-accident: it is the
+            # exact mode Steam/NSL keep and NSL's scanner requires (see
+            # docstring). A stricter mode reintroduces the library wipe.
+            os.chmod(shortcuts_path, 0o755)  # noqa: S103
+            if not was_exec:
+                logger.info(
+                    "[ShortcutPersistence] restored executable bit on "
+                    "shortcuts.vdf (0o755) — prevents NonSteamLaunchers' "
+                    "scanner from wiping the library on its next pass",
+                )
+        except OSError as e:
+            logger.warning(
+                "[ShortcutPersistence] could not set executable bit on "
+                "shortcuts.vdf: %s (NSL, if installed, may reset the file)",
+                e,
+            )
 
     await asyncio.to_thread(_write_sync)
 

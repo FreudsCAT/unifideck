@@ -140,9 +140,16 @@ echo ""
 #   1. Add it to "remote_binary" in package.json.
 #   2. Add the URL below.
 #   3. Add a check step inside the `prebuild_binaries` function.
-# These must stay in sync with package.json "remote_binary" entries.
-LEGENDARY_URL="https://github.com/Heroic-Games-Launcher/legendary/releases/download/0.20.38/legendary_linux_x86_64"
-GOGDL_URL="https://github.com/Heroic-Games-Launcher/heroic-gogdl/releases/download/v1.1.2/gogdl_linux_x86_64"
+# These must stay in sync with package.json "remote_binary" entries —
+# tests/unit/_tooling/test_binary_manifest_sync.py fails the build if they drift.
+#
+# NOTE: legendary >=0.20.40 and gogdl >=1.2.2 ship a Python ZIPAPP for Linux,
+# not a PyInstaller ELF. They need a `python3` on PATH (shebang) and a writable
+# HOME — they extract native modules to ~/.cache/{legendary,heroic_gogdl}/
+# on first run. That applies to this build host too, since _download_bin
+# validates by executing the file it just downloaded.
+LEGENDARY_URL="https://github.com/Heroic-Games-Launcher/legendary/releases/download/0.20.43/legendary_linux_x86_64"
+GOGDL_URL="https://github.com/Heroic-Games-Launcher/heroic-gogdl/releases/download/v1.2.2/gogdl_linux_x86_64"
 NILE_URL="https://github.com/imLinguin/nile/releases/download/v1.1.2/nile_linux_x86_64"
 COMET_URL="https://github.com/imLinguin/comet/releases/download/v0.3.2/comet-x86_64-unknown-linux-gnu"
 WINETRICKS_URL="https://raw.githubusercontent.com/Winetricks/winetricks/20260125/src/winetricks"
@@ -291,6 +298,8 @@ vendor_deps() {
         log_warn "(check that you have pip and a network connection)"
     fi
 
+    prune_stale_dist_info
+
     # Sanity-check that the four runtime deps actually landed.
     local missing_deps=()
     for dep in aiohttp websockets cryptography jsonschema; do
@@ -304,6 +313,49 @@ vendor_deps() {
         log_warn "Plugin features depending on these will be disabled at runtime."
     fi
     echo ""
+}
+
+# Drop *.dist-info directories left behind by earlier vendoring runs.
+#
+# ``pip install --target --upgrade`` overwrites a package's .py files but
+# NEVER removes the previous version's metadata directory. Over many builds
+# py_modules/ accumulates one dist-info per version ever vendored — we had
+# SIX for aiohttp (3.13.3 through 3.14.3), four each for websockets/yarl/idna,
+# and two for cffi. Two things break because of that:
+#
+#   * pip-audit (quality.yml) walks this directory and reports CVEs against
+#     versions that are not the ones actually importable, so the CVE floors
+#     documented in requirements.txt are gated against phantom data.
+#   * vendor_launcher_cffi() below derived the cffi version from a glob whose
+#     alphabetically-first match was the STALE dist-info — so it vendored
+#     _cffi_backend 2.0.0 next to the cffi 2.1.0 package it had just
+#     installed, and every FFI() construction raised "Version mismatch".
+#
+# pip writes a package's dist-info at install time, so the most recently
+# modified one is the live copy (verified: newest mtime == the version in the
+# package's own __version__, for aiohttp/cffi/cryptography alike). Keep that
+# one, delete its predecessors.
+prune_stale_dist_info() {
+    local pruned=0 pkg newest d
+    # Group by distribution name: strip the trailing -<version>.dist-info.
+    while IFS= read -r pkg; do
+        # -t sorts by mtime, newest first; everything after the first is stale.
+        newest=1
+        while IFS= read -r d; do
+            if [ "$newest" = "1" ]; then
+                newest=0
+                continue
+            fi
+            rm -rf "$d"
+            pruned=$((pruned + 1))
+        done < <(ls -dt "$SCRIPT_DIR/py_modules/${pkg}-"*.dist-info 2>/dev/null)
+    done < <(
+        ls -d "$SCRIPT_DIR"/py_modules/*.dist-info 2>/dev/null \
+            | sed -E 's#.*/([^/]+)-[^-]+\.dist-info$#\1#' | sort -u
+    )
+    if [ "$pruned" -gt 0 ]; then
+        log_success "Pruned $pruned stale dist-info director$([ "$pruned" = 1 ] && echo y || echo ies)"
+    fi
 }
 
 # Vendor cffi's ABI-specific _cffi_backend for the LAUNCHER's Python too.
@@ -327,17 +379,39 @@ vendor_deps() {
 # untouched.
 vendor_launcher_cffi() {
     local cffi_ver
-    cffi_ver=$(ls -d "$SCRIPT_DIR"/py_modules/cffi-*.dist-info 2>/dev/null \
-        | sed -E 's#.*/cffi-([0-9.]+)\.dist-info#\1#' | head -1)
+    # Read the version from the PACKAGE, not from a dist-info glob. cffi's own
+    # api.py compares its __version__ against the compiled backend's and raises
+    # on any difference, so the package is the only source of truth that
+    # matters. (The old glob took the alphabetically-first dist-info, which
+    # after an upgrade was the stale one — it pinned the backend to the version
+    # we had just replaced. See prune_stale_dist_info above.)
+    cffi_ver=$(sed -nE 's/^__version__ *= *"([^"]+)".*/\1/p' \
+        "$SCRIPT_DIR/py_modules/cffi/__init__.py" 2>/dev/null | head -1)
     if [ -z "$cffi_ver" ]; then
         log_info "cffi not vendored (no cloud-save crypto path) — skipping launcher cffi"
         return 0
     fi
+
+    # The .so files carry no readable version, so record which cffi they were
+    # built for. Build-local (never shipped): a fresh clone simply re-vendors.
+    # Without this the "already present" check below was version-blind and
+    # happily kept a mismatched backend forever.
+    local stamp="$SCRIPT_DIR/.cache/cffi-backend-version"
+    local stamped=""
+    [ -f "$stamp" ] && stamped=$(cat "$stamp" 2>/dev/null)
+    if [ "$stamped" != "$cffi_ver" ]; then
+        if [ -n "$stamped" ] || ls "$SCRIPT_DIR"/py_modules/_cffi_backend.*.so \
+                >/dev/null 2>&1; then
+            log_warn "cffi backend stamp '${stamped:-none}' != package $cffi_ver — re-vendoring backends"
+        fi
+        rm -f "$SCRIPT_DIR"/py_modules/_cffi_backend.*.so
+    fi
+
     local vendored=() skipped=()
     local ver abitag tmp
     for ver in "${LAUNCHER_PYTHON_VERSIONS[@]}"; do
         abitag="cpython-3${ver#3.}"
-        # Already present (e.g. cp311 from vendor_deps, or a prior run).
+        # Already present AND known to match cffi_ver (stamp verified above).
         if ls "$SCRIPT_DIR"/py_modules/_cffi_backend.${abitag}-*.so \
                 >/dev/null 2>&1; then
             vendored+=("$ver")
@@ -363,6 +437,8 @@ vendor_launcher_cffi() {
         rm -rf "$tmp"
     done
     if [ "${#vendored[@]}" -gt 0 ]; then
+        mkdir -p "$(dirname "$stamp")"
+        printf '%s\n' "$cffi_ver" > "$stamp"
         log_success "Vendored launcher cffi backends (cffi==$cffi_ver) for Python: ${vendored[*]}"
     fi
     if [ "${#skipped[@]}" -gt 0 ]; then

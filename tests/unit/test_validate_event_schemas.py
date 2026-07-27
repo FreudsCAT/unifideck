@@ -153,8 +153,8 @@ def test_phantom_schema_key_fails(
     validate_schema_keys()."""
     mod = _load_with_patched_schema(
         script_path,
-        '"ACCOUNT_SWITCHED":             {"new_user"},',
-        '"ACCOUNT_SWITCHED":             {"new_user"},\n'
+        '"ACCOUNT_SWITCHED":             {"active_user_id", "new_user"},',
+        '"ACCOUNT_SWITCHED":             {"active_user_id", "new_user"},\n'
         '    "DEFINITELY_NOT_AN_EVENT":      {"x"},')
     assert "DEFINITELY_NOT_AN_EVENT" in mod.CANONICAL_SCHEMA
     assert mod.validate_schema_keys() == 1

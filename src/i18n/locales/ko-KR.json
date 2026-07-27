@@ -181,6 +181,24 @@
     "cancel": "취소",
     "deleting": "삭제 중..."
   },
+  "captureLogs": {
+    "_comment": "CaptureLogsSection + CaptureLogsConfirmModal (ko-KR).",
+    "title": "로그 수집",
+    "description": "모든 Unifideck 로그를 하나의 ZIP 파일로 모아 다운로드 폴더에 저장합니다. 버그 신고에 첨부할 수 있습니다.",
+    "capture": "로그 수집",
+    "capturing": "로그 수집 중...",
+    "savedTo": "다운로드 폴더에 저장되었습니다",
+    "bundleInfo": "파일 {{files}}개 · {{size}}",
+    "partialNote": "{{count}}개 파일을 읽을 수 없었습니다. 그래도 이 묶음은 사용할 수 있습니다.",
+    "partialNote_other": "{{count}}개 파일을 읽을 수 없었습니다. 그래도 이 묶음은 사용할 수 있습니다.",
+    "copyPath": "경로 복사",
+    "modalTitle": "진단 묶음을 만들까요?",
+    "modalDescription": "Unifideck이 로그를 하나의 ZIP 파일로 모아 다운로드 폴더에 저장합니다. 버그 신고에 첨부할 수 있습니다.",
+    "modalIncludes": "포함되는 항목: 플러그인 및 게임 실행 로그, 동기화와 설치 기록, 게임 제목과 설치 경로, 모델·운영체제·저장장치 등 기기 정보.",
+    "modalExcludes": "절대 포함되지 않는 항목: 비밀번호, 스토어 로그인 토큰, 브라우저 쿠키.",
+    "modalConfirm": "묶음 만들기",
+    "cancel": "취소"
+  },
   "installButton": {
     "play": "플레이",
     "resume": "이어하기",
@@ -328,6 +346,8 @@
       "signingInUbisoftMessage": "Ubisoft Connect를 여는 중 — 거기서 로그인한 다음 돌아오세요.",
       "ubisoftPrefixNotReady": "Ubisoft Connect가 준비되지 않았습니다",
       "ubisoftPrefixNotReadyMessage": "이 게임의 Ubisoft Connect 프리픽스를 준비하지 못했습니다. 다시 설치해 보세요. 계속 실패하면 라이브러리 동기화를 다시 실행하세요.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect가 준비되지 않았습니다",
+      "ubisoftAuthPrefixNotReadyMessage": "로그인을 위해 Ubisoft Connect를 준비하지 못했습니다. 잠시 후 다시 시도해 주세요.",
       "ubisoftLaunchIdMissing": "Ubisoft Connect를 여는 중",
       "ubisoftLaunchIdMissingMessage": "이 게임의 실행 ID를 확인할 수 없습니다 — 라이브러리에서 시작할 수 있도록 Ubisoft Connect를 여는 중입니다. 직접 실행을 수정하려면 라이브러리 동기화를 다시 실행하세요."
     },
@@ -338,6 +358,16 @@
     "updateFailed": "업데이트 실패",
     "updateFailedMessage": "업데이트 작업을 시작할 수 없습니다.",
     "storeError": "{{store}} 연동 서버와 통신할 수 없습니다 ({{errType}})",
+    "captureLogsStarted": "로그 수집 중...",
+    "captureLogsStartedMessage": "다운로드 폴더에 진단 묶음을 만들고 있습니다. 몇 초 걸립니다.",
+    "captureLogsDone": "로그를 수집했습니다",
+    "captureLogsDoneMessage": "{{path}}에 저장했습니다 ({{size}}, 파일 {{files}}개).",
+    "captureLogsPartial": "로그를 수집했습니다 (일부)",
+    "captureLogsPartialMessage": "{{path}}에 저장했습니다 ({{size}}, 파일 {{files}}개). {{failures}}개 파일을 읽을 수 없었습니다.",
+    "captureLogsFailed": "로그를 수집할 수 없습니다",
+    "captureLogsBusy": "이미 로그 수집이 진행 중입니다",
+    "captureLogsCopied": "경로를 복사했습니다",
+    "captureLogsCopyFailed": "경로를 복사할 수 없습니다",
     "actions": {
       "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
       "openStorageManager": "여유 공간 확보",
@@ -399,6 +429,7 @@
     "alreadyInQueue": "이미 대기열에 존재합니다",
     "download": {
       "diskSpace": "사용 가능한 디스크 공간 부족",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "네트워크 연결 오류 — 연결 상태를 확인하세요",
       "authExpired": "로그인 세션 만료 — 다시 로그인해 주세요",
       "toolMissing": "필수 다운로드 도구를 찾을 수 없습니다",

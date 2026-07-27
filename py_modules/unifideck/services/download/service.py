@@ -116,6 +116,7 @@ class DownloadService(_WorkerMixin):
         title: str = "",
         is_update: bool = False,
         language: str | None = None,
+        required_bytes: int | None = None,
     ) -> Result:
         """Queue a new download request.
 
@@ -127,9 +128,15 @@ class DownloadService(_WorkerMixin):
         multi-language games); recorded on the item and threaded
         to the store installer by the worker. ``None`` means "use
         the store default".
+
+        ``required_bytes`` is the game's known download size (the
+        caller resolves it — the service stays store-agnostic). When
+        provided, the free-space preflight refuses a too-small target
+        up front instead of failing deep inside the store CLI; ``None``
+        (unknown size) falls back to the static floor.
         """
         # 1. Validation
-        val_result = validate_path(install_path)
+        val_result = validate_path(install_path, required_bytes)
         if not val_result.success:
             return val_result
 

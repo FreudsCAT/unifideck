@@ -41,6 +41,28 @@ _STABILITY_STABLE_THRESHOLD = 3
 # ``_upc_process_alive``), so this threshold is now only a backstop for when
 # that liveness probe can't run.
 _UPC_WINDOW_GONE_THRESHOLD = 18
+# Consecutive polls (× 10s = ~90s) at the START of a manual install with NO
+# UPC process running, before we conclude it never launched.
+#
+# The window-gone watchdog above cannot cover this: it is gated on
+# ``window_ever_seen``, so when UPC never appears at all that flag stays
+# False and the loop runs the full two-hour timeout showing "INSTALLING
+# UBISOFT CONNECT / Follow the Ubisoft Connect window" — indistinguishable
+# from a hang, with nothing in the log after "awaiting UPC launch".
+#
+# That is a real field failure and not a hypothetical: the frontend's RunGame
+# died instantly with ``GameNotFoundError: game 'ubisoft:80' not found in
+# games.map`` (a prefix-detection bug, fixed separately in
+# ``dispatcher._ubisoft_has_populated_prefix``), so UPC was never spawned and
+# the install sat there. Any future cause — a dropped launch option, a
+# missing shortcut, Steam refusing RunGame — produces the same shape, so the
+# poll loop needs its own answer rather than trusting the launch to succeed.
+#
+# Only the PROCESS is consulted, never the window probe: the probe cannot see
+# into Gaming Mode's separate gamescope session, whereas ``pgrep`` works in
+# both. 90s is comfortably longer than a cold UPC start under Proton while
+# still failing fast enough to be actionable.
+_UPC_NEVER_STARTED_THRESHOLD = 9
 
 
 class _ManualUiPollMixin:
@@ -115,6 +137,7 @@ class _ManualUiPollMixin:
         )
         window_ever_seen = False
         no_window_polls = 0
+        never_started_polls = 0
         for iteration in range(max_polls):
             await asyncio.sleep(
                 _MANUAL_INSTALL_POLL_INTERVAL_S,
@@ -139,12 +162,40 @@ class _ManualUiPollMixin:
             window_ever_seen, no_window_polls = self._track_window_presence(
                 env, window_ever_seen, no_window_polls,
             )
-            if window_ever_seen and no_window_polls >= _UPC_WINDOW_GONE_THRESHOLD:
-                abandon, no_window_polls = self._handle_window_gone(no_window_polls)
-                if abandon:
-                    return None
+            counters, abandon = self._check_abandonment(
+                window_ever_seen, no_window_polls, never_started_polls,
+            )
+            if abandon:
+                return None
+            no_window_polls, never_started_polls = counters
             await self._maybe_emit_waiting_tick(progress_cb, iteration)
         return None
+
+    def _check_abandonment(
+        self,
+        window_ever_seen: bool,
+        no_window_polls: int,
+        never_started_polls: int,
+    ) -> tuple[tuple[int, int], bool]:
+        """Run both give-up watchdogs for one poll.
+
+        Returns ``((no_window_polls, never_started_polls), abandon)``.
+
+        The two cover disjoint situations and neither substitutes for the
+        other: ``_handle_window_gone`` catches "UPC was up and the user quit
+        it", while ``_track_upc_never_started`` catches "UPC never came up at
+        all" — the case that otherwise burned the full two-hour timeout
+        because the window-gone path is gated on having seen a window.
+        """
+        if not window_ever_seen:
+            never_started_polls, give_up = self._track_upc_never_started(
+                never_started_polls,
+            )
+            return (no_window_polls, never_started_polls), give_up
+        if no_window_polls >= _UPC_WINDOW_GONE_THRESHOLD:
+            abandon, no_window_polls = self._handle_window_gone(no_window_polls)
+            return (no_window_polls, never_started_polls), abandon
+        return (no_window_polls, never_started_polls), False
 
     def _handle_window_gone(self, no_window_polls: int) -> tuple[bool, int]:
         """Decide whether a long-gone UPC window means the install was abandoned.
@@ -174,6 +225,41 @@ class _ManualUiPollMixin:
             no_window_polls * _MANUAL_INSTALL_POLL_INTERVAL_S,
         )
         return True, no_window_polls
+
+    def _track_upc_never_started(
+        self, never_started_polls: int,
+    ) -> tuple[int, bool]:
+        """Count consecutive early polls with no UPC process at all.
+
+        Returns ``(updated_count, give_up)``. Called only while the UPC
+        window has never been seen, so it stops mattering the moment UPC
+        actually shows up.
+
+        See :data:`_UPC_NEVER_STARTED_THRESHOLD` for why this exists: the
+        window-gone watchdog cannot detect "never launched", so without this
+        the install waits the full two-hour timeout with no diagnosis.
+
+        A live process resets the counter — a cold UPC start under Proton is
+        slow, and this must never cut short an install that is merely still
+        coming up.
+        """
+        if self._upc_process_alive():
+            return 0, False
+        never_started_polls += 1
+        if never_started_polls < _UPC_NEVER_STARTED_THRESHOLD:
+            return never_started_polls, False
+        waited = int(
+            _UPC_NEVER_STARTED_THRESHOLD * _MANUAL_INSTALL_POLL_INTERVAL_S,
+        )
+        logger.error(
+            "[UbisoftInstaller] Ubisoft Connect never started (%ds with no "
+            "upc.exe process). The install cannot proceed — it was waiting "
+            "for a UPC window that will never appear. Check the launcher log "
+            "for this game: a failed RunGame (e.g. the title missing from "
+            "games.map) leaves exactly this state.",
+            waited,
+        )
+        return never_started_polls, True
 
     def _track_window_presence(
         self,

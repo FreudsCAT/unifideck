@@ -1,7 +1,7 @@
 /**
  * Utils subpackage — barrel export.
  *
- * Runtime utilities shared across the frontend. Four pieces :
+ * Runtime utilities shared across the frontend. Five pieces :
  *
  *  - format.ts             : pure formatting helpers (bytes,
  *                            ETA) used by the downloads UI.
@@ -13,6 +13,9 @@
  *  - ubisoftShortcutLaunch : Ubisoft-specific install/auth
  *                            launcher (reuses existing shortcut
  *                            + restores proton tool).
+ *  - clipboard.ts          : owning-window-aware clipboard
+ *                            write (Gaming Mode renders the QAM
+ *                            into a separate popup window).
  *
  * Any module that does runtime work outside React but inside
  * the frontend belongs here. Pure type-only modules belong in
@@ -23,3 +26,4 @@ export * from "./format";
 export * from "./controllerConfig";
 export * from "./authShortcutLaunch";
 export * from "./ubisoftShortcutLaunch";
+export * from "./clipboard";

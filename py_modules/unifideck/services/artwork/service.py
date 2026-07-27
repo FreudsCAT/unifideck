@@ -133,6 +133,15 @@ class ArtworkService(_EventHandlersMixin):
     def grid_dir(self) -> str:
         return self._grid_dir
 
+    def set_grid_dir(self, grid_dir: str) -> None:
+        """Re-point at a different user's ``grid/`` dir at runtime.
+
+        Driven by :func:`unifideck.steam.current_user.rebind_user_paths` when
+        the active Steam user is (re)confirmed after boot, so artwork lands in
+        the account the user is actually logged into.
+        """
+        self._grid_dir = grid_dir
+
     async def stop(self) -> None:
         """Wait for any in-flight downloads to complete, release the semaphore."""
         self._bus.unsubscribe_all(self)

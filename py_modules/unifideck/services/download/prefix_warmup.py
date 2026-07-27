@@ -84,19 +84,33 @@ def _reap_stale_prefix_wineserver(game_id: str) -> None:
 
 # Session vars the install-time umu runs need. The Decky backend is a
 # headless service (spawned by plugin_loader) whose environment carries NO
-# user session — none of these four are set there. winetricks/vcredist under
+# user session — none of these are set there. winetricks/vcredist under
 # ntsync-era Proton builds (GE-Proton11+, Proton Exp 2026-07) hangs
 # indefinitely or fails in that context, which wedged the serial install
 # queue on every fresh-prefix install. Proven by A/B on-device: backend env →
-# rc=1 / indefinite hang at vcredist_x86.EXE; backend env + these four vars →
+# rc=1 / indefinite hang at vcredist_x86.EXE; backend env + these vars →
 # rc=0 in ~55s. At launch time Steam provides them to the launcher (why the
 # same winetricks always worked at launch, incl. all of 0.6.1); at install
 # time we borrow them from the running Steam client so warmup matches launch.
+#
+# XAUTHORITY was the one this list originally missed, and its absence brought
+# the hang straight back in a subtler form. plugin_loader runs as ROOT, so
+# with DISPLAY=:0 grafted but no auth cookie every X connection is refused:
+#
+#     Authorization required, but no authorization protocol specified
+#
+# wine then blocks on that connection until the 120s compat-step killpg, so
+# the step "times out" with no error of its own — twice per install, once for
+# createprefix and once for regedit. Root can read the cookie despite its
+# 0600 deck:deck mode, so grafting the path is sufficient; the value is a
+# per-session file under XDG_RUNTIME_DIR (e.g. /run/user/1000/xauth_XXXXXX),
+# which is why it has to be borrowed from Steam rather than guessed.
 _SESSION_ENV_KEYS = (
     "DISPLAY",
     "WAYLAND_DISPLAY",
     "XDG_RUNTIME_DIR",
     "DBUS_SESSION_BUS_ADDRESS",
+    "XAUTHORITY",
 )
 
 
@@ -166,91 +180,27 @@ def _user_session_env() -> dict[str, str]:
     return found
 
 
-async def _run_setup(ctx: Any, state: Any, python_bin: Any, proton: Any, key: str) -> bool:
-    """createprefix + generic compat for one Proton; True if a step timed out.
+async def _setup_prefix_with_ge_retry(ctx: Any, state: Any, key: str) -> None:
+    """Run the canonical prefix setup at install time (headless).
 
-    Best-effort: any failure is logged and swallowed (the launch-time path
-    remains the fallback). ``proton`` is a ``(path, tool_id)`` pair.
+    Thin adapter over :func:`launcher.proton.setup_prefix` — the ONE shared
+    "createprefix + compat + managed-GE recovery + pin" process the first
+    launch also runs. The only install-time-specific concern is grafting the
+    user session env (the Decky backend is headless — see ``_SESSION_ENV_KEYS``
+    and ``_user_session_env``); ``setup_prefix`` merges it with ``setdefault``
+    so a launch-provided value is never clobbered.
+
+    Best-effort: if every attempt still hangs, ``setup_prefix`` swallows it and
+    the prefix finishes at first launch (which re-runs the identical steps).
     """
-    from unifideck.launcher.proton import proton_prepare
-    from unifideck.launcher.proton.compat import apply_prefix_compat
-    from unifideck.launcher.proton.compat.prefix_init import (
-        ensure_prefix_initialized,
-    )
+    from unifideck.launcher.proton import setup_prefix
 
-    proton_path, proton_tool_id = proton
-    plan = proton_prepare(
-        ctx, state, python_bin=python_bin,
-        proton_path=proton_path, proton_tool_id=proton_tool_id,
-    )
-    # Install-time runs from the headless backend: graft the user session
-    # env in (see _SESSION_ENV_KEYS above) so winetricks/vcredist behave
-    # exactly as they do at launch under Steam.
     session_env = _user_session_env()
-    for env_key, env_val in session_env.items():
-        plan.env.setdefault(env_key, env_val)
     logger.info(
         "[prefix_warmup] session env grafted for %s: %s",
         key, ", ".join(sorted(session_env)) or "none-resolved",
     )
-    try:
-        await ensure_prefix_initialized(plan)
-        return await apply_prefix_compat(plan)
-    except Exception:
-        logger.exception(
-            "[prefix_warmup] prefix init/compat failed for %s (continuing)", key,
-        )
-        return False
-
-
-async def _setup_prefix_with_ge_retry(ctx: Any, state: Any, key: str) -> None:
-    """Run prefix init+compat, retrying once with managed GE on a hang.
-
-    A compat step being force-killed for exceeding its timeout means the
-    selected Proton hung at runtime. Recovery ladder, gated so we never loop:
-
-      1. Setup under the default Proton.
-      2. On hang → switch to the plugin-managed GE-Proton and retry.
-
-    All best-effort: if every attempt still times out, the prefix finishes
-    at first launch (the launch path re-runs the same steps).
-
-    (An earlier revision inserted a repair-in-place step here — official
-    Protons via ``SteamClient.Apps.VerifyApp``, GE via re-install — before
-    this retry. Removed: across every hang it fired on, VerifyApp reported
-    success but the same-Proton retry hung again regardless, so it added a
-    round trip without ever changing the outcome. The actual cause was a
-    missing user-session env for install-time umu runs, fixed below in
-    ``_user_session_env``; see git history / memory for the VerifyApp
-    mechanism if a genuinely-corrupt-Proton case ever needs it.)
-    """
-    from unifideck.launcher.proton import (
-        find_python_3_10_plus,
-        select_managed_ge_proton,
-        select_proton_version,
-    )
-
-    python_bin = find_python_3_10_plus()
-    # No per-game Force-Compat choice exists yet (no shortcut/steam_app_id at
-    # install), so this resolves the same default the first launch picks.
-    _, default_tool = default_proton = select_proton_version(
-        steam_app_id=None, store_game_id=key,
-    )
-    if not await _run_setup(ctx, state, python_bin, default_proton, key):
-        return
-
-    ge_path, ge_tool = select_managed_ge_proton()
-    if ge_tool == default_tool:
-        logger.warning(
-            "[prefix_warmup] compat timed out for %s under managed GE-Proton "
-            "%s — not retrying (prefix finishes at launch)", key, ge_tool,
-        )
-        return
-    logger.warning(
-        "[prefix_warmup] compat still timing out for %s under proton=%s — "
-        "retrying setup with managed GE-Proton %s", key, default_tool, ge_tool,
-    )
-    await _run_setup(ctx, state, python_bin, (ge_path, ge_tool), key)
+    await setup_prefix(ctx, state, session_env=session_env)
 
 
 async def warmup_install_prefix(

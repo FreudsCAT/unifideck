@@ -26,6 +26,7 @@ import logging
 from typing import Any, cast
 
 from unifideck.auth.orchestrator import AuthOrchestrator
+from unifideck.core.binaries import clean_cli_env
 from unifideck.core.types import AuthResult, Events, Result, StoreAuthError
 from unifideck.event_bus.event_bus import EventBus
 from unifideck.security import audit_auth_flow
@@ -112,6 +113,7 @@ class AmazonAuthFlow:
                 "--non-interactive",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(),
@@ -145,6 +147,7 @@ class AmazonAuthFlow:
                 "--logout",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
             await asyncio.wait_for(
                 proc.communicate(),
@@ -187,6 +190,7 @@ class AmazonAuthFlow:
             "--non-interactive",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=clean_cli_env(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -243,6 +247,7 @@ class AmazonAuthFlow:
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=clean_cli_env(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(

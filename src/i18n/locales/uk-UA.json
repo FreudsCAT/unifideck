@@ -181,6 +181,24 @@
     "cancel": "Скасувати",
     "deleting": "Видалення..."
   },
+  "captureLogs": {
+    "_comment": "CaptureLogsSection + CaptureLogsConfirmModal (uk-UA).",
+    "title": "Збір журналів",
+    "description": "Збирає всі журнали Unifideck в один ZIP-архів у теці «Завантаження», щоб ви могли додати його до звіту про помилку.",
+    "capture": "Зібрати журнали",
+    "capturing": "Збір журналів...",
+    "savedTo": "Збережено до теки «Завантаження»",
+    "bundleInfo": "{{files}} файлів · {{size}}",
+    "partialNote": "Не вдалося прочитати {{count}} файл. Архів усе одно придатний.",
+    "partialNote_other": "Не вдалося прочитати {{count}} файлів. Архів усе одно придатний.",
+    "copyPath": "Копіювати шлях",
+    "modalTitle": "Створити діагностичний архів?",
+    "modalDescription": "Unifideck збере свої журнали в один ZIP-файл у теці «Завантаження», щоб ви могли додати його до звіту про помилку.",
+    "modalIncludes": "Включено: журнали плагіна та запусків ігор, історію синхронізації й встановлень, назви ваших ігор і шляхи встановлення, а також дані про пристрій — модель, операційну систему та накопичувачі.",
+    "modalExcludes": "Ніколи не включається: ваші пароли, токени входу до магазинів і файли cookie браузера.",
+    "modalConfirm": "Створити архів",
+    "cancel": "Скасувати"
+  },
   "installButton": {
     "play": "Грати",
     "resume": "Продовжити",
@@ -328,6 +346,8 @@
       "signingInUbisoftMessage": "Відкриття Ubisoft Connect — увійдіть там, а потім поверніться.",
       "ubisoftPrefixNotReady": "Ubisoft Connect не готовий",
       "ubisoftPrefixNotReadyMessage": "Не вдалося підготувати префікс Ubisoft Connect для цієї гри. Спробуйте встановити ще раз; якщо помилка повторюється, повторно запустіть синхронізацію бібліотеки.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect не готовий",
+      "ubisoftAuthPrefixNotReadyMessage": "Не вдалося підготувати Ubisoft Connect для входу. Спробуйте ще раз через мить.",
       "ubisoftLaunchIdMissing": "Відкриття Ubisoft Connect",
       "ubisoftLaunchIdMissingMessage": "Не вдалося визначити ID запуску цієї гри — відкривається Ubisoft Connect, щоб ви могли запустити її з бібліотеки. Повторно запустіть синхронізацію бібліотеки, щоб виправити пряме запускання."
     },
@@ -338,6 +358,16 @@
     "updateFailed": "Оновлення не вдалося",
     "updateFailedMessage": "Не вдалося розпочати оновлення.",
     "storeError": "Не вдалося зв'язатися з магазином {{store}} ({{errType}})",
+    "captureLogsStarted": "Збір журналів...",
+    "captureLogsStartedMessage": "Створення діагностичного архіву в теці «Завантаження». Це триває кілька секунд.",
+    "captureLogsDone": "Журнали зібрано",
+    "captureLogsDoneMessage": "Збережено до {{path}} ({{size}}, файлів: {{files}}).",
+    "captureLogsPartial": "Журнали зібрано (частково)",
+    "captureLogsPartialMessage": "Збережено до {{path}} ({{size}}, файлів: {{files}}). Не вдалося прочитати файлів: {{failures}}.",
+    "captureLogsFailed": "Не вдалося зібрати журнали",
+    "captureLogsBusy": "Збір журналів уже виконується",
+    "captureLogsCopied": "Шлях скопійовано",
+    "captureLogsCopyFailed": "Не вдалося скопіювати шлях",
     "actions": {
       "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
       "openStorageManager": "Звільнити місце",
@@ -399,6 +429,7 @@
     "alreadyInQueue": "Вже у черзі",
     "download": {
       "diskSpace": "Недостатньо вільного місця на диску",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Помилка мережі — перевірте підключення до Інтернету",
       "authExpired": "Сесія авторизації закінчилася — будь ласка, увійдіть знову",
       "toolMissing": "Необхідна утиліта завантаження не знайдена",

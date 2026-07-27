@@ -26,7 +26,6 @@ import {
 } from "react-icons/fa";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useGameActions } from "../../hooks/useGameActions";
-import { useLaunchPrep } from "../../hooks/useLaunchPrep";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { openNativeAppManageMenu } from "../../utils/nativeAppMenu";
@@ -103,10 +102,17 @@ export const InstalledButtons: FC<Props> = ({
   const [isRunning, setIsRunning] = useState(false);
   const [hasUpdate, setHasUpdate] = useState(false);
 
-  // Clear Steam's Force-Compatibility while this page is open so
-  // RunGame runs our launcher natively (the launcher applies Proton
-  // itself); restored on page-leave. See useLaunchPrep.
-  useLaunchPrep(appId, game);
+  // NOTE: we deliberately do NOT touch Steam's Force-Compatibility here.
+  // This used to capture it into proton_settings.json and clear it so
+  // RunGame wouldn't wrap our launcher in Proton — but clearing it meant
+  // the launcher could never read the user's ACTUAL selection at launch
+  // time (only a copy that went stale whenever the capture/restore dance
+  // was interrupted), so switching Proton in Steam's dialog appeared to do
+  // nothing for some games and work for others purely by timing.
+  // ``config.vdf``'s CompatToolMapping is now the single source of truth,
+  // read by ``selector.select_proton_version``; the double-Proton problem
+  // the clearing existed to avoid is handled properly at the umu spawn
+  // point by ``launcher.proton.infrastructure.container_escape``.
 
   // Running-state poll (2 s).
   useEffect(() => {

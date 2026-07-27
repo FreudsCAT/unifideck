@@ -177,8 +177,8 @@ Contains **only** compiled binaries and shell wrappers. All old `bin/*.py` helpe
 
 | File                            | Size    | Role                                                                                     |
 | ------------------------------- | ------- | ---------------------------------------------------------------------------------------- |
-| `legendary`                     | ~10 MB  | Epic Games Store CLI (upstream)                                                          |
-| `gogdl`                         | ~7 MB   | GOG download manager (upstream, Heroic)                                                  |
+| `legendary`                     | ~4.5 MB | Epic Games Store CLI (upstream) — Python zipapp                                          |
+| `gogdl`                         | ~1.5 MB | GOG download manager (upstream, Heroic) — Python zipapp                                  |
 | `nile`                          | ~10 MB  | Amazon Games CLI (upstream, imLinguin)                                                   |
 | `comet`                         | —       | GOG online services / Galaxy stub (upstream, imLinguin)                                  |
 | `winetricks`                    | ~820 KB | Wine component installer (shell script)                                                  |
@@ -331,8 +331,14 @@ All remote binaries are declared in `package.json` under `"remote_binary"`. The 
 
 | Binary       | Version  | URL                                             |
 | ------------ | -------- | ----------------------------------------------- |
-| `legendary`  | 0.20.38  | `github.com/Heroic-Games-Launcher/legendary`    |
-| `gogdl`      | v1.1.2   | `github.com/Heroic-Games-Launcher/heroic-gogdl` |
+| `legendary`  | 0.20.43  | `github.com/Heroic-Games-Launcher/legendary`    |
+| `gogdl`      | v1.2.2   | `github.com/Heroic-Games-Launcher/heroic-gogdl` |
 | `nile`       | v1.1.2   | `github.com/imLinguin/nile`                     |
 | `comet`      | v0.3.2   | `github.com/imLinguin/comet`                    |
 | `winetricks` | 20260125 | `github.com/Winetricks/winetricks`              |
+
+`umu` is the exception: it is committed to the repo (`bin/umu/umu/umu-run`) rather than downloaded, so it has no `remote_binary` entry. Its version is recorded in `bin/umu/VERSION` (currently **1.4.4**) and reported in support bundles. Do not ship umu &lt;= 1.4.1: those versions fetch the Steam Linux Runtime from `repo.steampowered.com/<variant>/images/latest-public-beta[/VERSION.txt]`, which the repo now answers with HTTP 403. umu's *update* path tolerates that and keeps an existing runtime working, but its *install* path fails, so any Deck without a cached runtime can never obtain one. 1.4.3+ reads `images/latest-public-beta.txt` and fetches from the numbered directory it names, which serves normally.
+
+`nile` is deliberately held at v1.1.2. v1.2.0 migrates auth into an encrypted store and **deletes** `~/.config/nile/user.json` on first run — the file `AmazonStore._check_nile_authenticated` reads to decide the store is available. Bumping it without migrating that check silently empties the Amazon library for users who are still perfectly authenticated.
+
+**Packaging note:** `legendary` (>= 0.20.40) and `gogdl` (>= 1.2.2) ship as Python **zipapps**, not PyInstaller ELF binaries. They require a `python3` on `PATH` (via `#!/usr/bin/env python3`) and a writable `HOME` — on first run they extract native modules to `~/.cache/legendary/vendored` and `~/.cache/heroic_gogdl/vendored`. Unlike a frozen ELF they also honour `PYTHONPATH`/`PYTHONHOME` and the dynamic-loader variables, which is why every store-CLI spawn goes through `core/binaries/cli_env.clean_cli_env()`.

@@ -22,6 +22,7 @@ import { useRPCMutation } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 import { syncStore } from "../stores/sync-store";
 import { uploadSteamOwnedTitles } from "../lib/steam-bridge/owned-library";
+import { uploadActiveSteamUser } from "../lib/steam-bridge/active-user";
 import type { SyncProgress } from "../types/syncProgress";
 
 /** Sync context value. */
@@ -60,8 +61,10 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const startSync = useCallback(async () => {
     if (isSyncing) return;
     syncStore.notifySyncStarted();
-    // Refresh the owned-Steam-library snapshot before the backend fetch
-    // so Steam-linked Ubisoft games are hidden this run.
+    // Confirm the live active Steam user + refresh the owned-library snapshot
+    // before the backend fetch, so shortcuts land in the right userdata dir
+    // and Steam-linked Ubisoft games are hidden this run.
+    await uploadActiveSteamUser();
     await uploadSteamOwnedTitles();
     void startMut
       .mutate()
@@ -71,6 +74,7 @@ export const SyncProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const forceSync = useCallback(
     async (resyncArtwork?: boolean) => {
       syncStore.notifySyncStarted();
+      await uploadActiveSteamUser();
       await uploadSteamOwnedTitles();
       void forceMut
         .mutate(resyncArtwork)

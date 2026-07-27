@@ -19,7 +19,17 @@ def test_drops_pyinstaller_mei_path_without_orig():
     assert env["PATH"] == "/usr/bin"
 
 
-def test_restores_original_when_pyinstaller_saved_it():
+def test_never_restores_either_var_from_orig():
+    # Both loader vars are write-once-never: a _MEI-tainted value is dropped
+    # and neither is ever restored from its _ORIG twin.
+    #
+    # LD_PRELOAD: umu-run/pressure-vessel has its own Steam overlay
+    # mechanism, and re-exporting the host's gameoverlayrenderer.so crashes
+    # the game process ("WARNING: Keyboard Interrupt").
+    #
+    # LD_LIBRARY_PATH: umu copies it into STEAM_RUNTIME_LIBRARY_PATH, so a
+    # host path shadows the container's libs and the container can't start
+    # python3 ("error while loading shared libraries: libz.so.1") -> rc 127.
     env = {
         "LD_LIBRARY_PATH": "/tmp/_MEIxx",  # noqa: S108
         "LD_LIBRARY_PATH_ORIG": "/usr/lib/real",
@@ -27,14 +37,29 @@ def test_restores_original_when_pyinstaller_saved_it():
         "LD_PRELOAD_ORIG": "",
     }
     sanitize_frozen_loader_env(env)
-    assert env["LD_LIBRARY_PATH"] == "/usr/lib/real"
+    assert "LD_LIBRARY_PATH" not in env
     assert "LD_LIBRARY_PATH_ORIG" not in env
-    # LD_PRELOAD is write-once-never: a _MEI-tainted value is dropped, but
-    # never restored from _ORIG — umu-run/pressure-vessel has its own Steam
-    # overlay mechanism, and re-exporting the host's gameoverlayrenderer.so
-    # crashes the game process ("WARNING: Keyboard Interrupt").
     assert "LD_PRELOAD" not in env
     assert "LD_PRELOAD_ORIG" not in env
+
+
+def test_never_restores_ld_library_path_on_clean_launcher_env():
+    # The regression that broke every GOG/Amazon/Ubisoft launch:
+    # bin/unifideck-launcher pops LD_LIBRARY_PATH at process start but NOT
+    # its _ORIG twin, so an inherited LD_LIBRARY_PATH_ORIG got promoted
+    # straight back and rode umu-run into the pressure-vessel container,
+    # where a host library path shadows the container's own libs. Must NOT
+    # be promoted. (Observed on plain Steam stable — the origin of the
+    # inherited value is not established, only that it must not survive.)
+    env = {
+        "PATH": "/usr/bin",
+        "LD_LIBRARY_PATH_ORIG": (
+            "/usr/lib/pressure-vessel/overrides/lib/x86_64-linux-gnu/aliases"
+        ),
+    }
+    sanitize_frozen_loader_env(env)
+    assert "LD_LIBRARY_PATH" not in env
+    assert "LD_LIBRARY_PATH_ORIG" not in env
 
 
 def test_never_restores_ld_preload_from_orig_on_clean_launcher_env():

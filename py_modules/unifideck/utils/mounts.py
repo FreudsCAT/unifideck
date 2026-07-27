@@ -15,16 +15,26 @@ FUSE-mounted external media (NTFS via ntfs-3g, exFAT on some
 distros/kernels) are, by FUSE's own security design, invisible to
 every UID except the one that mounted them — unless the mount used
 ``allow_other``, which requires ``user_allow_other`` in
-``/etc/fuse.conf`` and is disabled by default. Unifideck's backend
-runs as root (Decky's ``plugin_loader.service`` sets ``User=root``),
-while udisks2 auto-mounts removable media for the desktop user
-(uid 1000). So root can neither stat nor validate these mounts —
-they need a one-off subprocess demoted to the mount's owning uid,
-parsed from the ``uid=``/``gid=`` options ntfs-3g/fuse-exfat mounts
-carry, instead. Never ``os.setuid()``/``os.seteuid()`` in this
-process directly — glibc's ``setuid()`` is process-wide (synchronized
-across every thread), which would be unsafe next to other concurrent
-root-requiring async/thread work in this same backend.
+``/etc/fuse.conf`` and is disabled by default.
+
+So whenever the effective UID of this process differs from the UID that
+mounted the media, we can neither stat nor validate those mounts: they
+need a one-off subprocess demoted to the mount's owning uid, parsed
+from the ``uid=``/``gid=`` options ntfs-3g/fuse-exfat mounts carry.
+Never ``os.setuid()``/``os.seteuid()`` in this process directly —
+glibc's ``setuid()`` is process-wide (synchronized across every
+thread), which would be unsafe next to other concurrent async/thread
+work in this same backend.
+
+Historical note: this file used to state that the backend "runs as
+root (Decky's ``plugin_loader.service`` sets ``User=root``)". That is
+no longer true and the demotion logic here does not depend on it —
+Decky Loader v3 drops privileges for plugins without the ``root``
+flag, and ``plugin.json`` does not set it, so the backend runs as the
+desktop user. The ``uid``-demoted probe is still correct and still
+needed: it is keyed off the *mount's* owning uid versus ours, which
+can differ either way. The support bundle's ``identity`` block records
+the live uid/euid, so a future reader can check rather than assume.
 """
 from __future__ import annotations
 

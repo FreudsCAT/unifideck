@@ -130,6 +130,39 @@ def is_valid_ge_install(tag: str) -> bool:
     return installed_ge_proton_path(tag) is not None
 
 
+def _toolmanifest_ok(root: Path) -> bool:
+    """True iff ``root/toolmanifest.vdf`` exists and can yield a manifest.
+
+    umu reads this file for every launch and trusts ``is_file()`` alone, so
+    the two states worth rejecting are the two it does not catch: a missing
+    file, and a present-but-empty one (the shape a truncated download or an
+    interrupted extract leaves behind). A cheap substring check for the
+    ``manifest`` key is enough to tell "real VDF" from "empty or garbage"
+    without taking a VDF-parser dependency in the launcher layer.
+    """
+    manifest = root / "toolmanifest.vdf"
+    try:
+        if not manifest.is_file() or manifest.stat().st_size == 0:
+            logger.warning(
+                "[ge_installer] %s has a missing/empty toolmanifest.vdf — "
+                "umu would raise KeyError('manifest') on it", root.name,
+            )
+            return False
+        text = manifest.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        logger.warning(
+            "[ge_installer] toolmanifest.vdf unreadable in %s: %s", root.name, e,
+        )
+        return False
+    if "manifest" not in text.lower():
+        logger.warning(
+            "[ge_installer] %s toolmanifest.vdf has no 'manifest' block — "
+            "treating the build as incomplete", root.name,
+        )
+        return False
+    return True
+
+
 def is_proton_install_complete(proton_script: Path) -> bool:
     """True iff ``proton_script``'s install looks complete and runnable.
 
@@ -149,7 +182,19 @@ def is_proton_install_complete(proton_script: Path) -> bool:
       non-empty, with the Wine loader (``files/bin/wine``) present —
       the payload a hung wineserver needs and the piece a truncated
       extract most often lacks;
-    * a readable, non-empty ``version`` marker.
+    * a readable, non-empty ``version`` marker;
+    * a readable, non-empty ``toolmanifest.vdf``. umu parses this file
+      before it launches anything (``CompatLayer.__init__`` does
+      ``vdf.load(f)["manifest"]``) and guards only ``is_file()`` — so a
+      TRUNCATED, zero-byte manifest sails through umu's own check, then
+      ``vdf.load`` returns ``{}`` and the ``["manifest"]`` lookup raises an
+      unhandled ``KeyError: 'manifest'``. That aborts the launch with a
+      bare traceback and no actionable message. It is a real field failure
+      (umu-launcher#706, where upstream traced it to a 0-byte manifest in
+      the reporter's own Proton copy), and we download GE-Proton
+      ourselves, so a partial download lands squarely in it. Rejecting the
+      build here makes it fail *selection* instead, which drops through
+      the existing ladder to Proton Experimental.
 
     NB: a zero-byte ``dist.lock`` is *not* a corruption signal —
     every official Steam Proton tool ships one as its normal per-tool
@@ -170,6 +215,8 @@ def is_proton_install_complete(proton_script: Path) -> bool:
             return False
         version = root / "version"
         if not version.is_file() or version.stat().st_size == 0:
+            return False
+        if not _toolmanifest_ok(root):
             return False
     except OSError as e:
         logger.warning(
@@ -218,7 +265,18 @@ def _select_tarball(assets: list[dict[str, Any]], tag: str | None = None) -> str
 
 
 def _download(url: str, dest: Path, progress_cb: ProgressCb | None) -> None:
-    """Stream ``url`` to ``dest``, reporting bytes via ``progress_cb``."""
+    """Stream ``url`` to ``dest``, reporting bytes via ``progress_cb``.
+
+    Raises ``OSError`` if the server declared a ``Content-Length`` and the
+    body came up short. A dropped connection mid-stream ends the read loop
+    exactly like a clean EOF, so without this comparison a truncated
+    tarball was written and returned as a SUCCESS. That is how a corrupt
+    GE-Proton reaches the compat tools dir, and from there umu dies on the
+    half-written ``toolmanifest.vdf`` (see :func:`_toolmanifest_ok`).
+    ``OSError`` is deliberate: it is already what
+    :func:`_download_with_retry` catches, so a short read now costs a
+    retry with backoff instead of a broken install.
+    """
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=30, context=_ssl_ctx()) as resp, dest.open("wb") as out:
         total = int(resp.headers.get("Content-Length") or 0)
@@ -231,6 +289,12 @@ def _download(url: str, dest: Path, progress_cb: ProgressCb | None) -> None:
             done += len(chunk)
             if progress_cb:
                 progress_cb(done, total)
+    if total and done != total:
+        msg = (
+            f"truncated download: got {done} of {total} bytes "
+            f"({done * 100 // total}%) from {url}"
+        )
+        raise OSError(msg)
 
 
 def _download_with_retry(
@@ -286,12 +350,24 @@ def _promote_extracted(staging: Path, tag: str) -> Path | None:
     move into ``COMPAT_TOOLS_DIR`` only happens after the ``proton``
     script is confirmed present and made executable, returning the final
     executable ``proton`` path (or ``None`` if validation fails).
+
+    ``toolmanifest.vdf`` is validated here too, while the tree is still in
+    staging and gets cleaned up for free — catching a bad build before it
+    is published rather than at launch. :func:`is_proton_install_complete`
+    repeats the check because a tool dir can also rot after install (or
+    arrive from somewhere other than this installer).
     """
     extracted = staging / tag
     proton = extracted / "proton"
     if not proton.is_file():
         logger.warning(
             "[ge_installer] extracted tree missing proton script (%s)", tag,
+        )
+        return None
+    if not _toolmanifest_ok(extracted):
+        logger.warning(
+            "[ge_installer] discarding %s: extracted tree has no usable "
+            "toolmanifest.vdf (truncated download?)", tag,
         )
         return None
     _make_executable(proton)

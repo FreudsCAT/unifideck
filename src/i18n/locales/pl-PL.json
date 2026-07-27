@@ -181,6 +181,24 @@
     "cancel": "Anuluj",
     "deleting": "Usuwanie..."
   },
+  "captureLogs": {
+    "_comment": "CaptureLogsSection + CaptureLogsConfirmModal (pl-PL).",
+    "title": "Przechwyć dzienniki",
+    "description": "Zbiera wszystkie dzienniki Unifideck do jednego pliku zip w folderze Pobrane, aby można je było dołączyć do zgłoszenia błędu.",
+    "capture": "Przechwyć dzienniki",
+    "capturing": "Zbieranie dzienników...",
+    "savedTo": "Zapisano w folderze Pobrane",
+    "bundleInfo": "{{files}} plików · {{size}}",
+    "partialNote": "Nie udało się odczytać {{count}} pliku. Paczka nadal jest przydatna.",
+    "partialNote_other": "Nie udało się odczytać {{count}} plików. Paczka nadal jest przydatna.",
+    "copyPath": "Kopiuj ścieżkę",
+    "modalTitle": "Utworzyć paczkę diagnostyczną?",
+    "modalDescription": "Unifideck zbierze swoje dzienniki do jednego pliku zip w folderze Pobrane, aby można je było dołączyć do zgłoszenia błędu.",
+    "modalIncludes": "Zawiera: dzienniki wtyczki i uruchomień gier, historię synchronizacji i instalacji, tytuły twoich gier i ścieżki instalacji oraz informacje o urządzeniu, takie jak model, system operacyjny i nośniki.",
+    "modalExcludes": "Nigdy nie zawiera: twoich haseł, tokenów logowania do sklepów ani plików cookie przeglądarki.",
+    "modalConfirm": "Utwórz paczkę",
+    "cancel": "Anuluj"
+  },
   "installButton": {
     "play": "Graj",
     "resume": "Wznów",
@@ -328,6 +346,8 @@
       "signingInUbisoftMessage": "Otwieranie Ubisoft Connect — zaloguj się tam, a następnie wróć.",
       "ubisoftPrefixNotReady": "Ubisoft Connect nie jest gotowy",
       "ubisoftPrefixNotReadyMessage": "Nie udało się przygotować prefiksu Ubisoft Connect dla tej gry. Spróbuj zainstalować ponownie; jeśli błąd się powtarza, ponownie uruchom synchronizację biblioteki.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect nie jest gotowy",
+      "ubisoftAuthPrefixNotReadyMessage": "Nie udało się przygotować Ubisoft Connect do logowania. Spróbuj ponownie za chwilę.",
       "ubisoftLaunchIdMissing": "Otwieranie Ubisoft Connect",
       "ubisoftLaunchIdMissingMessage": "Nie udało się ustalić identyfikatora uruchamiania tej gry — otwieranie Ubisoft Connect, abyś mógł uruchomić ją z biblioteki. Ponownie uruchom synchronizację biblioteki, aby naprawić bezpośrednie uruchamianie."
     },
@@ -338,6 +358,16 @@
     "updateFailed": "Aktualizacja nie powiodła się",
     "updateFailedMessage": "Nie udało się rozpocząć aktualizacji.",
     "storeError": "Błąd komunikacji ze sklepem {{store}} ({{errType}})",
+    "captureLogsStarted": "Zbieranie dzienników...",
+    "captureLogsStartedMessage": "Tworzenie paczki diagnostycznej w folderze Pobrane. Zajmie to kilka sekund.",
+    "captureLogsDone": "Dzienniki przechwycone",
+    "captureLogsDoneMessage": "Zapisano w {{path}} ({{size}}, plików: {{files}}).",
+    "captureLogsPartial": "Dzienniki przechwycone (częściowo)",
+    "captureLogsPartialMessage": "Zapisano w {{path}} ({{size}}, plików: {{files}}). Nie udało się odczytać plików: {{failures}}.",
+    "captureLogsFailed": "Nie udało się przechwycić dzienników",
+    "captureLogsBusy": "Przechwytywanie dzienników już trwa",
+    "captureLogsCopied": "Ścieżka skopiowana",
+    "captureLogsCopyFailed": "Nie udało się skopiować ścieżki",
     "actions": {
       "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
       "openStorageManager": "Zwolnij miejsce",
@@ -399,6 +429,7 @@
     "alreadyInQueue": "Już w kolejce",
     "download": {
       "diskSpace": "Brak wystarczającej ilości miejsca na dysku",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Błąd sieci — sprawdź swoje połączenie",
       "authExpired": "Logowanie wygasło — zaloguj się ponownie",
       "toolMissing": "Nie znaleziono wymaganego narzędzia pobierania",

@@ -181,6 +181,24 @@
     "cancel": "Annuleren",
     "deleting": "Verwijderen..."
   },
+  "captureLogs": {
+    "_comment": "CaptureLogsSection + CaptureLogsConfirmModal (nl-NL).",
+    "title": "Logboeken vastleggen",
+    "description": "Verzamelt alle Unifideck-logboeken in één zipbestand in je map Downloads, zodat je het aan een bugrapport kunt toevoegen.",
+    "capture": "Logboeken vastleggen",
+    "capturing": "Logboeken verzamelen...",
+    "savedTo": "Opgeslagen in je map Downloads",
+    "bundleInfo": "{{files}} bestanden · {{size}}",
+    "partialNote": "{{count}} bestand kon niet worden gelezen. Het pakket is nog steeds bruikbaar.",
+    "partialNote_other": "{{count}} bestanden konden niet worden gelezen. Het pakket is nog steeds bruikbaar.",
+    "copyPath": "Pad kopiëren",
+    "modalTitle": "Diagnosepakket maken?",
+    "modalDescription": "Unifideck verzamelt zijn logboeken in één zipbestand in je map Downloads, zodat je het aan een bugrapport kunt toevoegen.",
+    "modalIncludes": "Inbegrepen: logboeken van de plug-in en van het starten van games, synchronisatie- en installatiegeschiedenis, je gametitels en installatiepaden, en gegevens over je apparaat zoals model, besturingssysteem en opslag.",
+    "modalExcludes": "Nooit inbegrepen: je wachtwoorden, inlogtokens van winkels of browsercookies.",
+    "modalConfirm": "Pakket maken",
+    "cancel": "Annuleren"
+  },
   "installButton": {
     "play": "Spelen",
     "resume": "Hervatten",
@@ -328,6 +346,8 @@
       "signingInUbisoftMessage": "Ubisoft Connect openen — meld je daar aan en kom dan terug.",
       "ubisoftPrefixNotReady": "Ubisoft Connect is niet gereed",
       "ubisoftPrefixNotReadyMessage": "Kan de Ubisoft Connect-prefix voor dit spel niet voorbereiden. Probeer opnieuw te installeren; als het blijft mislukken, voer dan opnieuw een bibliotheeksynchronisatie uit.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect is niet gereed",
+      "ubisoftAuthPrefixNotReadyMessage": "Kan Ubisoft Connect niet voorbereiden voor het aanmelden. Probeer het over een moment opnieuw.",
       "ubisoftLaunchIdMissing": "Ubisoft Connect openen",
       "ubisoftLaunchIdMissingMessage": "Kon de start-ID van deze game niet herleiden — Ubisoft Connect openen zodat je de game vanuit je bibliotheek kunt starten. Voer opnieuw een bibliotheeksynchronisatie uit om rechtstreeks starten te herstellen."
     },
@@ -338,6 +358,16 @@
     "updateFailed": "Update mislukt",
     "updateFailedMessage": "Kan update niet starten.",
     "storeError": "Kan niet communiceren met {{store}} ({{errType}})",
+    "captureLogsStarted": "Logboeken verzamelen...",
+    "captureLogsStartedMessage": "Diagnosepakket wordt gemaakt in je map Downloads. Dit duurt enkele seconden.",
+    "captureLogsDone": "Logboeken vastgelegd",
+    "captureLogsDoneMessage": "Opgeslagen in {{path}} ({{size}}, {{files}} bestanden).",
+    "captureLogsPartial": "Logboeken vastgelegd (gedeeltelijk)",
+    "captureLogsPartialMessage": "Opgeslagen in {{path}} ({{size}}, {{files}} bestanden). {{failures}} bestand(en) konden niet worden gelezen.",
+    "captureLogsFailed": "Kan logboeken niet vastleggen",
+    "captureLogsBusy": "Er wordt al een logboekopname uitgevoerd",
+    "captureLogsCopied": "Pad gekopieerd",
+    "captureLogsCopyFailed": "Kan het pad niet kopiëren",
     "actions": {
       "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
       "openStorageManager": "Ruimte vrijmaken",
@@ -399,6 +429,7 @@
     "alreadyInQueue": "Al in de wachtrij",
     "download": {
       "diskSpace": "Onvoldoende schijfruimte beschikbaar",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Netwerkfout — controleer je verbinding",
       "authExpired": "Aanmelding verlopen — meld je opnieuw aan",
       "toolMissing": "Vereist downloadprogramma niet gevonden",
