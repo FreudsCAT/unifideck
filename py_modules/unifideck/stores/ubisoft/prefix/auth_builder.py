@@ -154,7 +154,13 @@ class _AuthPrefixBuilder:
             gameid="umu-ubisoft-auth",
             store_game_id=self._config.auth_shortcut_store_id,
         )
-        if not success and not self._paths.find_upc_exe(auth_dir):
+        if not success:
+            return False
+        if not self._paths.find_upc_exe(auth_dir):
+            logger.error(
+                "[UbisoftPrefixManager] upc.exe not found after "
+                "fresh install for auth prefix",
+            )
             return False
         self._helpers.write_bootstrap_marker(
             auth_dir,

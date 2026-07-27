@@ -81,7 +81,7 @@ VALID_EVENTS: set[str] = {e.name for e in Events}
 # here in the same change so the contract stays the source of
 # truth rather than drifting behind the code.
 CANONICAL_SCHEMA: dict[str, set[str]] = {
-    "ACCOUNT_SWITCHED":             {"new_user"},
+    "ACCOUNT_SWITCHED":             {"active_user_id", "new_user"},
     "CIRCUIT_STATE_CHANGED":        {"failure_count", "game_id", "is_open", "store", "trigger"},
     "CONFIG_VALIDATION_COMPLETED":  {"defaults_validated", "user_overrides_present"},
     "CONFIG_VALIDATION_FAILED":     {"defaults_validated", "error_count", "first_error_path", "first_error_source", "user_overrides_present"},

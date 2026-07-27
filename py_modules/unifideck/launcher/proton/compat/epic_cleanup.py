@@ -138,7 +138,9 @@ def cleanup_epic_artifacts(plan: ProtonLaunchPlan) -> None:
     skipped entirely for them (it would delete exactly what they need).
     """
     from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
-    if is_rockstar_egs(plan.context.game_id, plan.state.umu_id):
+    if is_rockstar_egs(
+        plan.context.game_id, plan.state.umu_id, plan.context.exe_path.name,
+    ):
         logger.info(
             "[epic_cleanup] Rockstar-EGS (%s): skipping launcher-stub/"
             "registry cleanup (the game needs them)", plan.state.umu_id,

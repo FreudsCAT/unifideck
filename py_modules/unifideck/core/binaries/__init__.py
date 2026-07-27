@@ -61,15 +61,24 @@ from .binary_signatures import (
     compute_sha256,
     verify_bundled_binary,
 )
+from .cli_env import (
+    SCRUBBED_VARS,
+    clean_cli_env,
+    scrub_cli_env,
+)
 from .cli_timeouts import read_cli_timeouts
 
 __all__ = [
+    # cli_env.py
+    "SCRUBBED_VARS",
     # binary_resolver.py
     "BinaryResolver",
     "binary_resolver",
+    "clean_cli_env",
     # binary_signatures.py
     "compute_sha256",
     # cli_timeouts.py
     "read_cli_timeouts",
+    "scrub_cli_env",
     "verify_bundled_binary",
 ]

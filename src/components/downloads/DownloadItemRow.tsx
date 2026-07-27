@@ -21,6 +21,7 @@ import {
   getInstalledStatus,
 } from "../../lib/library-filters";
 import { StoreIcon } from "../shared/StoreIcon";
+import { friendlyDownloadError } from "../../lib/download-errors";
 import type { DownloadItem, DownloadStatus } from "../../types/downloads";
 import { DownloadProgressRow } from "./DownloadProgressRow";
 
@@ -117,6 +118,23 @@ export const DownloadItemRow: FC<Props> = ({ item, variant }) => {
           {item.game_title}
         </span>
       </div>
+
+      {variant === "finished" &&
+        item.status === "failed" &&
+        item.error_message && (
+          // Surface WHY it failed — previously only the red badge showed,
+          // leaving the user with no explanation (e.g. not enough disk space).
+          <span
+            style={{
+              fontSize: 11,
+              color: "#94a3b8",
+              lineHeight: "1.4",
+              wordBreak: "break-word",
+            }}
+          >
+            {friendlyDownloadError(item.error_message, t)}
+          </span>
+        )}
 
       {variant === "finished" && (
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

@@ -181,6 +181,24 @@
     "cancel": "إلغاء",
     "deleting": "جاري الحذف..."
   },
+  "captureLogs": {
+    "_comment": "CaptureLogsSection + CaptureLogsConfirmModal (ar-SA).",
+    "title": "جمع السجلات",
+    "description": "يجمع كل سجلات Unifideck في ملف مضغوط واحد في مجلد التنزيلات، لتتمكن من إرفاقه بتقرير خطأ.",
+    "capture": "جمع السجلات",
+    "capturing": "جارٍ جمع السجلات...",
+    "savedTo": "تم الحفظ في مجلد التنزيلات",
+    "bundleInfo": "{{files}} ملفات · {{size}}",
+    "partialNote": "تعذّر قراءة {{count}} ملف. الحزمة قابلة للاستخدام مع ذلك.",
+    "partialNote_other": "تعذّر قراءة {{count}} ملفات. الحزمة قابلة للاستخدام مع ذلك.",
+    "copyPath": "نسخ المسار",
+    "modalTitle": "إنشاء حزمة تشخيص؟",
+    "modalDescription": "سيجمع Unifideck سجلاته في ملف مضغوط واحد في مجلد التنزيلات، لتتمكن من إرفاقه بتقرير خطأ.",
+    "modalIncludes": "يشمل: سجلات الإضافة وتشغيل الألعاب، وسجل المزامنة والتثبيت، وأسماء ألعابك ومسارات تثبيتها، ومعلومات عن جهازك مثل الطراز ونظام التشغيل ووحدات التخزين.",
+    "modalExcludes": "لا يشمل أبداً: كلمات المرور، أو رموز تسجيل الدخول إلى المتاجر، أو ملفات تعريف الارتباط.",
+    "modalConfirm": "إنشاء الحزمة",
+    "cancel": "إلغاء"
+  },
   "installButton": {
     "play": "تشغيل",
     "resume": "استئناف",
@@ -328,6 +346,8 @@
       "signingInUbisoftMessage": "جارٍ فتح Ubisoft Connect — سجّل الدخول هناك ثم عُد.",
       "ubisoftPrefixNotReady": "Ubisoft Connect غير جاهز",
       "ubisoftPrefixNotReadyMessage": "تعذّر تجهيز بادئة Ubisoft Connect لهذه اللعبة. حاول التثبيت مرة أخرى؛ وإذا استمر الفشل، فأعد تشغيل مزامنة المكتبة.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect غير جاهز",
+      "ubisoftAuthPrefixNotReadyMessage": "تعذّر تجهيز Ubisoft Connect لتسجيل الدخول. يُرجى المحاولة مرة أخرى بعد قليل.",
       "ubisoftLaunchIdMissing": "جارٍ فتح Ubisoft Connect",
       "ubisoftLaunchIdMissingMessage": "تعذّر تحديد معرّف تشغيل هذه اللعبة — جارٍ فتح Ubisoft Connect لتتمكن من تشغيلها من مكتبتك. أعد تشغيل مزامنة المكتبة لإصلاح التشغيل المباشر."
     },
@@ -338,6 +358,16 @@
     "updateFailed": "فشل التحديث",
     "updateFailedMessage": "تعذر بدء عملية التحديث.",
     "storeError": "تعذر الاتصال بـ {{store}} ({{errType}})",
+    "captureLogsStarted": "جارٍ جمع السجلات...",
+    "captureLogsStartedMessage": "يجري إنشاء حزمة تشخيص في مجلد التنزيلات. يستغرق ذلك بضع ثوانٍ.",
+    "captureLogsDone": "تم جمع السجلات",
+    "captureLogsDoneMessage": "تم الحفظ في {{path}} ({{size}}، {{files}} ملفات).",
+    "captureLogsPartial": "تم جمع السجلات (جزئياً)",
+    "captureLogsPartialMessage": "تم الحفظ في {{path}} ({{size}}، {{files}} ملفات). تعذّر قراءة {{failures}} ملف.",
+    "captureLogsFailed": "تعذّر جمع السجلات",
+    "captureLogsBusy": "هناك عملية جمع سجلات جارية بالفعل",
+    "captureLogsCopied": "تم نسخ المسار",
+    "captureLogsCopyFailed": "تعذّر نسخ المسار",
     "actions": {
       "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
       "openStorageManager": "تفريغ مساحة",
@@ -399,6 +429,7 @@
     "alreadyInQueue": "موجود بالفعل في قائمة الانتظار",
     "download": {
       "diskSpace": "مساحة القرص غير كافية",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "خطأ في الشبكة — يرجى التحقق من اتصالك بالإنترنت",
       "authExpired": "انتهت صلاحية الجلسة — يرجى تسجيل الدخول مرة أخرى",
       "toolMissing": "أداة التنزيل المطلوبة غير موجودة",

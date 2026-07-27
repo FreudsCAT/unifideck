@@ -23,7 +23,9 @@ def _plan(prefix_path: Path):
     # (the behavior these tests exercise).
     return types.SimpleNamespace(
         prefix_path=prefix_path,
-        context=types.SimpleNamespace(game_id="SomeGame"),
+        context=types.SimpleNamespace(
+            game_id="SomeGame", exe_path=Path("/install/SomeGame.exe"),
+        ),
         state=types.SimpleNamespace(umu_id=None),
     )
 

@@ -25,11 +25,13 @@ from unifideck.launcher.proton.infrastructure import core
 from unifideck.launcher.types.context import LaunchContext, RuntimeState
 
 
-def _prepare(tmp_path, monkeypatch, store, umu_id=None, game_id="game1"):
+def _prepare(
+    tmp_path, monkeypatch, store, umu_id=None, game_id="game1", exe_name="null",
+):
     ctx = LaunchContext(
         store=store,
         game_id=game_id,
-        exe_path=Path("/dev/null"),
+        exe_path=Path("/dev") / exe_name,
         work_dir=tmp_path,
         plugin_dir=tmp_path,
     )
@@ -91,6 +93,35 @@ def test_rockstar_gta5_gets_egs_by_app_name(tmp_path, monkeypatch):
     plan = _prepare(
         tmp_path, monkeypatch, "epic", umu_id=None,
         game_id="9d2d0eb64d5c44529cece33fe2a46482",
+    )
+    assert plan.env["STORE"] == "egs"
+    assert plan.env["WINEDLLOVERRIDES"] == "vulkan-1=n,b"
+
+
+def test_rockstar_gta5_enhanced_edition_gets_egs_by_app_name(tmp_path, monkeypatch):
+    """UD report: GTA V's "Enhanced Edition" is a separate Epic catalog id
+    from the legacy "Grand Theft Auto V" tested above — it was missing from
+    the allowlist entirely, so this title got none of STORE=egs,
+    WINEDLLOVERRIDES, the fake launcher, or the epic_cleanup skip, and the
+    Rockstar Games Launcher couldn't re-verify the install after first boot.
+    """
+    plan = _prepare(
+        tmp_path, monkeypatch, "epic", umu_id=None,
+        game_id="8769e24080ea413b8ebca3f1b8c50951",
+    )
+    assert plan.env["STORE"] == "egs"
+    assert plan.env["WINEDLLOVERRIDES"] == "vulkan-1=n,b"
+
+
+def test_rockstar_matches_by_exe_name_with_unknown_app_id(tmp_path, monkeypatch):
+    """The durable fallback: even an Epic app id the allowlist has never
+    seen still gets the Rockstar flow, purely from the Play-launcher exe
+    name — this is what makes the fix resilient to the NEXT Rockstar/Epic
+    catalog reshuffle instead of needing another hardcoded id.
+    """
+    plan = _prepare(
+        tmp_path, monkeypatch, "epic", umu_id=None,
+        game_id="some-future-epic-catalog-id", exe_name="PlayGTAV.exe",
     )
     assert plan.env["STORE"] == "egs"
     assert plan.env["WINEDLLOVERRIDES"] == "vulkan-1=n,b"

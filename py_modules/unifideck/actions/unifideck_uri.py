@@ -25,46 +25,46 @@ _VERB_REGISTRY: dict[str, tuple[str, int, int, str]] = {
     ),
     "retry-sync": (
         SCOPE_BACKEND, 3, 3,
-        "Retry a cloud save sync. Args: <store> <game_id> <phase>. "
-        "Phase is 'sync_down' or 'sync_up'.",
+        ("Retry a cloud save sync. Args: <store> <game_id> <phase>. "
+         "Phase is 'sync_down' or 'sync_up'."),
     ),
     "refresh-library": (
         SCOPE_BACKEND, 1, 1,
-        "Refresh the game library for a single store. Args: "
-        "<store>. Fire-and-forget: the RPC returns immediately "
-        "and the sync runs in the background; the UI Library "
-        "view picks up the result through its own SYNC_PROGRESS "
-        "event subscription.",
+        ("Refresh the game library for a single store. Args: "
+         "<store>. Fire-and-forget: the RPC returns immediately "
+         "and the sync runs in the background; the UI Library "
+         "view picks up the result through its own SYNC_PROGRESS "
+         "event subscription."),
     ),
     "refresh-all-libraries": (
         SCOPE_BACKEND, 0, 0,
-        "Refresh every registered store's library. Args: none. "
-        "Fire-and-forget same as refresh-library, but drives "
-        "SyncService.sync_all() across all stores in parallel. "
-        "Wired to the 'Refresh all libraries' button in the "
-        "UnifideckSettingsPanel.",
+        ("Refresh every registered store's library. Args: none. "
+         "Fire-and-forget same as refresh-library, but drives "
+         "SyncService.sync_all() across all stores in parallel. "
+         "Wired to the 'Refresh all libraries' button in the "
+         "UnifideckSettingsPanel."),
     ),
     "open-save-folder": (
         SCOPE_FRONTEND, 2, 2,
-        "Open the SaveFolderModal for a game. Args: <store> "
-        "<game_id>. Frontend-only: the listener component "
-        "opens the modal via Decky's showModal helper; the "
-        "modal itself calls the backend list_save_folder RPC "
-        "to populate its data.",
+        ("Open the SaveFolderModal for a game. Args: <store> "
+         "<game_id>. Frontend-only: the listener component "
+         "opens the modal via Decky's showModal helper; the "
+         "modal itself calls the backend list_save_folder RPC "
+         "to populate its data."),
     ),
     "show-logs": (
         SCOPE_FRONTEND, 1, 1,
-        "Open the LaunchLogsModal for a past launch. Args: "
-        "<launch_id>. Frontend-only: the listener component "
-        "opens the modal, which fetches logs via the backend "
-        "get_launch_logs RPC. Used by launcher-failure toast "
-        "actions on errorCircuitBreakerOpen and generic "
-        "LAUNCHER_ERROR codes.",
+        ("Open the LaunchLogsModal for a past launch. Args: "
+         "<launch_id>. Frontend-only: the listener component "
+         "opens the modal, which fetches logs via the backend "
+         "get_launch_logs RPC. Used by launcher-failure toast "
+         "actions on errorCircuitBreakerOpen and generic "
+         "LAUNCHER_ERROR codes."),
     ),
     "settings": (
         SCOPE_FRONTEND, 1, 2,
-        "Navigate to a settings section. Args: <section> "
-        "[<focus_target>]. Frontend-only.",
+        ("Navigate to a settings section. Args: <section> "
+         "[<focus_target>]. Frontend-only."),
     ),
 }
 

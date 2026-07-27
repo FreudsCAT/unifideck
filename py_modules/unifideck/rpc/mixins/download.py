@@ -26,6 +26,7 @@ so the rest of the codebase can treat them as already-sanitised.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from pathlib import Path
 from typing import Any
@@ -128,6 +129,8 @@ class DownloadRPCMixin:
             store, game_id, storage_type, base_path, title, language,
         )
 
+        required_bytes = await self._resolve_required_bytes(store, game_id)
+
         download_svc = self._require_download()
         result = await download_svc.add(
             store=store,
@@ -136,8 +139,28 @@ class DownloadRPCMixin:
             title=title,
             is_update=False,
             language=language,
+            required_bytes=required_bytes,
         )
         return {"success": result.success, "error": result.error}
+
+    async def _resolve_required_bytes(
+        self, store: str, game_id: str,
+    ) -> int | None:
+        """Known download size in bytes, for the free-space preflight.
+
+        Read from the persistent :class:`SizeCache` populated when
+        App-Details showed the "Space Required" row — warm on the normal
+        install-from-details flow. A miss returns ``None`` (the preflight
+        degrades to the static floor); we deliberately do NOT shell out
+        to the store CLI here, so a cold cache never delays or hangs the
+        install. Ubisoft is a manual UPC install with no real download,
+        so it's exempt.
+        """
+        if store == "ubisoft":
+            return None
+        from unifideck.services.size_cache import get_size_cache
+        cache = get_size_cache(_size_cache_file(getattr(self, "config", None)))
+        return await cache.get(store, game_id)
 
     async def update_game(self, app_id: int, **kw: Any) -> Any:
         """Queue an update for an already-installed game.
@@ -283,6 +306,25 @@ class DownloadRPCMixin:
 # see that module for why a FUSE-mounted external drive (NTFS via
 # ntfs-3g, some exFAT setups) needs a demoted subprocess to be
 # reachable from this backend's root process at all.
+
+
+def _size_cache_file(config: Any) -> str:
+    """Path to the persistent download-size cache (in the data dir).
+
+    Mirrors ``SyncRPCMixin._size_cache_path`` — kept as a free function
+    here rather than reaching across to the sibling mixin's method
+    (mypy checks each mixin's ``self`` independently). TODO: both should
+    share one helper in ``services/size_cache.py``.
+    """
+    data_dir = "~/.local/share/unifideck"
+    if config is not None:
+        with contextlib.suppress(Exception):
+            data_dir = (
+                config.get("paths.data_dir", None)
+                or config.get("data_dir", data_dir)
+                or data_dir
+            )
+    return str(Path(data_dir).expanduser() / "game_sizes.json")
 
 
 def _resolve_storage_path(storage_type: str | None, config: Any) -> str | None:

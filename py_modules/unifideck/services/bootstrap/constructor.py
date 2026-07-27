@@ -84,7 +84,27 @@ def bootstrap_services(
     cdp_port = _resolve_cdp_port(config)
     _wire_browser_monitor(container, config, cdp_port)
     _wire_edge_browser(container, config, cdp_port)
+    _wire_user_paths_coordinator(container, bus, paths.steam_root)
     return container
+
+
+def _wire_user_paths_coordinator(
+    container: ServiceContainer, bus: EventBus, steam_root: str,
+) -> None:
+    """Wire the per-user path re-binder (ACCOUNT_SWITCHED + frontend push).
+
+    Isolated so a failure here (never expected) degrades to "paths don't
+    re-bind on switch" rather than aborting boot.
+    """
+    try:
+        from unifideck.services.user_paths_coordinator import UserPathsCoordinator
+        container.user_paths_coordinator = UserPathsCoordinator(
+            bus, container, steam_root,
+        )
+    except Exception as e:
+        logger.warning(
+            "[Bootstrap] failed to wire UserPathsCoordinator: %s", e,
+        )
 
 
 def _resolve_cdp_port(config: ConfigManager) -> int:

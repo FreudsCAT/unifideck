@@ -181,6 +181,24 @@
     "cancel": "取消",
     "deleting": "正在刪除..."
   },
+  "captureLogs": {
+    "_comment": "CaptureLogsSection + CaptureLogsConfirmModal (zh-TW).",
+    "title": "收集記錄",
+    "description": "將所有 Unifideck 記錄收集到下載資料夾中的單一 zip 檔案，方便附加到錯誤報告。",
+    "capture": "收集記錄",
+    "capturing": "正在收集記錄…",
+    "savedTo": "已儲存到你的下載資料夾",
+    "bundleInfo": "{{files}} 個檔案 · {{size}}",
+    "partialNote": "有 {{count}} 個檔案無法讀取。此壓縮檔仍可使用。",
+    "partialNote_other": "有 {{count}} 個檔案無法讀取。此壓縮檔仍可使用。",
+    "copyPath": "複製路徑",
+    "modalTitle": "建立診斷壓縮檔？",
+    "modalDescription": "Unifideck 會將記錄收集到下載資料夾中的單一 zip 檔案，方便你附加到錯誤報告。",
+    "modalIncludes": "包含：外掛與遊戲啟動記錄、同步與安裝歷程、你的遊戲名稱與安裝路徑，以及裝置資訊（型號、作業系統與儲存空間）。",
+    "modalExcludes": "絕不包含：你的密碼、商店登入權杖或瀏覽器 Cookie。",
+    "modalConfirm": "建立壓縮檔",
+    "cancel": "取消"
+  },
   "installButton": {
     "play": "執行",
     "resume": "繼續",
@@ -328,6 +346,8 @@
       "signingInUbisoftMessage": "正在開啟 Ubisoft Connect — 請在那裡登入後返回。",
       "ubisoftPrefixNotReady": "Ubisoft Connect 尚未就緒",
       "ubisoftPrefixNotReadyMessage": "無法為此遊戲準備 Ubisoft Connect 前綴。請重試安裝；若仍然失敗，請重新執行庫同步。",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect 尚未就緒",
+      "ubisoftAuthPrefixNotReadyMessage": "無法為登入準備 Ubisoft Connect。請稍後重試。",
       "ubisoftLaunchIdMissing": "正在開啟 Ubisoft Connect",
       "ubisoftLaunchIdMissingMessage": "無法解析此遊戲的啟動 ID — 正在開啟 Ubisoft Connect，以便您從庫中啟動它。請重新執行庫同步以修復直接啟動。"
     },
@@ -338,6 +358,16 @@
     "updateFailed": "更新失敗",
     "updateFailedMessage": "無法啟動更新流程。",
     "storeError": "無法與商店 {{store}} 通訊 ({{errType}})",
+    "captureLogsStarted": "正在收集記錄…",
+    "captureLogsStartedMessage": "正在下載資料夾中建立診斷壓縮檔，需要幾秒鐘。",
+    "captureLogsDone": "已收集記錄",
+    "captureLogsDoneMessage": "已儲存到 {{path}}（{{size}}，{{files}} 個檔案）。",
+    "captureLogsPartial": "已收集記錄（部分）",
+    "captureLogsPartialMessage": "已儲存到 {{path}}（{{size}}，{{files}} 個檔案）。有 {{failures}} 個檔案無法讀取。",
+    "captureLogsFailed": "無法收集記錄",
+    "captureLogsBusy": "記錄收集已在進行中",
+    "captureLogsCopied": "已複製路徑",
+    "captureLogsCopyFailed": "無法複製路徑",
     "actions": {
       "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
       "openStorageManager": "釋放空間",
@@ -399,6 +429,7 @@
     "alreadyInQueue": "已在佇列中",
     "download": {
       "diskSpace": "可用磁碟空間不足",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "網路錯誤 — 請檢查您的連線",
       "authExpired": "登入已過期 — 請重新登入",
       "toolMissing": "未找到所需的下載工具",

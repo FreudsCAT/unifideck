@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from unifideck.core import stale_installs
 from unifideck.core.types import Game
 
 from .models import MAX_FINISHED_HISTORY, DownloadItem, classify_download_error
@@ -237,6 +238,17 @@ class _WorkerMixin:
             logger.info("[DownloadWorker] starting update for %s", key)
             return await store.update_game(item.game_id, progress_cb=progress_cb)
         logger.info("[DownloadWorker] starting install for %s", key)
+        # Clear stale local state first. A store CLI's install records can
+        # outlive the files they name (manual delete, moved SD card, failed
+        # "Delete all data"), and then the CLI treats an install request as a
+        # no-op: nile exited 0 in 1.4s having downloaded nothing, and the
+        # install could never succeed however often the user retried. nile
+        # keeps TWO such records and the cached manifest — not installed.json
+        # — is the one that vetoes the download; see stale_installs. Only
+        # reachable for a fresh install — an update wants its files intact.
+        await asyncio.to_thread(
+            stale_installs.reconcile_for_install, item.store, item.game_id,
+        )
         if item.store == "ubisoft":
             return await store.install_game(
                 item.game_id,

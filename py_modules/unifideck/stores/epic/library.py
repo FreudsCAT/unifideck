@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from unifideck.core.binaries import clean_cli_env
 from unifideck.core.types import Game
 
 from .filter import should_filter_epic_item
@@ -130,6 +131,7 @@ class EpicLibraryReader:
                 *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(),

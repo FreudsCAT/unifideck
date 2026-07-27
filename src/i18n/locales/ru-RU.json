@@ -181,6 +181,24 @@
     "cancel": "Отмена",
     "deleting": "Удаление..."
   },
+  "captureLogs": {
+    "_comment": "CaptureLogsSection + CaptureLogsConfirmModal (ru-RU).",
+    "title": "Сбор журналов",
+    "description": "Собирает все журналы Unifideck в один ZIP-архив в папке «Загрузки», чтобы вы могли приложить его к сообщению об ошибке.",
+    "capture": "Собрать журналы",
+    "capturing": "Сбор журналов...",
+    "savedTo": "Сохранено в папку «Загрузки»",
+    "bundleInfo": "{{files}} файлов · {{size}}",
+    "partialNote": "Не удалось прочитать {{count}} файл. Архив всё равно пригоден.",
+    "partialNote_other": "Не удалось прочитать {{count}} файлов. Архив всё равно пригоден.",
+    "copyPath": "Копировать путь",
+    "modalTitle": "Создать диагностический архив?",
+    "modalDescription": "Unifideck соберёт свои журналы в один ZIP-файл в папке «Загрузки», чтобы вы могли приложить его к сообщению об ошибке.",
+    "modalIncludes": "Включено: журналы плагина и запусков игр, история синхронизации и установок, названия ваших игр и пути установки, а также сведения об устройстве — модель, операционная система и накопители.",
+    "modalExcludes": "Никогда не включается: ваши пароли, токены входа в магазины и файлы cookie браузера.",
+    "modalConfirm": "Создать архив",
+    "cancel": "Отмена"
+  },
   "installButton": {
     "play": "Играть",
     "resume": "Продолжить",
@@ -328,6 +346,8 @@
       "signingInUbisoftMessage": "Открытие Ubisoft Connect — войдите там, затем вернитесь.",
       "ubisoftPrefixNotReady": "Ubisoft Connect не готов",
       "ubisoftPrefixNotReadyMessage": "Не удалось подготовить префикс Ubisoft Connect для этой игры. Попробуйте установить ещё раз; если ошибка повторяется, запустите синхронизацию библиотеки снова.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect не готов",
+      "ubisoftAuthPrefixNotReadyMessage": "Не удалось подготовить Ubisoft Connect для входа. Попробуйте ещё раз через мгновение.",
       "ubisoftLaunchIdMissing": "Открытие Ubisoft Connect",
       "ubisoftLaunchIdMissingMessage": "Не удалось определить ID запуска этой игры — открывается Ubisoft Connect, чтобы вы могли запустить её из своей библиотеки. Запустите синхронизацию библиотеки снова, чтобы исправить прямой запуск."
     },
@@ -338,6 +358,16 @@
     "updateFailed": "Обновление не удалось",
     "updateFailedMessage": "Не удалось начать обновление.",
     "storeError": "Не удалось связаться с магазином {{store}} ({{errType}})",
+    "captureLogsStarted": "Сбор журналов...",
+    "captureLogsStartedMessage": "Создание диагностического архива в папке «Загрузки». Это займёт несколько секунд.",
+    "captureLogsDone": "Журналы собраны",
+    "captureLogsDoneMessage": "Сохранено в {{path}} ({{size}}, файлов: {{files}}).",
+    "captureLogsPartial": "Журналы собраны (частично)",
+    "captureLogsPartialMessage": "Сохранено в {{path}} ({{size}}, файлов: {{files}}). Не удалось прочитать файлов: {{failures}}.",
+    "captureLogsFailed": "Не удалось собрать журналы",
+    "captureLogsBusy": "Сбор журналов уже выполняется",
+    "captureLogsCopied": "Путь скопирован",
+    "captureLogsCopyFailed": "Не удалось скопировать путь",
     "actions": {
       "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
       "openStorageManager": "Освободить место",
@@ -399,6 +429,7 @@
     "alreadyInQueue": "Уже в очереди",
     "download": {
       "diskSpace": "Недостаточно свободного места на диске",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Ошибка сети — проверьте подключение к Интернету",
       "authExpired": "Сессия авторизации истекла — пожалуйста, войдите заново",
       "toolMissing": "Требуемая утилита скачивания не найдена",

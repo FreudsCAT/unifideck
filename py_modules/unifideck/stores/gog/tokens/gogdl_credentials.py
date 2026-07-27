@@ -38,6 +38,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from unifideck.core.binaries import clean_cli_env
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -74,7 +76,12 @@ class _GogdlCreds:
             creds_path,
             gogdl_data,
         )
-        env = os.environ.copy()
+        # Scrubbed rather than a raw os.environ copy: this env is handed to
+        # every gogdl invocation, and gogdl >=1.2.2 is a zipapp running under
+        # the system python3 — so the frozen Decky loader's
+        # LD_LIBRARY_PATH=/tmp/_MEIxxxx and any stray PYTHONPATH now reach an
+        # interpreter that actually obeys them.
+        env = clean_cli_env()
         # GOGDL_CONFIG_PATH must be the persistent parent of
         # ``gogdl_config_dir`` so gogdl can populate / reuse its
         # ``heroic_gogdl/manifests/`` and dependencies-repo cache between

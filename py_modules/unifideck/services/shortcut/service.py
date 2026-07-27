@@ -89,6 +89,23 @@ class ShortcutService(
         # subscription was lost (caught and silenced upstream).
         auto_wire(self, self._bus)
 
+    def set_shortcuts_path(self, shortcuts_path: str) -> None:
+        """Re-point at a different user's ``shortcuts.vdf`` at runtime.
+
+        Called when the active Steam user is (re)confirmed after boot — the
+        frontend push or an account switch — via
+        :func:`unifideck.steam.current_user.rebind_user_paths`. Resetting
+        ``_shortcuts_loaded`` is load-bearing: the in-memory ``_shortcuts``
+        dict is per-user, so without it the NEXT ``_save_all`` would write the
+        *previous* user's cached entries into the new user's file. Clearing the
+        cache forces a fresh read of the correct file on the next access.
+        """
+        if shortcuts_path == self._shortcuts_path:
+            return
+        self._shortcuts_path = shortcuts_path
+        self._shortcuts = {}
+        self._shortcuts_loaded = False
+
     async def stop(self) -> None:
         """Unsubscribe from EventBus events and persist pending changes."""
         self._bus.unsubscribe_all(self)

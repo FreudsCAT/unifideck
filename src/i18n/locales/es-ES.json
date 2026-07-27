@@ -181,6 +181,24 @@
     "cancel": "Cancelar",
     "deleting": "Eliminando..."
   },
+  "captureLogs": {
+    "_comment": "CaptureLogsSection + CaptureLogsConfirmModal (es-ES).",
+    "title": "Capturar registros",
+    "description": "Reúne todos los registros de Unifideck en un único archivo zip en tu carpeta de Descargas, para que puedas adjuntarlo a un informe de error.",
+    "capture": "Capturar registros",
+    "capturing": "Recopilando registros...",
+    "savedTo": "Guardado en tu carpeta de Descargas",
+    "bundleInfo": "{{files}} archivos · {{size}}",
+    "partialNote": "No se pudo leer {{count}} archivo. El paquete sigue siendo útil.",
+    "partialNote_other": "No se pudieron leer {{count}} archivos. El paquete sigue siendo útil.",
+    "copyPath": "Copiar ruta",
+    "modalTitle": "¿Crear un paquete de diagnóstico?",
+    "modalDescription": "Unifideck reunirá sus registros en un único archivo zip en tu carpeta de Descargas, para que puedas adjuntarlo a un informe de error.",
+    "modalIncludes": "Incluye: registros del plugin y de los lanzamientos de juegos, historial de sincronización e instalación, los títulos de tus juegos y sus rutas de instalación, y datos de tu dispositivo como el modelo, el sistema operativo y el almacenamiento.",
+    "modalExcludes": "Nunca incluye: tus contraseñas, tokens de inicio de sesión de las tiendas ni cookies del navegador.",
+    "modalConfirm": "Crear paquete",
+    "cancel": "Cancelar"
+  },
   "installButton": {
     "play": "Jugar",
     "resume": "Reanudar",
@@ -328,6 +346,8 @@
       "signingInUbisoftMessage": "Abriendo Ubisoft Connect: inicia sesión allí y luego vuelve.",
       "ubisoftPrefixNotReady": "Ubisoft Connect no está listo",
       "ubisoftPrefixNotReadyMessage": "No se pudo preparar el prefijo de Ubisoft Connect para este juego. Intenta instalarlo de nuevo; si sigue fallando, vuelve a ejecutar una sincronización de la biblioteca.",
+      "ubisoftAuthPrefixNotReady": "Ubisoft Connect no está listo",
+      "ubisoftAuthPrefixNotReadyMessage": "No se pudo preparar Ubisoft Connect para el inicio de sesión. Vuelve a intentarlo en un momento.",
       "ubisoftLaunchIdMissing": "Abriendo Ubisoft Connect",
       "ubisoftLaunchIdMissingMessage": "No se pudo resolver el ID de inicio de este juego: se abrirá Ubisoft Connect para que puedas iniciarlo desde tu biblioteca. Vuelve a ejecutar una sincronización de la biblioteca para corregir el inicio directo."
     },
@@ -338,6 +358,16 @@
     "updateFailed": "Error al actualizar",
     "updateFailedMessage": "Error al iniciar la actualización.",
     "storeError": "Error al comunicar con {{store}} ({{errType}})",
+    "captureLogsStarted": "Recopilando registros...",
+    "captureLogsStartedMessage": "Creando un paquete de diagnóstico en tu carpeta de Descargas. Tardará unos segundos.",
+    "captureLogsDone": "Registros capturados",
+    "captureLogsDoneMessage": "Guardado en {{path}} ({{size}}, {{files}} archivos).",
+    "captureLogsPartial": "Registros capturados (parcial)",
+    "captureLogsPartialMessage": "Guardado en {{path}} ({{size}}, {{files}} archivos). No se pudieron leer {{failures}} archivo(s).",
+    "captureLogsFailed": "No se pudieron capturar los registros",
+    "captureLogsBusy": "Ya hay una captura de registros en curso",
+    "captureLogsCopied": "Ruta copiada",
+    "captureLogsCopyFailed": "No se pudo copiar la ruta",
     "actions": {
       "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
       "openStorageManager": "Liberar espacio",
@@ -399,6 +429,7 @@
     "alreadyInQueue": "Ya está en la cola",
     "download": {
       "diskSpace": "No hay suficiente espacio en disco disponible",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Error de red — comprueba tu conexión",
       "authExpired": "Sesión caducada — inicia sesión de nuevo",
       "toolMissing": "Herramienta de descarga requerida no encontrada",

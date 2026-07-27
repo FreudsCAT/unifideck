@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from unifideck.core.types import Result
 
 if TYPE_CHECKING:
+    from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
     from unifideck.launcher.types.context import LaunchContext, RuntimeState
 
     from .service import LauncherService
@@ -43,19 +44,21 @@ async def launch_windows(
         store = ctx.store
         game_id = ctx.game_id
 
-        # Phase 1.5: Ensure the prefix is initialised BEFORE the cloud sync-down.
-        # The save dir resolves out of ``drive_c`` (e.g. GOG's
-        # ``<?DOCUMENTS?>\\<title>``), which only exists after ``createprefix``
-        # — so running sync-down first (the old order, where prefix creation
-        # happened later inside ``dispatch``) meant the FIRST launch resolved no
-        # save dir and pulled nothing (saves only appeared on a relaunch). This
-        # is idempotent: once ``system.reg`` exists it's a fast no-op, so it
-        # costs nothing when install-time warmup already created the prefix, and
-        # it self-heals games installed before that existed.
-        from unifideck.launcher.proton.compat.prefix_init import (
-            ensure_prefix_initialized,
-        )
-        await ensure_prefix_initialized(plan)
+        # Phase 1.5: Run the canonical prefix setup BEFORE the cloud sync-down.
+        # ``setup_prefix`` is the SAME self-healing process install-time warmup
+        # runs — createprefix + generic compat (winetricks + VC++ registry fix)
+        # with the managed-GE recovery ladder, and it PINS the Proton it
+        # succeeds with so a warmup that recovered to GE isn't undone here (the
+        # old split ran only createprefix here + compat later in ``dispatch``
+        # with no recovery, so launch re-picked the hanging global-default
+        # Proton, saw a "family change" against the GE-warmed prefix, and wiped
+        # + rebuilt it at Play time). Must precede sync-down: the save dir
+        # resolves out of ``drive_c`` (e.g. GOG's ``<?DOCUMENTS?>\\<title>``),
+        # which only exists after ``createprefix``. Idempotent — a no-op once
+        # the prefix is set up and the Proton matches the pin. ``session_env``
+        # is None: at launch Steam already provides the user session.
+        from unifideck.launcher.proton import setup_prefix
+        await setup_prefix(ctx, state)
 
         # Phase 2: Cloud Sync Down
         await svc._cloud_sync_phase(ctx, "down")
@@ -69,40 +72,60 @@ async def launch_windows(
             app_id=0  # No app_id on LaunchContext
         )
 
-        # Phase 3: Run Subprocess
-        try:
-            rc = await svc._run_game_subprocess(plan, ctx, state)
-            state.rc = rc
-        finally:
-            # NOTE: this fires on the launcher SUBPROCESS bus (dispatcher.py),
-            # which only forwards LAUNCHER_STAGE — it does NOT reach the
-            # plugin's PlaytimeService. Playtime is recorded on the plugin bus
-            # via the frontend lifetime listener → notify_game_stopped RPC.
-            # Kept only for any future in-subprocess subscriber.
-            await svc._bus.emit(Events.GAME_STOPPED, store=store, game_id=game_id)
-
-        # Phase 4: Cloud Sync Up
-        await svc._cloud_sync_phase(ctx, "up")
-
-        exit_code = svc._resolve_exit_code(state)
-        # ``Result`` has no ``rc`` field — its public surface is
-        # ``success``, ``error``, ``error_code``, ``store``,
-        # ``metadata``. The dispatcher's ``_map_result_to_exitcode``
-        # parses ``error_code`` and extracts the integer from any
-        # ``exit_<N>`` prefix; encoding the exit code there is the
-        # documented round-trip channel for subprocess return codes.
-        # The earlier ``rc=exit_code`` form raised
-        # ``TypeError: Result.__init__() got an unexpected keyword
-        # argument 'rc'`` on every launch — Windows games could
-        # never report their exit code back to the launcher.
-        return Result(
-            success=(exit_code == 0),
-            error_code=None if exit_code == 0 else f"exit_{exit_code}",
-        )
+        # Phases 3-4: Run Subprocess, then Cloud Sync Up
+        return await _run_and_finalize(svc, ctx, state, plan, store, game_id)
 
     except Exception:
         logger.exception("[Orchestrator] Windows launch failed")
         raise  # Let the outer _handle_launcher_error catch and toast it
+
+
+async def _run_and_finalize(
+    svc: LauncherService,
+    ctx: LaunchContext,
+    state: RuntimeState,
+    plan: ProtonLaunchPlan,
+    store: str,
+    game_id: str,
+) -> Result:
+    """Phases 3-4 of :func:`launch_windows` — run the game, then sync up.
+
+    Split out purely to keep ``launch_windows`` under the function-length
+    cap; the ordering (GAME_STOPPED in a ``finally``, sync-up after it,
+    exit code encoded last) is load-bearing and unchanged.
+    """
+    from unifideck.core.types.events import Events
+
+    # Phase 3: Run Subprocess
+    try:
+        rc = await svc._run_game_subprocess(plan, ctx, state)
+        state.rc = rc
+    finally:
+        # NOTE: this fires on the launcher SUBPROCESS bus (dispatcher.py),
+        # which only forwards LAUNCHER_STAGE — it does NOT reach the
+        # plugin's PlaytimeService. Playtime is recorded on the plugin bus
+        # via the frontend lifetime listener → notify_game_stopped RPC.
+        # Kept only for any future in-subprocess subscriber.
+        await svc._bus.emit(Events.GAME_STOPPED, store=store, game_id=game_id)
+
+    # Phase 4: Cloud Sync Up
+    await svc._cloud_sync_phase(ctx, "up")
+
+    exit_code = svc._resolve_exit_code(state)
+    # ``Result`` has no ``rc`` field — its public surface is
+    # ``success``, ``error``, ``error_code``, ``store``,
+    # ``metadata``. The dispatcher's ``_map_result_to_exitcode``
+    # parses ``error_code`` and extracts the integer from any
+    # ``exit_<N>`` prefix; encoding the exit code there is the
+    # documented round-trip channel for subprocess return codes.
+    # The earlier ``rc=exit_code`` form raised
+    # ``TypeError: Result.__init__() got an unexpected keyword
+    # argument 'rc'`` on every launch — Windows games could
+    # never report their exit code back to the launcher.
+    return Result(
+        success=(exit_code == 0),
+        error_code=None if exit_code == 0 else f"exit_{exit_code}",
+    )
 
 
 async def launch_native(

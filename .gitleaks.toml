@@ -1,0 +1,37 @@
+# .gitleaks.toml — config for the `gitleaks (secret scan)` hard gate in
+# .github/workflows/security.yml.
+#
+# The default ruleset is kept in full; this file only adds allowlist
+# entries for credential-SHAPED test fixtures. An inline
+# ``# gitleaks:allow`` comment is not sufficient on its own here: the
+# scan walks the patch of every commit in the PR, so a fixture that was
+# committed without the comment keeps being reported from that old
+# commit no matter what the working tree says. Allowlisting by the exact
+# literal fixes it for the history too, and stays far tighter than
+# allowlisting the file or the tests/ tree (a real leak in the same file
+# is still caught).
+
+[extend]
+useDefault = true
+
+[[rules]]
+# Placeholder-free config: no custom rules, only the allowlist below.
+id = "unifideck-noop-rule"
+description = "Unused. gitleaks requires at least one rule when a rules table is present."
+regex = '''\$\^unifideck-never-matches\$'''
+
+[allowlist]
+description = """
+Synthetic, credential-shaped strings used as test fixtures.
+
+`dBjftJeZ4CVPmB92K27uhbUJU1p1rwW1gFWFOEjXk9Qz2` is a variant of the
+example bearer token printed in RFC 6750 section 2.1. It exists in
+tests/unit/test_support_bundle_scrub.py precisely because it LOOKS like
+a credential: the support-bundle scrubber is asserted to redact it under
+the aggressive profile and to leave it alone under the standard one. It
+grants access to nothing.
+"""
+regexTarget = "match"
+regexes = [
+  '''dBjftJeZ4CVPmB92K27uhbUJU1p1rwW1gFWFOEjXk9Qz2''',
+]

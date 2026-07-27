@@ -9,6 +9,7 @@ from datetime import UTC
 from pathlib import Path
 from typing import Any
 
+from unifideck.core.binaries import clean_cli_env
 from unifideck.launcher.proton.infrastructure.prefix_layout import resolve_registry_prefix
 from unifideck.services.cloud_save.path_resolver import WinePrefixResolver
 from unifideck.services.cloud_save.strategy_base import CloudSaveStrategy
@@ -111,7 +112,10 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
         try:
             # Query legendary for game metadata
             cmd = [self.legendary_bin, "info", game_id, "--json"]
-            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            res = subprocess.run(
+                cmd, capture_output=True, text=True,
+                env=clean_cli_env(), check=True,
+            )
             data = json.loads(res.stdout)
 
             # legendary nests game metadata under "game" and install info
@@ -204,6 +208,7 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
                 self.legendary_bin, "list-saves", game_id,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
         except Exception as e:
@@ -255,7 +260,8 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
             _stdout, stderr = await proc.communicate()
             stderr_text = stderr.decode(errors="replace")
@@ -305,7 +311,8 @@ class EpicCloudSaveStrategy(CloudSaveStrategy):
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
             _stdout, stderr = await proc.communicate()
             if proc.returncode != 0:

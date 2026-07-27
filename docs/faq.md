@@ -63,5 +63,6 @@ This FAQ keeps to practical issues that have already shown up in release notes, 
 
 | Issue                                    | Resolution                                                                                                                                               |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| I need the main plugin / backend log.    | Start with `/home/deck/homebrew/logs/Unifideck`.                                                                                                         |
-| I need launcher or xCloud-specific logs. | Use `~/.local/share/unifideck/launcher.log` for launches and installs, and `~/.local/share/unifideck/chromium-auth.log` for Edge / xCloud auth behavior. |
+| I was asked for my logs.                 | Open the Unifideck Quick Access panel, go to **Settings -> Capture Logs**, and confirm. Every log and state file is collected into one zip in your **Downloads** folder, along with a report of your device and where everything lives. Attach that zip. Passwords, store login tokens and browser cookies are never included. |
+| I need the main plugin / backend log.    | `~/homebrew/logs/Unifideck/` holds one file per plugin session.                                                                                          |
+| I need launcher or xCloud-specific logs. | Use `~/.local/share/unifideck/launches/` for launches and installs (`<id>.log` is the plugin side, `<id>.game.log` is Proton/game output), and `~/.local/share/unifideck/edge-auth.log` for Edge / xCloud auth behavior. |

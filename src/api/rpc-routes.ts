@@ -38,6 +38,7 @@ export const rpcRoutes = {
   getAllUnifideckGames: "get_all_unifideck_games",
   getGameSizeBytes: "get_game_size_bytes",
   updateSteamOwnedTitles: "update_steam_owned_titles",
+  setActiveSteamUser: "set_active_steam_user",
   // Orphaned-shortcut sweep — boot-time cleanup (CleanupRPCMixin)
   scanOrphanedShortcuts: "scan_orphaned_shortcuts",
   // Downloads (DownloadRPCMixin)
@@ -94,12 +95,13 @@ export const rpcRoutes = {
   // Achievements (AchievementsRPCMixin) — GOG display + last-session summary
   getGameAchievements: "get_game_achievements",
   getLastSessionAchievements: "get_last_session_achievements",
-  // Observability (ObservabilityRPCMixin) — event bridge
+  // Observability (ObservabilityRPCMixin) — event bridge + diagnostics
   subscribeReplay: "subscribe_replay",
   getLauncherToasts: "get_launcher_toasts",
   getBusHealth: "get_bus_health",
   getPluginMetrics: "get_plugin_metrics",
   getFeatureFlags: "get_feature_flags",
+  captureLogs: "capture_logs",
   // Account switch + migration (AccountRPCMixin)
   checkAccountSwitch: "check_account_switch",
   migrateAccountData: "migrate_account_data",

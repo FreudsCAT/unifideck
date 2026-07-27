@@ -43,8 +43,9 @@ from unifideck.launcher.proton.infrastructure.prefix_layout import (
     resolve_registry_prefix,
 )
 from unifideck.launcher.proton.infrastructure.umu_runtime import (
-    cleanup_umu_runtime_cache,
     ensure_umu_runtime_ready,
+    open_game_log,
+    repair_incomplete_umu_runtime,
 )
 
 if TYPE_CHECKING:
@@ -396,6 +397,31 @@ async def _run_createprefix_with_retry(
     Proton returns non-zero for ``createprefix`` even on success (it
     tries to "run" the keyword), so success is the presence of
     ``system.reg``, not the exit code.
+
+    Between attempts this used to call ``cleanup_umu_runtime_cache()``,
+    which deletes EVERY runtime variant in ``~/.local/share/umu``. Because
+    the rc is meaningless here (see above), that nuke was unconditional: any
+    prefix-init failure — the overwhelmingly common cause being environment
+    or Proton problems, not runtime corruption — destroyed a perfectly good
+    multi-hundred-MB shared runtime. It then retried 5 s later, far too
+    little time to re-download, so attempt 2 failed for a NEW reason and
+    nuked again, and attempt 3 ran with no runtime at all.
+
+    That turned any transient launch bug into a permanently wedged install
+    affecting *every* store (the runtime is shared): field bundles showed
+    steamrt3 deleted outright and steamrt4 left as a partial download, after
+    which even previously-working Epic games could not start, and each
+    subsequent launch re-broke it. Diagnostics reported
+    ``steamrt4 missing its entry point`` and umu died with
+    ``FileNotFoundError: _v2-entry-point ... Runtime Platform missing or
+    download incomplete``.
+
+    :func:`repair_incomplete_umu_runtime` is the correct tool and is what
+    runs here now: it removes ONLY a variant that is genuinely present-but-
+    broken (payload extracted, ``umu`` entry-point symlink missing), leaves
+    healthy siblings alone, and is a no-op on a healthy runtime — so umu
+    re-downloads just what is actually broken, on its own schedule, instead
+    of racing our retry timer.
     """
     wait = _CREATEPREFIX_BACKOFF_SECONDS
     for attempt in range(1, _CREATEPREFIX_ATTEMPTS + 1):
@@ -418,7 +444,7 @@ async def _run_createprefix_with_retry(
                 },
                 severity="warning",
             )
-            cleanup_umu_runtime_cache()
+            repair_incomplete_umu_runtime()
             await asyncio.sleep(wait)
             wait *= 2
     return False
@@ -466,27 +492,49 @@ def _reap_prefix_wineserver(env: dict[str, str]) -> None:
 async def _run_umu(
     plan: ProtonLaunchPlan, env: dict[str, str], *umu_args: str,
 ) -> None:
-    """Spawn ``<python> <umu-run> <args>`` and wait (output discarded).
+    """Spawn ``<python> <umu-run> <args>`` and wait, teeing output to game.log.
 
     Runs in its own process group and is bounded by
     ``_UMU_STEP_TIMEOUT_SECONDS`` — a hung Proton/Wine boot is
     force-killed, process tree and all, instead of orphaned to run
     forever.
+
+    Output used to go to ``DEVNULL``. That made every ``createprefix``
+    failure completely undiagnosable: field bundles showed three silent
+    attempts and "prefix still missing system.reg" with nothing whatsoever
+    about *why* umu failed — the answer (``_v2-entry-point ... Runtime
+    Platform missing or download incomplete``) was being thrown away. It
+    goes to the same per-launch ``game.log`` the real launch uses, so a
+    support bundle carries it.
     """
     argv = [str(plan.python_bin), str(plan.umu_wrapper), *umu_args]
+    game_log = open_game_log()
+    out = game_log if game_log is not None else asyncio.subprocess.DEVNULL
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
             env=env,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stdout=out,
+            stderr=out,
             start_new_session=True,
         )
     except OSError as e:
         logger.warning("[prefix_init] umu %s spawn failed: %s", umu_args, e)
         return
+    finally:
+        if game_log is not None:
+            with contextlib.suppress(OSError):
+                game_log.close()
     try:
-        await asyncio.wait_for(proc.wait(), timeout=_UMU_STEP_TIMEOUT_SECONDS)
+        rc = await asyncio.wait_for(
+            proc.wait(), timeout=_UMU_STEP_TIMEOUT_SECONDS,
+        )
+        if rc != 0:
+            # Not necessarily a failure — Proton returns non-zero for
+            # ``createprefix`` even when it works (see
+            # _run_createprefix_with_retry). Logged at INFO so the code is
+            # visible next to the game.log output without crying wolf.
+            logger.info("[prefix_init] umu %s exit code: %d", umu_args, rc)
     except TimeoutError:
         logger.warning(
             "[prefix_init] umu %s exceeded %ds — killing process group",

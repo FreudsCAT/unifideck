@@ -32,6 +32,7 @@ import logging
 from typing import Any
 
 from unifideck.auth.orchestrator import AuthOrchestrator
+from unifideck.core.binaries import clean_cli_env
 from unifideck.core.types import AuthResult, Events, Result, StoreAuthError
 from unifideck.event_bus.event_bus import EventBus
 from unifideck.security import audit_auth_flow
@@ -134,6 +135,7 @@ class EpicAuthFlow:
                 "auth",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=clean_cli_env(),
             )
         except OSError as e:
             logger.warning("[epic_auth] spawn for auth-check failed: %s", e)
@@ -172,6 +174,7 @@ class EpicAuthFlow:
                 "--delete",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
             await asyncio.wait_for(
                 proc.communicate(),
@@ -211,6 +214,7 @@ class EpicAuthFlow:
             "auth",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=clean_cli_env(),
         )
 
     async def _scrape_url_from_proc(self, proc: Any) -> str | None:
@@ -271,6 +275,7 @@ class EpicAuthFlow:
             code,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=clean_cli_env(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(

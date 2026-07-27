@@ -6,8 +6,9 @@
  * filters purely on `AppOverview` field values. Spoofed shortcuts have
  * those empty, so this module writes them from:
  *  - per-shortcut `FacetRecord`s (`library-facets`) — metacritic,
- *    deck-compat, store categories/tags, release date, reviews,
- *    date-added;
+ *    deck-compat, store categories/tags, release date, reviews.
+ *    NOT date-added: see `applyFacet` — writing it into
+ *    `rt_purchased_time` hijacked Steam's Home "Recent Games" shelf;
  *  - Steam's own playtime store (`SteamClient.Apps.GetPlaytime`); and
  *  - the backend `get_game_size_bytes` RPC (on-disk size, installed).
  *
@@ -121,7 +122,19 @@ function applyFacet(ov: EnrichableOverview, facet: FacetRecord): void {
     ov.rt_original_release_date = rel;
     ov.rt_steam_release_date = rel;
   }
-  if (facet.date_added_unix > 0) ov.rt_purchased_time = facet.date_added_unix;
+  // Steam's Home "Recent Games" shelf ranks its candidates by
+  //   max(rt_last_time_locally_played, rt_purchased_time,
+  //       installed ? rt_last_time_played_or_installed : 0)
+  // over a pool that ALREADY includes every non-Steam shortcut (the
+  // LocalGames collection). Stock Steam leaves shortcuts at 0 so they
+  // sort harmlessly to the bottom. Projecting our `date_added_unix`
+  // into `rt_purchased_time` (to power the native "Date Added" sort)
+  // gave every freshly-synced game a recency of *now* and floated the
+  // whole library to the top of the shelf. Keep the field at 0.
+  // Scrubbing — rather than simply not writing — also clears values a
+  // previous build left on live overviews when the plugin is reloaded
+  // without a Steam restart.
+  if (ov.rt_purchased_time) ov.rt_purchased_time = 0;
   if (typeof facet.review_score === "number") {
     ov.review_score_with_bombs = facet.review_score;
   }

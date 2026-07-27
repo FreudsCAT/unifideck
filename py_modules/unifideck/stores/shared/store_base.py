@@ -1,12 +1,11 @@
 import asyncio
 import logging
-import os
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from unifideck.core.binaries import binary_resolver
+from unifideck.core.binaries import binary_resolver, clean_cli_env
 from unifideck.core.exe_finder import exe_finder
 from unifideck.core.types import (
     AuthResult,
@@ -160,10 +159,10 @@ class StoreBase(ABC):
                 store=self.store_name,
             )
         cmd = [bin_path, *args]
-        process_env = (
-            dict(os.environ) if env is None
-            else {**os.environ, **env}
-        )
+        # Start from a scrubbed env, not raw os.environ: the frozen Decky
+        # loader leaks LD_LIBRARY_PATH=/tmp/_MEIxxxx into every child, which
+        # a zipapp CLI (legendary/gogdl) obeys and a PyInstaller ELF ignored.
+        process_env = clean_cli_env(env)
         def _run() -> str:
             """Run the subprocess synchronously, return stdout."""
             result = subprocess.run(

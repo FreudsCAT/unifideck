@@ -176,6 +176,38 @@ def find_steam_config_vdf() -> Path | None:
     return cfg if cfg.is_file() else None
 
 
+def steam_library_dirs() -> list[Path]:
+    """Every Steam library root, the main install first.
+
+    Parsed from ``steamapps/libraryfolders.vdf``'s ``"path"`` entries.
+    Proton is installed into whichever library Steam picked, which on a Deck
+    is routinely an SD card or a second drive — searching only the main
+    install means a perfectly valid Proton the user selected is simply not
+    found, and the launcher silently falls back to a different one.
+
+    Launcher-safe: regex over the file, no ``vdf`` import and no
+    ``steam.library.find_steam_path`` (which pulls aiohttp and cannot load
+    in the launcher's slim Python). Mirrors
+    ``steam.owned_games._list_library_roots``, which is unavailable here for
+    that reason. Returns ``[]`` when no Steam root resolves; missing or
+    unreadable ``libraryfolders.vdf`` degrades to just the main root.
+    """
+    root = find_steam_root()
+    if root is None:
+        return []
+    roots = [root]
+    libfolders = root / "steamapps" / "libraryfolders.vdf"
+    try:
+        content = libfolders.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return roots
+    for match in re.finditer(r'"path"\s*"([^"]+)"', content):
+        path = Path(match.group(1))
+        if path not in roots and path.is_dir():
+            roots.append(path)
+    return roots
+
+
 def _extract_kv_block(content: str, start: int) -> str:
     """Return the balanced ``{ … }`` block beginning at/after *start*.
 
@@ -287,11 +319,53 @@ def _resolve_manifest_tool(
             yield name, proton
 
 
+def official_proton_alias(dir_name: str) -> str | None:
+    """Steam's internal ``CompatToolMapping`` name for an official Proton dir.
+
+    Valve's own Protons ship **no** ``compatibilitytool.vdf`` (only a
+    ``toolmanifest.vdf``), so nothing supplies their internal name and
+    :func:`_entry_tools` can only key them by directory name — yet
+    ``CompatToolMapping`` records the user's choice under the internal name::
+
+        "Proton - Experimental"  ->  proton_experimental
+        "Proton 9.0 (Beta)"      ->  proton_9
+        "Proton 10.0"            ->  proton_10
+        "Proton 11.0"            ->  proton_11
+        "Proton Hotfix"          ->  proton_hotfix
+
+    Without this alias EVERY official Proton the user selects in Steam's own
+    Properties > Compatibility dialog fails to resolve, so
+    ``select_proton_version`` falls through its tiers to the latest
+    GE-Proton and the user's choice is silently ignored — the game keeps
+    launching under the wrong Proton no matter what they pick. Field report:
+    "no other game is loading with a different Proton", with every launch
+    logging ``selected via saved tool: GE-Proton11-3`` while ``config.vdf``
+    held ``proton_11`` / ``proton_experimental``.
+
+    Third-party tools are unaffected: their real internal name comes from
+    their manifest and is yielded first, and ``iter_compat_tools`` uses
+    ``setdefault``, so this only ever *adds* a fallback key. GE/UMU builds
+    do not start with "Proton" so they get no alias at all.
+
+    Returns ``None`` when *dir_name* is not an official-Proton-shaped name.
+    """
+    if not dir_name.lower().startswith("proton"):
+        return None
+    rest = dir_name[len("proton"):].strip(" -_")
+    if not rest:
+        return None
+    # "9.0 (Beta)" -> "9"; "Experimental" -> "experimental"
+    token = rest.split()[0].split(".")[0].strip("()").lower()
+    return f"proton_{token}" if token else None
+
+
 def _entry_tools(entry: Path, root: Path) -> Iterator[tuple[str, Path]]:
     """Yield ``(name, proton)`` for one directory entry under a compat root.
 
     A tool dir with a ``compatibilitytool.vdf`` (manifest names first, then
     the dir name as a bare fallback), or a loose top-level ``*.vdf`` manifest.
+    Bare dirs additionally yield their official-Proton internal alias — see
+    :func:`official_proton_alias`.
     """
     if entry.is_dir():
         manifest = entry / "compatibilitytool.vdf"
@@ -300,6 +374,9 @@ def _entry_tools(entry: Path, root: Path) -> Iterator[tuple[str, Path]]:
         bare = entry / "proton"
         if bare.is_file():
             yield entry.name, bare
+            alias = official_proton_alias(entry.name)
+            if alias:
+                yield alias, bare
     elif entry.suffix == ".vdf":
         yield from _manifest_tools(entry, root)
 

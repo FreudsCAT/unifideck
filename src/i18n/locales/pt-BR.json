@@ -181,6 +181,24 @@
     "cancel": "Cancelar",
     "deleting": "Excluindo..."
   },
+  "captureLogs": {
+    "_comment": "CaptureLogsSection + CaptureLogsConfirmModal (pt-BR).",
+    "title": "Capturar logs",
+    "description": "Reúne todos os logs do Unifideck em um único arquivo zip na sua pasta Downloads, para você anexar a um relatório de bug.",
+    "capture": "Capturar logs",
+    "capturing": "Coletando logs...",
+    "savedTo": "Salvo na sua pasta Downloads",
+    "bundleInfo": "{{files}} arquivos · {{size}}",
+    "partialNote": "Não foi possível ler {{count}} arquivo. O pacote continua utilizável.",
+    "partialNote_other": "Não foi possível ler {{count}} arquivos. O pacote continua utilizável.",
+    "copyPath": "Copiar caminho",
+    "modalTitle": "Criar um pacote de diagnóstico?",
+    "modalDescription": "O Unifideck vai reunir seus logs em um único arquivo zip na sua pasta Downloads, para você anexar a um relatório de bug.",
+    "modalIncludes": "Incluído: logs do plugin e das execuções de jogos, histórico de sincronização e instalação, os títulos dos seus jogos e seus caminhos de instalação, e dados do seu dispositivo como modelo, sistema operacional e armazenamento.",
+    "modalExcludes": "Nunca incluído: suas senhas, tokens de login das lojas ou cookies do navegador.",
+    "modalConfirm": "Criar pacote",
+    "cancel": "Cancelar"
+  },
   "installButton": {
     "play": "Jogar",
     "resume": "Retomar",
@@ -328,6 +346,8 @@
       "signingInUbisoftMessage": "Abrindo o Ubisoft Connect — faça login lá e depois volte.",
       "ubisoftPrefixNotReady": "O Ubisoft Connect não está pronto",
       "ubisoftPrefixNotReadyMessage": "Não foi possível preparar o prefixo do Ubisoft Connect para este jogo. Tente instalar novamente; se continuar falhando, execute uma nova sincronização da biblioteca.",
+      "ubisoftAuthPrefixNotReady": "O Ubisoft Connect não está pronto",
+      "ubisoftAuthPrefixNotReadyMessage": "Não foi possível preparar o Ubisoft Connect para o login. Tente novamente em um instante.",
       "ubisoftLaunchIdMissing": "Abrindo o Ubisoft Connect",
       "ubisoftLaunchIdMissingMessage": "Não foi possível resolver o ID de inicialização deste jogo — abrindo o Ubisoft Connect para que você possa iniciá-lo pela sua biblioteca. Execute uma nova sincronização da biblioteca para corrigir a inicialização direta."
     },
@@ -338,6 +358,16 @@
     "updateFailed": "Atualização Falhou",
     "updateFailedMessage": "Falha ao iniciar atualização.",
     "storeError": "Falha ao comunicar com {{store}} ({{errType}})",
+    "captureLogsStarted": "Coletando logs...",
+    "captureLogsStartedMessage": "Criando um pacote de diagnóstico na sua pasta Downloads. Isso leva alguns segundos.",
+    "captureLogsDone": "Logs capturados",
+    "captureLogsDoneMessage": "Salvo em {{path}} ({{size}}, {{files}} arquivos).",
+    "captureLogsPartial": "Logs capturados (parcial)",
+    "captureLogsPartialMessage": "Salvo em {{path}} ({{size}}, {{files}} arquivos). Não foi possível ler {{failures}} arquivo(s).",
+    "captureLogsFailed": "Não foi possível capturar os logs",
+    "captureLogsBusy": "Uma captura de logs já está em andamento",
+    "captureLogsCopied": "Caminho copiado",
+    "captureLogsCopyFailed": "Não foi possível copiar o caminho",
     "actions": {
       "_comment": "Action button labels rendered next to toasts when the backend payload includes an ``action`` field. Each one is a one-click remediation for a specific error code. Steam URLs use SteamClient.URL.ExecuteSteamURL; unifideck:// URLs are dispatched through the dispatch_unifideck_action RPC (backend verbs) or handled locally (frontend verbs). See LauncherToastListener.tsx + actions/unifideck_uri.py.",
       "openStorageManager": "Liberar espaço",
@@ -399,6 +429,7 @@
     "alreadyInQueue": "Já está na fila",
     "download": {
       "diskSpace": "Espaço em disco insuficiente disponível",
+      "insufficientSpace": "Not enough space: needs {{need}} GB, only {{free}} GB free.",
       "network": "Erro de rede — verifique sua conexão",
       "authExpired": "Sessão expirada — por favor, entre novamente",
       "toolMissing": "Ferramenta de download necessária não encontrada",

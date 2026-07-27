@@ -34,26 +34,38 @@ def sanitize_frozen_loader_env(env: dict[str, str]) -> None:
     then aborts, so ``createprefix`` / winetricks silently do nothing (the
     install-time prefix warmup produced empty prefixes for exactly this
     reason). PyInstaller stashes the real pre-launch value in
-    ``LD_LIBRARY_PATH_ORIG``; restore it, else drop a ``_MEI`` bundle path.
+    ``LD_LIBRARY_PATH_ORIG``, but that value is no more welcome than the
+    ``_MEI`` one — see below — so it is discarded rather than restored.
 
-    A NO-OP outside a frozen parent — e.g. the out-of-process launcher Steam
-    spawns has a clean env (no ``_ORIG``, no ``_MEI`` path) — so it's safe to
-    run on every launch path, not just the warmup.
+    BOTH loader variables are write-once-never on the Proton/umu path:
+    discard any ``*_ORIG`` instead of restoring from it, and drop a
+    ``_MEI``-tainted live value.
 
-    ``LD_PRELOAD`` is handled differently: it is write-once-never. All
-    umu-run launches go through pressure-vessel (a container) which has its
-    own Steam overlay mechanism — re-exporting the host's
-    ``gameoverlayrenderer.so`` via ``LD_PRELOAD`` causes "cannot be
-    preloaded" errors and can crash/early-exit the game process
-    (``WARNING: Keyboard Interrupt``). The retired bash launcher unset
-    ``LD_PRELOAD`` once at startup and never restored it for any Proton/umu
-    launch; mirror that here — discard any ``LD_PRELOAD_ORIG`` instead of
-    restoring from it, and still drop a ``_MEI``-tainted ``LD_PRELOAD``.
+    ``LD_PRELOAD`` — all umu-run launches go through pressure-vessel (a
+    container) which has its own Steam overlay mechanism; re-exporting the
+    host's ``gameoverlayrenderer.so`` causes "cannot be preloaded" errors and
+    can crash/early-exit the game process (``WARNING: Keyboard Interrupt``).
+
+    ``LD_LIBRARY_PATH`` — umu copies it into ``STEAM_RUNTIME_LIBRARY_PATH``,
+    carrying a *host* library path into the container where it shadows the
+    container's own libs; the container then fails to start ``python3`` (the
+    interpreter of Proton's launch script) with "error while loading shared
+    libraries: libz.so.1" and umu exits 127. Restoring ``_ORIG`` here also
+    directly contradicted ``bin/unifideck-launcher``, which pops
+    ``LD_LIBRARY_PATH`` at process start precisely because Steam's value
+    breaks non-Steam binaries — it just never popped the ``_ORIG`` twin, so
+    this function silently handed the value back. In the field that showed up
+    as every GOG/Amazon/Ubisoft launch dying at 127 while Epic — which strips
+    both vars at its own ``--wrapper`` boundary — kept working. (Where the
+    inherited value originates is not established; it was seen on a plain
+    Steam stable client, so a containerised Steam is not the explanation.
+    The remedy is the same either way.)
+
+    The retired bash launcher unset both once at startup and never restored
+    them for any Proton/umu launch; mirror that here.
     """
-    orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
-    if orig is not None:
-        env["LD_LIBRARY_PATH"] = orig
-    elif "/_MEI" in env.get("LD_LIBRARY_PATH", ""):
+    env.pop("LD_LIBRARY_PATH_ORIG", None)
+    if "/_MEI" in env.get("LD_LIBRARY_PATH", ""):
         env.pop("LD_LIBRARY_PATH", None)
 
     env.pop("LD_PRELOAD_ORIG", None)
@@ -150,7 +162,9 @@ def _locate_umu_wrapper(proton_path: Path, plugin_dir: Path) -> Path:
             "plugin_dir": str(plugin_dir),
         },
     )
-def _epic_store_value(game_id: str, umu_id: str | None) -> str:
+def _epic_store_value(
+    game_id: str, umu_id: str | None, exe_name: str | None = None,
+) -> str:
     """The ``STORE`` env value for an Epic launch.
 
     ``none`` for ordinary Epic titles (ProtonFixes' ``egs`` defaults add a
@@ -159,10 +173,11 @@ def _epic_store_value(game_id: str, umu_id: str | None) -> str:
     launcher forced ``none`` for exactly this). Rockstar-on-Epic (RDR2/GTA5)
     is the lone exception: it WANTS the ``egs`` profile — its protonfixes +
     that same launcher handler are what boot the Rockstar launcher. Gated on
-    the Epic app name (game_id) so no ordinary Epic launch is affected.
+    the Epic app name/exe name (``is_rockstar_egs``) so no ordinary Epic
+    launch is affected.
     """
     from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
-    return "egs" if is_rockstar_egs(game_id, umu_id) else "none"
+    return "egs" if is_rockstar_egs(game_id, umu_id, exe_name) else "none"
 
 
 def _apply_rockstar_dll_overrides(env: dict[str, str], umu_id: str | None) -> None:
@@ -213,9 +228,12 @@ def _build_umu_env(
     env["GAMEID"] = umu_id or "umu-0"
     # See _epic_store_value for the Epic STORE reasoning. ``umu_store_code``
     # on state keeps the real value for diagnostics regardless of this.
-    rockstar_egs = ctx.store == "epic" and is_rockstar_egs(ctx.game_id, umu_id)
+    exe_name = ctx.exe_path.name
+    rockstar_egs = ctx.store == "epic" and is_rockstar_egs(
+        ctx.game_id, umu_id, exe_name,
+    )
     if ctx.store == "epic":
-        env["STORE"] = _epic_store_value(ctx.game_id, umu_id)
+        env["STORE"] = _epic_store_value(ctx.game_id, umu_id, exe_name)
     else:
         env["STORE"] = umu_store
     # PROTONPATH tells umu-run which Proton to use — the *directory*

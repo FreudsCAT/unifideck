@@ -6,11 +6,14 @@ import logging
 import os
 import shutil
 import signal
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from unifideck.launcher.frontend_bridge import launcher_toast
+
+from .container_escape import escape_argv
 
 logger = logging.getLogger(__name__)
 # Short pause before a recoverable umu retry — gives a transient
@@ -27,7 +30,29 @@ _LAUNCHES_DIR = Path("~/.local/share/unifideck/launches").expanduser()
 # cache checks/wipes a silent no-op for anyone on a build that resolved to
 # a different variant — covering all three keeps them meaningful
 # regardless of which runtime a given Proton build actually uses.
-UMU_RUNTIME_VARIANTS = ("steamrt2", "steamrt3", "steamrt4")
+UMU_RUNTIME_VARIANTS = ("steamrt2", "steamrt3", "steamrt4", "steamrt4-arm64")
+# Name of the marker umu >=1.4.0 writes inside a runtime variant directory
+# once, and only once, ``check_runtime()`` has validated the extracted payload
+# (see ``umu/umu_util.py``'s ``write_install_marker`` in the bundled zipapp).
+# It is umu's OWN definition of "this runtime finished installing", which
+# makes it strictly better evidence than probing for the entry point — see
+# :func:`_runtime_entry_point_ok`.
+_UMU_INSTALL_MARKER = ".installed.ok"
+# How long a failed repair suppresses another attempt on the same variant.
+# Deliberately an on-disk marker with a TTL rather than in-memory state: the
+# prefix warmup runs in the long-lived Decky BACKEND while launches run in a
+# fresh launcher process, and both repair the SAME shared runtime — so
+# process-scoped state would both miss the cross-process case and, in the
+# backend, disable UD-084 self-heal permanently after one unrelated failure.
+# The TTL means a genuinely fixable runtime starts self-healing again.
+#
+# Short (2 min) because under the bundled umu a wipe IS recoverable: umu
+# re-downloads the variant on the next run. The TTL only has to outlast the
+# retries of a single launch so one launch cannot spin; anything longer just
+# means a transient failure (network blip, disk full) keeps failing launches
+# after the cause has cleared. It was 10 min when a wiped runtime could never
+# come back — see :func:`repair_incomplete_umu_runtime`.
+_REPAIR_MARKER_TTL_SECONDS = 120
 _RECOVERABLE_CODES = {2, 74, 127}
 # Recoverable codes whose likely cause is a corrupt/incomplete steamrt
 # runtime bootstrap — the only ones that justify wiping the *shared*
@@ -91,7 +116,7 @@ def _reap_prefix_wineserver(env: dict[str, str] | None) -> None:
         logger.exception("[launcher.umu] wineserver reap failed for %s", prefix)
 
 
-def _open_game_log() -> Any:
+def open_game_log() -> Any:
     """Open the per-launch game-output log for umu stdout+stderr.
 
     Proton / Wine / the game itself write to stdout+stderr, which the
@@ -127,14 +152,71 @@ def _runtime_entry_point_ok(variant_dir: Path) -> bool:
     """Return whether ``variant_dir`` has a usable umu entry point.
 
     Mirrors umu's OWN launch-time gate (``build_command`` does
-    ``entry_point.is_file()`` on ``<variant>/umu``): the ``umu`` symlink
-    must resolve to an existing ``_v2-entry-point``. ``Path.is_file()``
-    follows symlinks, so a *missing* ``umu`` file AND a *dangling* ``umu``
-    symlink both return ``False`` — exactly the two states that make umu
-    raise "Runtime Platform missing or download incomplete" *after* it has
-    already logged "<variant> is up to date".
+    ``entry_point.is_file()`` on ``<variant>/umu``): the ``umu`` symlink must
+    resolve to an existing ``_v2-entry-point``. ``Path.is_file()`` follows
+    symlinks, so a *missing* ``umu`` file AND a *dangling* ``umu`` symlink
+    both return ``False`` — exactly the two states that make umu raise
+    "Runtime Platform missing or download incomplete" *after* it has already
+    logged "<variant> is up to date".
+
+    Why umu's own ``.installed.ok`` marker is deliberately NOT accepted as an
+    alternative signal here, despite being newer and more authoritative about
+    whether an install *finished*: the two answer different questions.
+
+    * ``.installed.ok`` (written only when ``check_runtime`` validated the
+      mtree) is what ``has_umu_setup`` reads, so it means "umu will NOT
+      reinstall this".
+    * ``<variant>/umu`` is what umu must actually exec.
+
+    Treating them as interchangeable (``marker or entry_point``) reopens
+    UD-084 in its 1.4.x form: umu writes the marker and then creates the
+    symlink in a ``finally:``, so a runtime can carry the marker with a
+    broken entry point. umu would decline to reinstall it (marker present)
+    and then fail to exec it — the precise wedge this repair exists to break,
+    and we would have declared it healthy.
+
+    The reverse mismatch needs no handling: a runtime with an entry point but
+    NO marker is one umu will reinstall by itself on the next run, so it is
+    not our problem — and pre-1.4 runtimes, which have no marker at all, must
+    not be wiped for lacking one.
+
+    Our own ``.unifideck-repair-<variant>`` marker lives in the cache ROOT,
+    not inside a variant dir, so it can never be confused with umu's.
     """
     return (variant_dir / "umu").is_file()
+def _repair_marker(variant: str) -> Path:
+    """Path of the "we already tried repairing this" marker for ``variant``."""
+    return UMU_CACHE_DIR / f".unifideck-repair-{variant}"
+
+
+def _repair_recently_attempted(variant: str) -> bool:
+    """Whether ``variant`` was repaired within the marker TTL."""
+    try:
+        age = time.time() - _repair_marker(variant).stat().st_mtime
+    except OSError:
+        return False
+    return age < _REPAIR_MARKER_TTL_SECONDS
+
+
+def runtime_is_unrecoverable(variant: str) -> bool:
+    """True when ``variant`` is broken AND a recent repair already failed.
+
+    See :func:`repair_incomplete_umu_runtime` for why a second failure is
+    treated as terminal rather than retried.
+    """
+    variant_dir = UMU_CACHE_DIR / variant
+    return (
+        _repair_recently_attempted(variant)
+        and variant_dir.is_dir()
+        and not _runtime_entry_point_ok(variant_dir)
+    )
+
+
+def unrecoverable_runtime_variants() -> list[str]:
+    """Every variant that survived a repair still broken, for error text."""
+    return [v for v in UMU_RUNTIME_VARIANTS if runtime_is_unrecoverable(v)]
+
+
 def repair_incomplete_umu_runtime() -> None:
     """Wipe any runtime variant that is present but has no umu entry point.
 
@@ -156,15 +238,51 @@ def repair_incomplete_umu_runtime() -> None:
     no-op on a healthy runtime, so it is safe to call on every launch. Safe
     without locking: launches run serially and this runs before any umu
     process is spawned, so no concurrent umu holds ``umu.lock`` here.
+
+    ONCE PER VARIANT PER TTL. The repair assumes umu can re-download what we
+    delete, and that assumption is only as good as the bundled umu.
+
+    It was FALSE up to umu 1.4.1, which fetched from
+    ``repo.steampowered.com/<variant>/images/latest-public-beta[/VERSION.txt]``
+    — ``latest-*`` symlink paths the repo answers with HTTP 403 (numbered
+    version dirs still return 200). umu's *update* path treats a 403 as
+    non-fatal and keeps the runtime it already has, but its *install* path
+    RAISES, so once a variant was gone it could never come back; re-deleting
+    the stub umu left behind merely spun, and field logs showed this fire
+    three times in a single launch.
+
+    The bundled umu (>=1.4.3) reads ``images/latest-public-beta.txt`` and
+    fetches from the numbered directory that file names, which serves
+    normally — so a wipe is now genuinely recoverable and this guard is no
+    longer working around a dead endpoint.
+
+    The single-attempt rule stays anyway, because "umu cannot install this
+    runtime" has other causes (no network, full disk, a future repo change).
+    It is a loop breaker, not a 403 workaround: after one failed repair we
+    leave the variant alone and let :func:`unrecoverable_runtime_variants`
+    turn it into a real error rather than an infinite silent retry. The TTL
+    is deliberately short so a transient cause self-heals on the next launch.
     """
     for variant in UMU_RUNTIME_VARIANTS:
         variant_dir = UMU_CACHE_DIR / variant
-        if variant_dir.is_dir() and not _runtime_entry_point_ok(variant_dir):
-            logger.warning(
-                "[launcher.umu] runtime '%s' present but entry point missing "
-                "— removing so umu re-downloads it", variant,
+        if not (variant_dir.is_dir() and not _runtime_entry_point_ok(variant_dir)):
+            continue
+        if _repair_recently_attempted(variant):
+            logger.error(
+                "[launcher.umu] runtime '%s' is STILL incomplete after a "
+                "recent repair — umu cannot download it (check game.log for "
+                "the umu error). Leaving it in place; deleting it again "
+                "would only spin.", variant,
             )
-            shutil.rmtree(variant_dir, ignore_errors=True)
+            continue
+        logger.warning(
+            "[launcher.umu] runtime '%s' present but entry point missing "
+            "— removing so umu re-downloads it", variant,
+        )
+        shutil.rmtree(variant_dir, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            UMU_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            _repair_marker(variant).touch()
 def ensure_umu_runtime_ready() -> None:
     """Ensure UMU runtime ready."""
     # The Steam Linux Runtime (steamrt2/3/4, depending on which one the
@@ -206,7 +324,7 @@ async def run_umu_with_retry(
     a hung Proton fails the step instead of retrying into the same hang.
     """
     last_rc = 1
-    game_log = _open_game_log()
+    game_log = open_game_log()
     out = game_log if game_log is not None else None
     try:
         for attempt in range(1, max_attempts + 1):
@@ -248,6 +366,56 @@ async def run_umu_with_retry(
                 game_log.close()
 
 
+def _strip_loader_env(env: dict[str, str] | None) -> None:
+    """Drop both dynamic-loader variables from a spawn environment.
+
+    Belt-and-suspenders: neither may reach umu-run/pressure-vessel,
+    regardless of what built ``env``.
+
+    ``LD_PRELOAD`` — re-exporting the host's gameoverlayrenderer.so crashes
+    the game process with "WARNING: Keyboard Interrupt".
+
+    ``LD_LIBRARY_PATH`` — umu copies it into ``STEAM_RUNTIME_LIBRARY_PATH``
+    (``umu_run.enable_steam_game_drive``), so a *host* library path rides
+    into the pressure-vessel container and shadows the container's own libs.
+    The container then can't start ``python3`` — the interpreter of Proton's
+    launch script — which dies with "error while loading shared libraries:
+    libz.so.1" and umu exits 127.
+
+    Where the stray value comes from is NOT established: it was observed on
+    a plain Steam stable client, so the obvious guess (a containerised Steam
+    exporting pressure-vessel override paths) is ruled out for that report.
+    Provenance doesn't change the remedy — nothing downstream of here wants
+    a host loader path.
+
+    Epic was immune only because ``handlers/epic.py`` already wraps its
+    umu-run invocation in ``env -u LD_LIBRARY_PATH -u LD_PRELOAD``;
+    GOG/Amazon/Ubisoft/raw-exe reach this spawn point directly. Doing it
+    here covers every store at the single choke point.
+    See ``sanitize_frozen_loader_env``.
+    """
+    if env is None:
+        return
+    env.pop("LD_PRELOAD", None)
+    env.pop("LD_LIBRARY_PATH", None)
+
+
+async def _reap_umu_tree(
+    proc: asyncio.subprocess.Process,
+    env: dict[str, str] | None,
+) -> None:
+    """Kill umu's whole process group plus its prefix wineserver, then wait.
+
+    ``start_new_session=True`` detaches the umu-run / pressure-vessel /
+    wineserver descendants, so without this they outlive both the timeout
+    and the cancellation path and keep spinning.
+    """
+    _kill_process_group(proc)
+    _reap_prefix_wineserver(env)
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(proc.wait(), timeout=5)
+
+
 async def _run_umu_once(
     argv: list[str],
     env: dict[str, str] | None,
@@ -265,12 +433,13 @@ async def _run_umu_once(
     install) also reaps the process group before propagating, so no
     orphaned wineserver is left spinning.
     """
-    if env is not None:
-        # Belt-and-suspenders: LD_PRELOAD must never reach umu-run/pressure-
-        # vessel here regardless of what built ``env`` — re-exporting the
-        # host's gameoverlayrenderer.so crashes the game process with
-        # "WARNING: Keyboard Interrupt". See sanitize_frozen_loader_env.
-        env.pop("LD_PRELOAD", None)
+    _strip_loader_env(env)
+    # If Steam wrapped our launcher in its OWN pressure-vessel (the user set
+    # Properties > Compatibility on this shortcut — a supported workflow),
+    # hop back out to the host first: Proton's python3 cannot load libz.so.1
+    # inside steamrt and umu would exit 127. No-op when unwrapped.
+    # See container_escape for the on-device reproduction.
+    argv = escape_argv(argv, env, cwd)
     proc = await asyncio.create_subprocess_exec(
         *argv,
         env=env,
@@ -294,17 +463,9 @@ async def _run_umu_once(
                 "[launcher.umu] %s exceeded %ds — killing process group",
                 argv[:3], int(timeout),
             )
-            _kill_process_group(proc)
-            _reap_prefix_wineserver(env)
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(proc.wait(), timeout=5)
+            await _reap_umu_tree(proc, env)
             return UMU_TIMEOUT_RC
     except asyncio.CancelledError:
-        # Reap the whole tree before unwinding, else the umu-run /
-        # pressure-vessel / wineserver descendants outlive the cancelled
-        # task and keep spinning (start_new_session=True detaches them).
-        _kill_process_group(proc)
-        _reap_prefix_wineserver(env)
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(proc.wait(), timeout=5)
+        # Reap the whole tree before unwinding the cancellation.
+        await _reap_umu_tree(proc, env)
         raise

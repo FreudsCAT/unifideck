@@ -26,18 +26,22 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from unifideck.core.binaries import clean_cli_env
 from unifideck.core.manifest import write_manifest
 from unifideck.core.safe_delete import canonical_prefix, safe_rmtree
 from unifideck.core.types import Events, InstallResult, Result
 from unifideck.event_bus.event_bus import EventBus
 from unifideck.stores.shared.cli_install_helpers import (
+    TailRingBuffer,
     drain_install_output,
     parse_progress_line,
     wait_with_timeout,
@@ -45,6 +49,7 @@ from unifideck.stores.shared.cli_install_helpers import (
 
 from . import amazon_fuel
 from .amazon_library import AmazonLibraryReader
+from .amazon_progress import parse_progress_line as parse_nile_progress
 
 logger = logging.getLogger(__name__)
 # Nile's ProgressBar emits lines like:
@@ -56,6 +61,42 @@ logger = logging.getLogger(__name__)
 _PROGRESS_RE = re.compile(r"Progress:\s*([\d.]+)")
 _PROGRESS_RE_BRACKET = re.compile(r"\[\s*([\d.]+)\s*%\s*\]")
 ProgressCallback = Callable[[Any], Awaitable[None]]
+
+
+@dataclass
+class _RunOutcome:
+    """Result of one ``nile install`` subprocess run.
+
+    ``rc`` is the exit code (``-1`` on timeout, ``-2`` when the process
+    never started); ``tail`` is the last few non-progress output lines
+    captured by the ring buffer — nile's real error text when ``rc != 0``,
+    so the failure isn't reduced to a bare ``nile_exit_{rc}``.
+    ``spawn_error`` is set only when ``create_subprocess_exec`` itself
+    raised, in which case there is no exit code to report at all.
+    """
+
+    rc: int
+    tail: str = ""
+    spawn_error: str | None = None
+
+
+def _format_exit_error(outcome: _RunOutcome) -> str:
+    """Turn a failed run into an error string.
+
+    Keeps the machine-parsable ``nile_exit_{rc}`` prefix (matched by
+    downstream classification / callers) and appends nile's actual output
+    tail when captured, so logs, the tracker, and the download item's
+    ``error_message`` name the real reason instead of a bare code.
+
+    Bug report: four Amazon installs failed after ~6s with 0 bytes and the
+    UI showed only "Failed" — every install line, including whatever nile
+    printed as its actual error, went to a DEBUG log the reporter never
+    captured. Mirrors the identical fix made for Epic/legendary.
+    """
+    if outcome.spawn_error:
+        return f"nile_spawn_failed: {outcome.spawn_error}"
+    base = f"nile_exit_{outcome.rc}"
+    return f"{base}: {outcome.tail}" if outcome.tail else base
 
 
 class AmazonInstaller:
@@ -117,23 +158,30 @@ class AmazonInstaller:
             store="amazon",
             game_id=game_id,
         )
-        rc = await self._run_install(base, game_id, progress_cb, verb)
-        if rc != 0:
+        outcome = await self._run_install(base, game_id, progress_cb, verb)
+        if outcome.rc != 0:
+            error = _format_exit_error(outcome)
+            logger.error(
+                "[AmazonInstall] %s failed for %s: %s",
+                verb, game_id, outcome.tail or "(no output captured)",
+            )
             await self._bus.emit(
                 Events.DOWNLOAD_FAILED,
                 store="amazon",
                 game_id=game_id,
-                error=f"nile_exit_{rc}",
+                error=error,
             )
             return InstallResult(
                 success=False,
-                error=f"nile_exit_{rc}",
+                error=error,
                 store="amazon",
                 game_id=game_id,
             )
-        return await self._finalize_install(game_id, base)
+        return await self._finalize_install(game_id, base, outcome.tail)
 
-    async def _finalize_install(self, game_id: str, base: str) -> InstallResult:
+    async def _finalize_install(
+        self, game_id: str, base: str, tail: str = "",
+    ) -> InstallResult:
         """Finalize install — locate the installed directory and write manifest.
 
         Nile may record the install path in its installed.json before
@@ -142,24 +190,32 @@ class AmazonInstaller:
         verifies the directory exists on disk before returning it.
         If we still can't locate the install directory after the CLI
         reported success, the install is incomplete and we report failure.
+
+        ``tail`` is nile's own output for the run. It matters most on this
+        exact-zero-exit failure: when a stale cached manifest makes nile
+        no-op it prints "Game is up to date" and exits 0, and discarding
+        that line left the bare code ``install_dir_not_found`` as the only
+        evidence — the reason had to be recovered from nile's source
+        instead of from our own logs.
         """
         install_path = await self._resolve_install_path(game_id, base)
         if not install_path:
+            error = f"install_dir_not_found: {tail}" if tail else "install_dir_not_found"
             logger.error(
                 "[AmazonInstall] cannot locate install directory for %s "
                 "under %s — nile reported success but no matching "
-                "directory found on disk",
-                game_id, base,
+                "directory found on disk; nile said: %s",
+                game_id, base, tail or "(no output captured)",
             )
             await self._bus.emit(
                 Events.DOWNLOAD_FAILED,
                 store="amazon",
                 game_id=game_id,
-                error="install_dir_not_found",
+                error=error,
             )
             return InstallResult(
                 success=False,
-                error="install_dir_not_found",
+                error=error,
                 store="amazon",
                 game_id=game_id,
             )
@@ -211,8 +267,8 @@ class AmazonInstaller:
         game_id: str,
         progress_cb: ProgressCallback | None,
         verb: str = "install",
-    ) -> int:
-        """Run install or update (``verb``)."""
+    ) -> _RunOutcome:
+        """Run install or update (``verb``), capturing nile's output tail."""
         self._current_progress = {
             "progress_percent": 0.0,
             "downloaded_bytes": 0,
@@ -221,24 +277,36 @@ class AmazonInstaller:
             "eta_seconds": 0,
         }
         cmd = self._build_install_cmd(base, game_id, verb)
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
+        logger.info("[AmazonInstall] executing: %s", " ".join(cmd))
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=clean_cli_env(),
+            )
+        except OSError as e:
+            # A lost exec bit / missing loader on bin/nile would otherwise
+            # escape to the worker and surface as a generic "unknown_error",
+            # which is visually identical to a genuine instant failure.
+            # The uninstall path has always reported this properly.
+            logger.exception("[AmazonInstall] cannot spawn %s", cmd[0])
+            return _RunOutcome(rc=-2, spawn_error=str(e))
+        tail_buf = TailRingBuffer()
         drain_exc: BaseException | None = None
         try:
             await self._drain_install_output(
                 proc,
                 game_id,
                 progress_cb,
+                tail_buf,
             )
         except BaseException as e:
             drain_exc = e
         rc = await self._wait_with_timeout(proc)
         if drain_exc is not None:
             raise drain_exc
-        return rc
+        return _RunOutcome(rc=rc, tail=tail_buf.tail())
 
     def _build_install_cmd(self, base: str, game_id: str, verb: str = "install") -> list[str]:
         """Build install/update cmd.
@@ -265,13 +333,14 @@ class AmazonInstaller:
         proc: Any,
         game_id: str,
         progress_cb: ProgressCallback | None,
+        tail_buf: TailRingBuffer,
     ) -> None:
-        """Drain install output."""
+        """Drain install output, feeding non-progress lines to ``tail_buf``."""
         await drain_install_output(
             proc,
             game_id,
             progress_cb,
-            self._handle_install_line,
+            functools.partial(self._handle_install_line, tail_buf=tail_buf),
         )
 
     async def _wait_with_timeout(self, proc: Any) -> int:
@@ -287,9 +356,16 @@ class AmazonInstaller:
         line: str,
         game_id: str,
         progress_cb: ProgressCallback | None,
+        *,
+        tail_buf: TailRingBuffer,
     ) -> None:
-        """Handle install line."""
-        updated = self._parse_progress_line(line, self._current_progress)
+        """Handle install line.
+
+        Non-progress lines (where nile prints its actual error) are fed to
+        ``tail_buf`` so a failing install can surface the real reason
+        instead of a bare exit code.
+        """
+        updated = parse_nile_progress(line, self._current_progress)
         if not updated:
             # Fallback to check bracket format
             pct = parse_progress_line(line, _PROGRESS_RE_BRACKET)
@@ -298,6 +374,7 @@ class AmazonInstaller:
                 updated = True
 
         if not updated:
+            tail_buf.append(line)
             logger.debug("[nile install] %s", line)
             return
 
@@ -317,70 +394,6 @@ class AmazonInstaller:
             speed_mbps=self._current_progress.get("speed_bps", 0.0) / (1024 * 1024),
             eta_seconds=self._current_progress.get("eta_seconds", 0),
         )
-
-    @staticmethod
-    def _parse_eta(line: str) -> int | None:
-        """Parse eta from nile line."""
-        if "ETA:" not in line:
-            return None
-        try:
-            eta_part = line.split("ETA:", 1)[1].strip()
-            if not eta_part:
-                return None
-            eta_time = eta_part.split()[0]
-            parts = eta_time.split(":")
-            if len(parts) == 3:
-                h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
-                return h * 3600 + m * 60 + s
-            if len(parts) == 2:
-                m, s = int(parts[0]), int(parts[1])
-                return m * 60 + s
-        except (ValueError, IndexError):
-            return None
-        return None
-
-    @staticmethod
-    def _parse_speed_mib(line: str) -> float | None:
-        """Parse speed from nile line."""
-        if "Download" not in line or "MiB/s" not in line:
-            return None
-        try:
-            tail = line.split("Download", 1)[1]
-            speed_part = tail.split("MiB/s", 1)[0].strip()
-            speed_part = speed_part.lstrip("-").strip()
-            speed_tokens = speed_part.split()
-            if not speed_tokens:
-                return None
-            return float(speed_tokens[-1]) * 1024 * 1024
-        except (ValueError, IndexError):
-            return None
-
-    def _parse_progress_line(self, line: str, progress: dict[str, Any]) -> bool:
-        """Parse progress percent and bytes from nile line."""
-        speed_bps = self._parse_speed_mib(line)
-        if speed_bps is not None:
-            progress["speed_bps"] = speed_bps
-            return True
-        if "Progress:" not in line:
-            return False
-        try:
-            part = line.split("Progress:", 1)[1].strip()
-            tokens = part.split()
-            if len(tokens) < 2:
-                return False
-            progress["progress_percent"] = float(tokens[0])
-            bytes_part = tokens[1].rstrip(",")
-            if "/" not in bytes_part:
-                return True
-            written, total = bytes_part.split("/", 1)
-            progress["downloaded_bytes"] = int(written)
-            progress["total_bytes"] = int(total)
-            eta = self._parse_eta(line)
-            if eta is not None:
-                progress["eta_seconds"] = eta
-            return True
-        except (ValueError, IndexError):
-            return False
 
     async def _resolve_install_path(self, game_id: str, base: str) -> str | None:
         """Resolve install path from nile's installed.json or fallback.
@@ -486,6 +499,7 @@ class AmazonInstaller:
                 "--yes",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=clean_cli_env(),
             )
         except OSError as e:
             logger.warning("[AmazonUninstall] could not spawn nile: %s", e)

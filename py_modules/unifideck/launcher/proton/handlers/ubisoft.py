@@ -233,6 +233,12 @@ async def ubisoft_auth_launch(plan: ProtonLaunchPlan) -> int:
     )
     upc_exe = _find_upc_exe(plan)
     if upc_exe is None:
+        launcher_toast(
+            "toasts.launcher.ubisoftAuthPrefixNotReadyMessage",
+            i18n_title_key="toasts.launcher.ubisoftAuthPrefixNotReady",
+            game_title="Ubisoft Connect",
+            severity="error",
+        )
         raise GameFailedError(
             "upc.exe not found in the Ubisoft auth prefix — the auth "
             "prefix may not be fully set up yet",
