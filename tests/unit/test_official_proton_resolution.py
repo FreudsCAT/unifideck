@@ -269,3 +269,63 @@ def test_manifest_declared_id_wins_over_derived_alias(tmp_path):
     )
     tools = vc.iter_compat_tools([tmp_path])
     assert tools["proton-cachyos"] == d / "proton"
+
+
+# ── the user's Force-Compat pick must actually REACH the selector ──────
+
+def test_signed_appid_normalises_to_unsigned_lookup(tmp_path, monkeypatch):
+    """``games.map``/``shortcuts.vdf`` store the SIGNED appid, but
+    ``CompatToolMapping`` is keyed by the UNSIGNED one. Passing the signed
+    form straight through matched nothing and silently dropped the pick."""
+    cfg = tmp_path / "config.vdf"
+    cfg.write_text(
+        '"InstallConfigStore"\n{\n"Software" { "Valve" { "Steam"\n{\n'
+        '  "CompatToolMapping"\n  {\n'
+        '    "0" { "name" "proton_experimental" }\n'
+        '    "2284541373" { "name" "GE-Proton9-13" }\n'
+        '  }\n} } }\n}\n',
+    )
+    monkeypatch.setattr(S.vdf_compat, "find_steam_config_vdf", lambda: cfg)
+    signed = 2284541373 - 2**32
+    assert S.get_steam_compat_tool_override(str(signed)) == "GE-Proton9-13"
+    assert S.get_steam_compat_tool_override("2284541373") == "GE-Proton9-13"
+
+
+async def test_launch_context_carries_steam_app_id():
+    """``ctx.steam_app_id`` was never populated, so ``select_proton_version``'s
+    ``if steam_app_id`` guard skipped the user's Force-Compat tier on EVERY
+    launch — their Properties > Compatibility choice was never read at all."""
+    from unifideck.launcher import dispatcher as D
+
+    class _Entry:
+        exe = "/games/g/g.exe"
+        work_dir = "/games/g"
+        app_id = 2284541373 - 2**32
+
+    class _Svc:
+        async def get_entry_for_game_key(self, _s, _g):
+            return _Entry()
+
+    exe, work_dir, has_entry, app_id = await D._resolve_game_exe(
+        _Svc(), "epic", "gid", "epic:gid",
+    )
+    assert has_entry and app_id == 2284541373 - 2**32
+    ctx = D._game_context("epic", "gid", exe, work_dir, "", app_id)
+    assert ctx.steam_app_id == str(2284541373 - 2**32)
+
+
+async def test_launch_context_steam_app_id_none_without_games_map_row():
+    """No row → no appid → the tier is correctly skipped rather than
+    looking up appid 0."""
+    from unifideck.launcher import dispatcher as D
+
+    class _Svc:
+        async def get_entry_for_game_key(self, _s, _g):
+            return None
+
+    monkey_exe, work_dir, has_entry, app_id = await D._resolve_game_exe(
+        _Svc(), "microsoft", "gid", "microsoft:gid",
+    )
+    assert not has_entry and app_id == 0
+    ctx = D._game_context("microsoft", "gid", "/x/y.exe", work_dir, "", app_id)
+    assert ctx.steam_app_id is None

@@ -13,6 +13,7 @@ from unifideck.core.types.results import Result
 from .types.context import LaunchContext
 from .types.errors import GameNotFoundError, LauncherError
 from .types.exit_codes import ExitCode
+from .ubisoft_prefix_probe import _ubisoft_has_populated_prefix
 
 if TYPE_CHECKING:
     from unifideck.services.shortcut import ShortcutService
@@ -71,7 +72,6 @@ def _install_path_from_cache(store: str, game_id: str) -> str:
     installed by an older build that never wrote one). Returns ``""``
     when the cache is absent or the game isn't found.
     """
-    import json
     cache = Path(
         "~/.local/share/unifideck/library_cache.json",
     ).expanduser()
@@ -154,7 +154,7 @@ async def _build_context(
             return _ubisoft_install_context(store, game_id, raw_options)
         return _auth_context(store, game_id, raw_options, action_store)
 
-    exe, work_dir, has_entry = await _resolve_game_exe(
+    exe, work_dir, has_entry, app_id = await _resolve_game_exe(
         shortcut_svc, store, game_id, game_key,
     )
     if not exe:
@@ -185,7 +185,7 @@ async def _build_context(
                     game_key,
                 )
                 return _game_context(
-                    store, game_id, exe, work_dir, raw_options,
+                    store, game_id, exe, work_dir, raw_options, app_id,
                 )
             if _ubisoft_has_populated_prefix(game_id):
                 logger.info(
@@ -198,13 +198,15 @@ async def _build_context(
             f"game {game_key!r} not found in games.map",
             context={"game_key": game_key},
         )
-    return _game_context(store, game_id, exe, work_dir, raw_options)
+    return _game_context(
+        store, game_id, exe, work_dir, raw_options, app_id,
+    )
 
 
 async def _resolve_game_exe(
     shortcut_svc: ShortcutService, store: str, game_id: str, game_key: str,
-) -> tuple[str, str, bool]:
-    """Resolve ``(exe, work_dir, has_entry)`` from games.map.
+) -> tuple[str, str, bool, int]:
+    """Resolve ``(exe, work_dir, has_entry, app_id)`` from games.map.
 
     Games installed by older builds (or discovered via manifest) may
     have an absent row (Amazon) or an empty exe (GOG ``start.sh``); we
@@ -214,9 +216,14 @@ async def _resolve_game_exe(
     "installed" signal the caller needs to distinguish an installed
     Ubisoft title (deeplink launch, exe legitimately empty) from one
     that was never installed.
+
+    ``app_id`` is the shortcut's Steam AppID (signed, as games.map stores
+    it; ``0`` when unknown). It is what lets the launcher look up the
+    user's Steam Force-Compat choice — see :func:`_game_context`.
     """
     entry = await shortcut_svc.get_entry_for_game_key(store, game_id)
     has_entry = entry is not None
+    app_id = (entry.app_id if entry else 0) or 0
     exe = (entry.exe if entry else "") or ""
     work_dir = (entry.work_dir if entry else "") or ""
     if not exe and store != "microsoft":
@@ -231,7 +238,7 @@ async def _resolve_game_exe(
                 game_key, resolved,
             )
             exe = resolved
-    return exe, work_dir, has_entry
+    return exe, work_dir, has_entry, app_id
 
 
 def _auth_context(
@@ -280,62 +287,6 @@ def _ubisoft_install_context(
     )
 
 
-def _ubisoft_has_populated_prefix(game_id: str) -> bool:
-    """True if ``game_id`` is a known Ubisoft title with a populated prefix.
-
-    Used when the install env token was lost (Steam dropped the launch
-    option) so ``_detect_special_action`` saw a plain launch, yet the title
-    has no games.map row. Mirrors ``_ubisoft_prefix_path`` resolution: prefer
-    the recorded ``prefix_path`` in ``ubisoft_id_map.json``, else the fixed
-    internal default — and require upc.exe present so we only open UPC into a
-    real prefix (genuinely-missing games still raise GameNotFoundError).
-
-    ``drive_c`` is located with :func:`resolve_drive_c` rather than by
-    appending it to the prefix root. A Proton prefix keeps its C: drive at
-    ``<root>/pfx/drive_c`` (only very old ones use ``<root>/drive_c``), so
-    the hand-built path missed every modern prefix: this returned False for a
-    fully-populated one, the caller raised ``GameNotFoundError``, and the
-    launcher exited before opening UPC. The install itself was already
-    waiting on that UPC window, so the UI sat on "INSTALLING UBISOFT
-    CONNECT / Follow the Ubisoft Connect window" forever — reported from the
-    field against Rayman Origins, whose prefix was a custom
-    ``~/Games/prefixes/ubisoft/80`` recorded in ``ubisoft_id_map.json``.
-    """
-    from unifideck.launcher.proton.infrastructure.prefix_layout import (
-        resolve_drive_c,
-    )
-
-    id_map_file = Path(
-        "~/.local/share/unifideck/ubisoft_id_map.json",
-    ).expanduser()
-    try:
-        data = json.loads(id_map_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    if not isinstance(data, dict) or game_id not in data:
-        return False
-    entry = data.get(game_id)
-    recorded = entry.get("prefix_path") if isinstance(entry, dict) else None
-    upc_rel = (
-        Path("Program Files (x86)")
-        / "Ubisoft"
-        / "Ubisoft Game Launcher"
-        / "upc.exe"
-    )
-    candidates: list[Path] = []
-    if isinstance(recorded, str) and recorded:
-        candidates.append(Path(recorded))
-    candidates.append(
-        Path("~/.local/share/unifideck/prefixes/ubisoft").expanduser()
-        / game_id,
-    )
-    for candidate in candidates:
-        drive_c = resolve_drive_c(candidate)
-        if drive_c is not None and (drive_c / upc_rel).is_file():
-            return True
-    return False
-
-
 def _xcloud_context(
     store: str, game_id: str, raw_options: str,
 ) -> LaunchContext:
@@ -356,8 +307,17 @@ def _xcloud_context(
 
 def _game_context(
     store: str, game_id: str, exe: str, work_dir: str, raw_options: str,
+    app_id: int = 0,
 ) -> LaunchContext:
-    """Context for a normal installed game with a resolved exe."""
+    """Context for a normal installed game with a resolved exe.
+
+    ``app_id`` (games.map's Steam AppID, signed) becomes
+    ``ctx.steam_app_id`` — what ``select_proton_version`` needs to read the
+    user's Steam Force-Compat choice. It was NEVER populated: the field
+    defaulted to ``None`` and no builder set it, so that function's
+    ``if steam_app_id`` guard skipped the tier on every launch and the
+    user's Properties > Compatibility pick was never read for any game.
+    """
     plugin_dir = _resolve_plugin_dir()
     return LaunchContext(
         store=store,
@@ -368,6 +328,7 @@ def _game_context(
         raw_options=raw_options,
         is_launch_action=True,
         auth_store=None,
+        steam_app_id=str(app_id) if app_id else None,
         bypass_circuit_breaker=_resolve_bypass_flag(store, game_id),
     )
 

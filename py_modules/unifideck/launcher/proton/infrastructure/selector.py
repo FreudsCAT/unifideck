@@ -241,6 +241,12 @@ def get_steam_compat_tool_override(app_id: str) -> str | None:
     pre-0.7.1 code scanned the per-user ``localconfig.vdf``, which does not
     carry these entries, so this tier generally matched nothing. Root is
     resolved by probing the cross-distro candidates.
+
+    Accepts the AppID in EITHER form and normalises to unsigned.
+    ``games.map`` / ``shortcuts.vdf`` store the *signed* 32-bit value
+    (``-110954320``) while ``CompatToolMapping`` is keyed by the *unsigned*
+    one (``4184012976``), so passing the signed form straight through
+    matched nothing and silently dropped the user's choice.
     """
     if not app_id:
         return None
@@ -248,7 +254,15 @@ def get_steam_compat_tool_override(app_id: str) -> str | None:
         appid_int = int(app_id)
     except (TypeError, ValueError):
         return None
-    return vdf_compat.parse_compat_tool(_read_steam_config_vdf(), appid_int) or None
+    if appid_int < 0:
+        appid_int += 2**32
+    content = _read_steam_config_vdf()
+    tool = vdf_compat.parse_compat_tool(content, appid_int) or None
+    logger.info(
+        "[launcher.proton] steam force-compat lookup: appid=%s -> %r",
+        appid_int, tool,
+    )
+    return tool
 
 
 def get_global_default_tool() -> str | None:
