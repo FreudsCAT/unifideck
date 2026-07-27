@@ -105,8 +105,12 @@ export const InstalledButtons: FC<Props> = ({
 
   // Clear Steam's Force-Compatibility while this page is open so
   // RunGame runs our launcher natively (the launcher applies Proton
-  // itself); restored on page-leave. See useLaunchPrep.
-  useLaunchPrep(appId, game);
+  // itself); restored on page-leave. syncBeforeLaunch is ALSO awaited
+  // in onPlay below — the user can reopen Steam's Properties dialog and
+  // pick a different Proton any number of times without this page ever
+  // remounting, so the mount-time capture alone goes stale the moment
+  // they do that. See useLaunchPrep.
+  const { syncBeforeLaunch } = useLaunchPrep(appId, game);
 
   // Running-state poll (2 s).
   useEffect(() => {
@@ -151,10 +155,16 @@ export const InstalledButtons: FC<Props> = ({
     };
   }, [game]);
 
-  const onPlay = useCallback(() => {
+  const onPlay = useCallback(async () => {
     if (!game) return;
+    // MUST resolve before RunGame fires — Steam decides whether to
+    // wrap the launcher in its own Proton at RunGame time, using
+    // whatever is in config.vdf at that instant. Reading it earlier
+    // (e.g. only on page mount) can't catch a Properties > Compatibility
+    // change the user made after that.
+    await syncBeforeLaunch();
     actions.launch(appId);
-  }, [actions, appId, game]);
+  }, [actions, appId, game, syncBeforeLaunch]);
 
   const onStop = useCallback(() => {
     actions.terminate(appId);

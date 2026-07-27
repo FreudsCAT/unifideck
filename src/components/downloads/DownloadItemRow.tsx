@@ -15,6 +15,7 @@ import { FC, useMemo } from "react";
 import { ButtonItem, DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameActions } from "../../hooks/useGameActions";
+import { syncCompatToolBeforeLaunch } from "../../hooks/useLaunchPrep";
 import { SteamBridge } from "../../lib/steam-bridge";
 import {
   resolveAppIdFromStoreGame,
@@ -160,7 +161,18 @@ export const DownloadItemRow: FC<Props> = ({ item, variant }) => {
                 border: "none",
                 background: "#22c55e",
               }}
-              onClick={() => actions.launch(playAppId)}
+              onClick={async () => {
+                // This row never mounts useLaunchPrep — same
+                // pre-launch Force-Compat sync it would have done,
+                // since a stray Steam Properties > Compatibility
+                // selection double-wraps the launcher regardless of
+                // which entry point starts RunGame.
+                await syncCompatToolBeforeLaunch(
+                  playAppId,
+                  `${item.store}:${item.game_id}`,
+                );
+                actions.launch(playAppId);
+              }}
             >
               {t("downloads.play")}
             </DialogButton>
