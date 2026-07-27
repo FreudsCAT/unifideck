@@ -257,10 +257,10 @@ def resolve_rockstar_play_exe(
 
 
 _UMU_DATABASE_URL_FORMATS = [
-    "https://raw.githubusercontent.com/Open-Wine-Components/"
-    "umu-database/main/umu-egs-{game_id}.json",
-    "https://raw.githubusercontent.com/Open-Wine-Components/"
-    "umu-database/main/umu-epic-{game_id}.json",
+    ("https://raw.githubusercontent.com/Open-Wine-Components/"
+     "umu-database/main/umu-egs-{game_id}.json"),
+    ("https://raw.githubusercontent.com/Open-Wine-Components/"
+     "umu-database/main/umu-epic-{game_id}.json"),
 ]
 _UMU_CACHE: dict[str, tuple[float, dict[str, Any] | None]] = {}
 _CACHE_TTL_SECONDS = 3600

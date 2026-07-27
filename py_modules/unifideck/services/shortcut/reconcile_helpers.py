@@ -46,8 +46,8 @@ def log_restart_banner(added: int, removed: int, reclaimed: int) -> None:
         "=" * 60,
         "IMPORTANT: Steam restart required to see shortcut changes!",
         f"  (added={added} removed={removed} reclaimed={reclaimed})",
-        "Please EXIT Steam completely and restart for the "
-        "shortcuts.vdf changes to take effect.",
+        ("Please EXIT Steam completely and restart for the "
+         "shortcuts.vdf changes to take effect."),
         "=" * 60,
     ):
         logger.warning("[ShortcutService] %s", line)

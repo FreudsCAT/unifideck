@@ -284,8 +284,8 @@ def _completeness(run: _Run) -> str:
     lines = [
         "COMPLETENESS",
         "------------",
-        f"  {len(run.entries)} file(s) collected, "
-        f"{run.used:,} bytes before compression",
+        (f"  {len(run.entries)} file(s) collected, "
+         f"{run.used:,} bytes before compression"),
     ]
     if not truncated and not excluded and not run.errors:
         lines.append("  Nothing was truncated, excluded by a size cap, or unreadable.")

@@ -156,7 +156,10 @@ def test_aggressive_profile_is_opt_in_only() -> None:
     Only the browser stderr log uses it; the standard profile must
     leave even a high-entropy string alone.
     """
-    token = "dBjftJeZ4CVPmB92K27uhbUJU1p1rwW1gFWFOEjXk9Qz2"
+    # Synthetic high-entropy string, not a credential — the point of the
+    # fixture is that it LOOKS like one. gitleaks:allow keeps the secret
+    # scanner from flagging the scrubber's own test data.
+    token = "dBjftJeZ4CVPmB92K27uhbUJU1p1rwW1gFWFOEjXk9Qz2"  # gitleaks:allow
     assert token in _text(f"selected {token}", "text")
     assert token not in _text(f"selected {token}", "text_aggressive")
 
@@ -185,7 +188,7 @@ def test_blob_rule_spares_long_identifiers_and_hashes(line: str) -> None:
 
 def test_blob_rule_still_catches_an_unlabelled_token() -> None:
     """Tightening it must not make it useless."""
-    token = "dBjftJeZ4CVPmB92K27uhbUJU1p1rwW1gFWFOEjXk9Qz2"
+    token = "dBjftJeZ4CVPmB92K27uhbUJU1p1rwW1gFWFOEjXk9Qz2"  # gitleaks:allow
     result = _text(f"session {token} issued", "text_aggressive")
     assert token not in result
     assert "<REDACTED>" in result
