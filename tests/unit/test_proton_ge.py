@@ -147,6 +147,10 @@ def _point_selector_roots(tmp_path, monkeypatch):
     monkeypatch.setattr(selector, "UNIFIDECK_COMPAT_DIR", str(empty))
     monkeypatch.setattr(selector, "STEAM_COMPAT_ROOTS", [str(compat)])
     monkeypatch.setattr(selector, "STEAM_LIBRARY_ROOTS", [str(lib)])
+    # Proton is also searched across every library in libraryfolders.vdf;
+    # stub that out so the host's real Steam install can't satisfy a lookup
+    # these tests expect to resolve inside tmp_path (or not at all).
+    monkeypatch.setattr(selector, "_discovered_library_commons", lambda: [])
     return compat, lib
 
 

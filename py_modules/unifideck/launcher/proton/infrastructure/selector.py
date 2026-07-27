@@ -71,19 +71,6 @@ STEAM_LIBRARY_ROOTS: list[str] = [
     "~/.local/share/Steam/steamapps/common",
 ]
 UNIFIDECK_COMPAT_DIR = "~/.local/share/unifideck/compat-tools"
-# Steam's internal compat-tool ids → the on-disk install directory
-# name. These differ for the official Protons: the id is
-# ``proton_experimental`` but the folder is ``Proton - Experimental``.
-# Without this mapping the Experimental fallback — and any user who
-# force-selects an official Proton in Steam — never resolves to a path.
-OFFICIAL_TOOL_DIRS: dict[str, str] = {
-    "proton_experimental": "Proton - Experimental",
-    "proton_hotfix": "Proton Hotfix",
-    "proton_10": "Proton 10.0",
-    "proton_9": "Proton 9.0 (Beta)",
-    "proton_8": "Proton 8.0",
-    "proton_7": "Proton 7.0",
-}
 def _compat_tool_roots() -> list[Path]:
     """Every ``compatibilitytools.d`` root to search, in priority order.
 
@@ -100,6 +87,39 @@ def _compat_tool_roots() -> list[Path]:
     return roots
 
 
+def _discovered_library_commons() -> list[Path]:
+    """``steamapps/common`` for every library named in ``libraryfolders.vdf``.
+
+    Split out from :func:`_steam_library_commons` so it is independently
+    stubbable: it touches the real filesystem, which would otherwise leak the
+    host's Steam install into any test that points the selector at a tmp dir.
+    """
+    return [
+        lib / "steamapps" / "common" for lib in vdf_compat.steam_library_dirs()
+    ]
+
+
+def _steam_library_commons() -> list[Path]:
+    """Every ``steamapps/common`` to search, across ALL Steam libraries.
+
+    The well-known paths in :data:`STEAM_LIBRARY_ROOTS` come first (the main
+    install wins), then every additional library Steam records. Steam puts
+    Proton in whichever library it chose — routinely an SD card or second
+    drive on a Deck — so searching only the well-known paths silently loses a
+    perfectly valid Proton the user selected. Deduplicated, order-preserving.
+    """
+    commons: list[Path] = [Path(r).expanduser() for r in STEAM_LIBRARY_ROOTS]
+    commons += _discovered_library_commons()
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in commons:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
+
+
 def resolve_proton_path(tool_id: str) -> Path | None:
     """Resolve PROTON path."""
     if not tool_id:
@@ -112,15 +132,33 @@ def resolve_proton_path(tool_id: str) -> Path | None:
     if resolved is not None:
         return resolved
     # Official Proton tools live in steamapps/common under a display-name
-    # dir that differs from the tool id (see OFFICIAL_TOOL_DIRS). Try the
-    # id verbatim first, then the mapped directory name.
-    dir_names = [tool_id]
-    aliased = OFFICIAL_TOOL_DIRS.get(tool_id)
-    if aliased:
-        dir_names.append(aliased)
-    for lib in STEAM_LIBRARY_ROOTS:
-        for name in dir_names:
-            candidate = Path(lib).expanduser() / name / "proton"
+    # dir that differs from Steam's internal tool id ("proton_experimental"
+    # -> "Proton - Experimental", "proton_9" -> "Proton 9.0 (Beta)"), and
+    # they carry no compatibilitytool.vdf to declare that id, so the compat
+    # roots above can never match them.
+    #
+    # This used to be a hardcoded id->dirname table, which silently rotted:
+    # it stopped at proton_10, so once Proton 11 shipped, a user selecting
+    # it in Steam's own Properties > Compatibility got no match here, fell
+    # through to the remaining tiers, and launched under GE-Proton instead —
+    # their choice ignored with nothing in the log to say so. Deriving the
+    # id from each installed dir name instead (see
+    # ``vdf_compat.official_proton_alias``) covers every past and future
+    # Proton release with no table to maintain.
+    for lib_dir in _steam_library_commons():
+        verbatim = lib_dir / tool_id / "proton"
+        if verbatim.is_file():
+            return verbatim
+        if not lib_dir.is_dir():
+            continue
+        try:
+            entries = sorted(lib_dir.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if vdf_compat.official_proton_alias(entry.name) != tool_id:
+                continue
+            candidate = entry / "proton"
             if candidate.is_file():
                 return candidate
     return None
@@ -219,11 +257,13 @@ def select_proton_version(
     """Select PROTON version.
 
     Priority order:
-      1. Per-game tool the frontend saved into
-         ``proton_settings.json`` (the user's Force-Compat choice,
-         captured + cleared on the game-details page).
-      2. A live per-app Steam compat override for ``steam_app_id``
-         (``config.vdf`` ``CompatToolMapping[appid]``).
+      1. A live per-app Steam compat override for ``steam_app_id``
+         (``config.vdf`` ``CompatToolMapping[appid]``) — the user's
+         CURRENT choice, straight from Steam's own
+         Properties > Compatibility dialog.
+      2. Per-game tool the frontend saved into ``proton_settings.json``
+         (the same choice, captured just before the frontend cleared
+         Steam's side on the game-details page).
       3. The Unifideck default from ``config.json``.
       4. Steam's GLOBAL default compat tool (``CompatToolMapping["0"]``) —
          the distro/system default (e.g. Proton-CachyOS on CachyOS/Bazzite).
@@ -232,13 +272,21 @@ def select_proton_version(
          stock SteamOS/Deck, so this tier is a no-op there.
       5. The latest GE-Proton released online (downloaded/installed on
          demand), falling back to Proton Experimental when offline.
+
+    **Tiers 1 and 2 were the other way round** and it silently defeated the
+    picker. ``proton_settings.json`` is only ever a *shadow* of the live
+    value: the frontend writes it at the moment it clears Steam's per-app
+    entry, precisely so the choice survives that clear. So whenever a live
+    per-app entry DOES exist, it is necessarily at least as fresh as the
+    shadow — the user just set it in Steam — while the shadow may be
+    arbitrarily old. Preferring the shadow meant a stale entry overrode the
+    user's live pick with nothing in the log to explain it. Field-observed
+    on Limbo: shadow ``GE-Proton11-3`` beat live ``GE-Proton9-26``, so
+    switching Proton in Steam's dialog appeared to do nothing at all no
+    matter which build was chosen. Reading the live value first makes the
+    picker authoritative and removes any dependence on frontend timing.
     """
     tried: list[str] = []
-    saved_tool = get_saved_proton_tool(store_game_id) if store_game_id else None
-    if saved_tool:
-        path = _resolve_logged("saved", saved_tool, tried)
-        if path:
-            return path, saved_tool
     steam_tool = (
         get_steam_compat_tool_override(steam_app_id) if steam_app_id else None
     )
@@ -246,6 +294,11 @@ def select_proton_version(
         path = _resolve_logged("steam", steam_tool, tried)
         if path:
             return path, steam_tool
+    saved_tool = get_saved_proton_tool(store_game_id) if store_game_id else None
+    if saved_tool:
+        path = _resolve_logged("saved", saved_tool, tried)
+        if path:
+            return path, saved_tool
     unifideck_tool = get_unifideck_proton_tool()
     if unifideck_tool:
         path = _resolve_logged("unifideck", unifideck_tool, tried)
