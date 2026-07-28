@@ -298,6 +298,15 @@ class DownloadRPCMixin:
         """Return the current download queue (sync method, no await)."""
         return self._require_download().get_queue()
 
+    async def clear_download_history(self, item_id: str | None = None) -> Any:
+        """Dismiss finished-download history rows (all, or one by id).
+
+        Backs the "clear" action on failed rows in the Downloads tab. History
+        only — no installed files, shortcuts or queue entries are touched.
+        """
+        removed = await self._require_download().clear_history(item_id)
+        return {"success": True, "removed": removed}
+
 
 # ─── Storage type → path resolution ───────────────────────────
 #

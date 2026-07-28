@@ -388,7 +388,8 @@
     "cloudPullDone": "Sauvegarde cloud téléchargée",
     "cloudPullFailed": "Échec du téléchargement de la sauvegarde cloud",
     "cloudPushDone": "Sauvegarde locale téléversée",
-    "cloudPushFailed": "Échec du téléversement de la sauvegarde locale"
+    "cloudPushFailed": "Échec du téléversement de la sauvegarde locale",
+    "cloudSavePathReset": "Emplacement de sauvegarde rétabli en automatique"
   },
   "uninstallModal": {
     "title": "Confirmer la désinstallation",
@@ -541,7 +542,8 @@
       "spaceRequired": "Espace requis",
       "lastPlayed": "Dernière partie",
       "playTime": "Temps de jeu",
-      "never": "Jamais"
+      "never": "Jamais",
+      "cloudSaves": "Sauvegardes cloud"
     },
     "compatibility": {
       "modalTitle": "Compatibilité Steam Deck",
@@ -553,7 +555,11 @@
       "unknown": "INCONNU"
     },
     "failedToLoadMetadata": "Échec du chargement des métadonnées",
-    "lastSession": "Dernière session : {{names}} débloqué(s)"
+    "lastSession": "Dernière session : {{names}} débloqué(s)",
+    "cloudSaves": {
+      "supported": "Pris en charge",
+      "unsupported": "Non pris en charge"
+    }
   },
   "gameDetailsSettings": {
     "title": "VUE DU JEU",
@@ -697,7 +703,11 @@
       "statusSyncing": "Synchronisation des sauvegardes cloud…",
       "statusUnresolved": "Emplacement de sauvegarde introuvable — la synchronisation pourrait ne pas fonctionner pour ce jeu.",
       "unresolvedHint": "Lancez le jeu une fois pour que nous puissions détecter son dossier de sauvegarde, ou définissez l'emplacement manuellement.",
-      "upload": "Téléverser la sauvegarde locale"
+      "upload": "Téléverser la sauvegarde locale",
+      "currentLocation": "Emplacement de sauvegarde",
+      "changeLocation": "Changer l'emplacement",
+      "resetLocation": "Rétablir en automatique",
+      "statusInSync": "Sauvegardes cloud à jour"
     },
     "exe": {
       "browse": "Parcourir…",
@@ -736,7 +746,11 @@
       "completed": "Terminé",
       "cancelled": "Annulé",
       "error": "Échoué"
-    }
+    },
+    "installedCount": "Installés ({{count}})",
+    "failed": "Échecs",
+    "clearFailed": "Effacer les échecs",
+    "uninstall": "Désinstaller"
   },
   "navigation": {
     "loading": "Chargement...",

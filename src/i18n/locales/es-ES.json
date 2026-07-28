@@ -388,7 +388,8 @@
     "cloudPullDone": "Guardado en la nube descargado",
     "cloudPullFailed": "Error al descargar el guardado en la nube",
     "cloudPushDone": "Guardado local subido",
-    "cloudPushFailed": "Error al subir el guardado local"
+    "cloudPushFailed": "Error al subir el guardado local",
+    "cloudSavePathReset": "Ubicación de guardado restablecida a automática"
   },
   "uninstallModal": {
     "title": "Confirmar desinstalación",
@@ -541,7 +542,8 @@
       "spaceRequired": "Espacio requerido",
       "lastPlayed": "Última partida",
       "playTime": "Tiempo de juego",
-      "never": "Nunca"
+      "never": "Nunca",
+      "cloudSaves": "Guardado en la nube"
     },
     "compatibility": {
       "modalTitle": "Compatibilidad con Steam Deck",
@@ -553,7 +555,11 @@
       "unknown": "DESCONOCIDO"
     },
     "failedToLoadMetadata": "Error al cargar metadatos",
-    "lastSession": "Última sesión: desbloqueado {{names}}"
+    "lastSession": "Última sesión: desbloqueado {{names}}",
+    "cloudSaves": {
+      "supported": "Compatible",
+      "unsupported": "No compatible"
+    }
   },
   "gameDetailsSettings": {
     "title": "VISTA DE DETALLES DEL JUEGO",
@@ -697,7 +703,11 @@
       "statusSyncing": "Sincronizando guardados en la nube…",
       "statusUnresolved": "Ubicación de guardado no encontrada — la sincronización podría no funcionar para este juego.",
       "unresolvedHint": "Inicia el juego una vez para que podamos detectar su carpeta de guardado, o define la ubicación manualmente.",
-      "upload": "Subir guardado local"
+      "upload": "Subir guardado local",
+      "currentLocation": "Ubicación de guardado",
+      "changeLocation": "Cambiar ubicación",
+      "resetLocation": "Restablecer a automática",
+      "statusInSync": "Guardados en la nube al día"
     },
     "exe": {
       "browse": "Buscar…",
@@ -736,7 +746,11 @@
       "completed": "Completado",
       "cancelled": "Cancelado",
       "error": "Fallido"
-    }
+    },
+    "installedCount": "Instalados ({{count}})",
+    "failed": "Fallidos",
+    "clearFailed": "Borrar fallidos",
+    "uninstall": "Desinstalar"
   },
   "navigation": {
     "loading": "Cargando...",

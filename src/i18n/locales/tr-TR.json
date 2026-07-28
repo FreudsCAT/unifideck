@@ -388,7 +388,8 @@
     "cloudPullDone": "Bulut kaydı indirildi",
     "cloudPullFailed": "Bulut kaydı indirilemedi",
     "cloudPushDone": "Yerel kayıt yüklendi",
-    "cloudPushFailed": "Yerel kayıt yüklenemedi"
+    "cloudPushFailed": "Yerel kayıt yüklenemedi",
+    "cloudSavePathReset": "Kayıt konumu otomatiğe sıfırlandı"
   },
   "uninstallModal": {
     "title": "Kaldırmayı Onayla",
@@ -541,7 +542,8 @@
       "spaceRequired": "Gerekli Alan",
       "lastPlayed": "Son Oynama",
       "playTime": "Oynama Süresi",
-      "never": "Hiçbir Zaman"
+      "never": "Hiçbir Zaman",
+      "cloudSaves": "Bulut kayıtları"
     },
     "compatibility": {
       "modalTitle": "Steam Deck Uyumluluğu",
@@ -553,7 +555,11 @@
       "unknown": "BİLİNMİYOR"
     },
     "failedToLoadMetadata": "Meta veriler yüklenemedi",
-    "lastSession": "Son oturum: {{names}} açıldı"
+    "lastSession": "Son oturum: {{names}} açıldı",
+    "cloudSaves": {
+      "supported": "Destekleniyor",
+      "unsupported": "Desteklenmiyor"
+    }
   },
   "gameDetailsSettings": {
     "title": "OYUN DETAYLARI GÖRÜNÜMÜ",
@@ -697,7 +703,11 @@
       "statusSyncing": "Bulut kayıtları eşitleniyor…",
       "statusUnresolved": "Kayıt konumu bulunamadı — eşitleme bu oyun için çalışmayabilir.",
       "unresolvedHint": "Kayıt klasörünü tespit edebilmemiz için oyunu bir kez başlatın veya konumu manuel olarak ayarlayın.",
-      "upload": "Yerel kaydı yükle"
+      "upload": "Yerel kaydı yükle",
+      "currentLocation": "Kayıt konumu",
+      "changeLocation": "Konumu değiştir",
+      "resetLocation": "Otomatiğe sıfırla",
+      "statusInSync": "Bulut kayıtları güncel"
     },
     "exe": {
       "browse": "Göz at…",
@@ -736,7 +746,11 @@
       "completed": "Tamamlandı",
       "cancelled": "İptal Edildi",
       "error": "Başarısız"
-    }
+    },
+    "installedCount": "Yüklü ({{count}})",
+    "failed": "Başarısız",
+    "clearFailed": "Başarısızları temizle",
+    "uninstall": "Kaldır"
   },
   "navigation": {
     "loading": "Yükleniyor...",

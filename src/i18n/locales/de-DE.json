@@ -388,7 +388,8 @@
     "cloudPullDone": "Cloud-Spielstand heruntergeladen",
     "cloudPullFailed": "Cloud-Spielstand-Download fehlgeschlagen",
     "cloudPushDone": "Lokaler Spielstand hochgeladen",
-    "cloudPushFailed": "Lokaler Spielstand-Upload fehlgeschlagen"
+    "cloudPushFailed": "Lokaler Spielstand-Upload fehlgeschlagen",
+    "cloudSavePathReset": "Speicherort auf automatisch zurückgesetzt"
   },
   "uninstallModal": {
     "title": "Deinstallation bestätigen",
@@ -541,7 +542,8 @@
       "spaceRequired": "Benötigter Speicher",
       "lastPlayed": "Zuletzt gespielt",
       "playTime": "Spielzeit",
-      "never": "Nie"
+      "never": "Nie",
+      "cloudSaves": "Cloud-Speicherstände"
     },
     "compatibility": {
       "modalTitle": "Steam Deck Kompatibilität",
@@ -553,7 +555,11 @@
       "unknown": "UNBEKANNT"
     },
     "failedToLoadMetadata": "Metadaten konnten nicht geladen werden",
-    "lastSession": "Letzte Sitzung: {{names}} freigeschaltet"
+    "lastSession": "Letzte Sitzung: {{names}} freigeschaltet",
+    "cloudSaves": {
+      "supported": "Unterstützt",
+      "unsupported": "Nicht unterstützt"
+    }
   },
   "gameDetailsSettings": {
     "title": "SPIELDETAIL-ANSICHT",
@@ -697,7 +703,11 @@
       "statusSyncing": "Cloud-Spielstände werden synchronisiert…",
       "statusUnresolved": "Speicherort nicht gefunden — Synchronisation funktioniert für dieses Spiel eventuell nicht.",
       "unresolvedHint": "Starte das Spiel einmal, damit wir den Speicherordner erkennen können, oder lege den Ort manuell fest.",
-      "upload": "Lokalen Spielstand hochladen"
+      "upload": "Lokalen Spielstand hochladen",
+      "currentLocation": "Speicherort",
+      "changeLocation": "Speicherort ändern",
+      "resetLocation": "Auf automatisch zurücksetzen",
+      "statusInSync": "Cloud-Spielstände aktuell"
     },
     "exe": {
       "browse": "Durchsuchen…",
@@ -736,7 +746,11 @@
       "completed": "Abgeschlossen",
       "cancelled": "Abgebrochen",
       "error": "Fehlgeschlagen"
-    }
+    },
+    "installedCount": "Installiert ({{count}})",
+    "failed": "Fehlgeschlagen",
+    "clearFailed": "Fehlgeschlagene entfernen",
+    "uninstall": "Deinstallieren"
   },
   "navigation": {
     "loading": "Laden...",

@@ -115,6 +115,20 @@ class _StatusMixin:
         # Try to auto-detect prefix folder (real, in-prefix location).
         return self._detect_wine_prefix_save_dir(game_id)
 
+    def _has_save_path_override(self, game_id: str) -> bool:
+        """True when ``games.<id>.save_path`` holds a manual override.
+
+        The status surface reports this so the manual cloud-save window can
+        offer "reset to automatic" only when there is an override to reset —
+        auto-detected locations have nothing to revert to.
+        """
+        if not self._config:
+            return False
+        try:
+            return bool(self._config.get(f"games.{game_id}.save_path"))
+        except Exception:
+            return False
+
     # ── Manual cloud-save button: status surface ─────────────────────
     def is_syncing(self, store: str, game_id: str) -> bool:
         """True if a sync for this game is currently in flight."""
@@ -169,6 +183,7 @@ class _StatusMixin:
             "cloud_supported": self._cloud_supported(store, game_id),
             "save_path": None,
             "save_path_resolved": False,
+            "save_path_is_override": False,
             "has_local_saves": False,
             "local_snapshot": {},
             "has_cloud_saves": None,
@@ -254,6 +269,7 @@ class _StatusMixin:
             logger.debug("[CloudSave] status: get_local_save_dir failed: %s", e)
         status["browse_start"] = self._browse_start(game_id, save_dir)
         status.update(self._local_save_status(save_dir))
+        status["save_path_is_override"] = self._has_save_path_override(game_id)
         remote = self._cloud_snapshot(store, game_id)
         cloud_info = await self._real_cloud_info(store, game_id)
         self._merge_cloud_info(status, cloud_info, remote)

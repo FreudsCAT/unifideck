@@ -388,7 +388,8 @@
     "cloudPullDone": "클라우드 저장 데이터 다운로드 완료",
     "cloudPullFailed": "클라우드 저장 데이터 다운로드 실패",
     "cloudPushDone": "로컬 저장 데이터 업로드 완료",
-    "cloudPushFailed": "로컬 저장 데이터 업로드 실패"
+    "cloudPushFailed": "로컬 저장 데이터 업로드 실패",
+    "cloudSavePathReset": "저장 위치를 자동으로 재설정했습니다"
   },
   "uninstallModal": {
     "title": "설치 제거 확인",
@@ -541,7 +542,8 @@
       "spaceRequired": "필요 공간",
       "lastPlayed": "최근 플레이",
       "playTime": "플레이 시간",
-      "never": "없음"
+      "never": "없음",
+      "cloudSaves": "클라우드 저장"
     },
     "compatibility": {
       "modalTitle": "Steam Deck 호환성 정보",
@@ -553,7 +555,11 @@
       "unknown": "정보 없음"
     },
     "failedToLoadMetadata": "메타데이터 로드 실패",
-    "lastSession": "지난 세션: {{names}} 달성"
+    "lastSession": "지난 세션: {{names}} 달성",
+    "cloudSaves": {
+      "supported": "지원됨",
+      "unsupported": "지원 안 함"
+    }
   },
   "gameDetailsSettings": {
     "title": "게임 상세 화면 레이아웃",
@@ -697,7 +703,11 @@
       "statusSyncing": "클라우드 저장 데이터 동기화 중…",
       "statusUnresolved": "저장 위치를 찾을 수 없음 — 이 게임은 동기화가 작동하지 않을 수 있습니다.",
       "unresolvedHint": "저장 폴더를 감지할 수 있도록 게임을 한 번 실행하거나, 수동으로 위치를 설정하십시오.",
-      "upload": "로컬 저장 데이터 업로드"
+      "upload": "로컬 저장 데이터 업로드",
+      "currentLocation": "저장 위치",
+      "changeLocation": "위치 변경",
+      "resetLocation": "자동으로 재설정",
+      "statusInSync": "클라우드 저장 최신 상태"
     },
     "exe": {
       "browse": "찾아보기…",
@@ -736,7 +746,11 @@
       "completed": "완료됨",
       "cancelled": "취소됨",
       "error": "에러"
-    }
+    },
+    "installedCount": "설치됨 ({{count}})",
+    "failed": "실패",
+    "clearFailed": "실패 항목 지우기",
+    "uninstall": "설치 제거"
   },
   "navigation": {
     "loading": "불러오는 중...",

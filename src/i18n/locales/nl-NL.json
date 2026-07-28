@@ -388,7 +388,8 @@
     "cloudPullDone": "Cloudopslag gedownload",
     "cloudPullFailed": "Downloaden van cloudopslag mislukt",
     "cloudPushDone": "Lokale opslag geüpload",
-    "cloudPushFailed": "Uploaden van lokale opslag mislukt"
+    "cloudPushFailed": "Uploaden van lokale opslag mislukt",
+    "cloudSavePathReset": "Opslaglocatie teruggezet op automatisch"
   },
   "uninstallModal": {
     "title": "Deïnstallatie bevestigen",
@@ -541,7 +542,8 @@
       "spaceRequired": "Benodigde ruimte",
       "lastPlayed": "Laatst gespeeld",
       "playTime": "Speeltijd",
-      "never": "Nooit"
+      "never": "Nooit",
+      "cloudSaves": "Cloudopslag"
     },
     "compatibility": {
       "modalTitle": "Steam Deck-compatibiliteit",
@@ -553,7 +555,11 @@
       "unknown": "ONBEKEND"
     },
     "failedToLoadMetadata": "Laden van metadata mislukt",
-    "lastSession": "Laatste sessie: {{names}} ontgrendeld"
+    "lastSession": "Laatste sessie: {{names}} ontgrendeld",
+    "cloudSaves": {
+      "supported": "Ondersteund",
+      "unsupported": "Niet ondersteund"
+    }
   },
   "gameDetailsSettings": {
     "title": "GAMEDETAILSWEERGAVE",
@@ -697,7 +703,11 @@
       "statusSyncing": "Cloudopslag synchroniseren…",
       "statusUnresolved": "Opslaglocatie niet gevonden — synchronisatie werkt mogelijk niet voor deze game.",
       "unresolvedHint": "Start de game eenmaal op zodat we de opslagmap kunnen detecteren, of stel de locatie handmatig in.",
-      "upload": "Lokale opslag uploaden"
+      "upload": "Lokale opslag uploaden",
+      "currentLocation": "Opslaglocatie",
+      "changeLocation": "Locatie wijzigen",
+      "resetLocation": "Terug naar automatisch",
+      "statusInSync": "Cloudopslag up-to-date"
     },
     "exe": {
       "browse": "Bladeren…",
@@ -736,7 +746,11 @@
       "completed": "Voltooid",
       "cancelled": "Geannuleerd",
       "error": "Mislukt"
-    }
+    },
+    "installedCount": "Geïnstalleerd ({{count}})",
+    "failed": "Mislukt",
+    "clearFailed": "Mislukte wissen",
+    "uninstall": "Deïnstalleren"
   },
   "navigation": {
     "loading": "Laden...",

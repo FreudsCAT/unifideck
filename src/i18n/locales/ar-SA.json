@@ -388,7 +388,8 @@
     "cloudPullDone": "تم تنزيل الحفظ السحابي",
     "cloudPullFailed": "فشل تنزيل الحفظ السحابي",
     "cloudPushDone": "تم رفع الحفظ المحلي",
-    "cloudPushFailed": "فشل رفع الحفظ المحلي"
+    "cloudPushFailed": "فشل رفع الحفظ المحلي",
+    "cloudSavePathReset": "تمت إعادة تعيين موقع الحفظ إلى تلقائي"
   },
   "uninstallModal": {
     "title": "تأكيد إلغاء التثبيت",
@@ -541,7 +542,8 @@
       "spaceRequired": "المساحة المطلوبة",
       "lastPlayed": "آخر تشغيل",
       "playTime": "وقت التشغيل",
-      "never": "أبداً"
+      "never": "أبداً",
+      "cloudSaves": "الحفظ السحابي"
     },
     "compatibility": {
       "modalTitle": "التوافق مع Steam Deck",
@@ -553,7 +555,11 @@
       "unknown": "غير معروف"
     },
     "failedToLoadMetadata": "فشل تحميل البيانات الوصفية",
-    "lastSession": "آخر جلسة: تم فتح {{names}}"
+    "lastSession": "آخر جلسة: تم فتح {{names}}",
+    "cloudSaves": {
+      "supported": "مدعوم",
+      "unsupported": "غير مدعوم"
+    }
   },
   "gameDetailsSettings": {
     "title": "واجهة تفاصيل اللعبة",
@@ -697,7 +703,11 @@
       "statusSyncing": "جاري مزامنة الحفظ السحابي...",
       "statusUnresolved": "لم يتم العถور على موقع الحفظ — قد لا تعمل المزامنة لهذه اللعبة.",
       "unresolvedHint": "قم بتشغيل اللعبة مرة واحدة حتى نتمكن من اكتشاف مجلد الحفظ الخاص بها، أو حدد الموقع يدويًا.",
-      "upload": "رفع الحفظ المحلي"
+      "upload": "رفع الحفظ المحلي",
+      "currentLocation": "موقع الحفظ",
+      "changeLocation": "تغيير الموقع",
+      "resetLocation": "إعادة التعيين إلى تلقائي",
+      "statusInSync": "الحفظ السحابي محدَّث"
     },
     "exe": {
       "browse": "تصفح…",
@@ -736,7 +746,11 @@
       "completed": "مكتمل",
       "cancelled": "ملغى",
       "error": "خطأ"
-    }
+    },
+    "installedCount": "المثبتة ({{count}})",
+    "failed": "فشلت",
+    "clearFailed": "مسح الفاشلة",
+    "uninstall": "إلغاء التثبيت"
   },
   "navigation": {
     "loading": "جاري التحميل...",

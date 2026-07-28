@@ -388,7 +388,8 @@
     "cloudPullDone": "クラウドセーブがダウンロードされました",
     "cloudPullFailed": "クラウドセーブのダウンロードに失敗しました",
     "cloudPushDone": "ローカルセーブがアップロードされました",
-    "cloudPushFailed": "ローカルセーブのアップロードに失敗しました"
+    "cloudPushFailed": "ローカルセーブのアップロードに失敗しました",
+    "cloudSavePathReset": "セーブデータの場所を自動に戻しました"
   },
   "uninstallModal": {
     "title": "アンインストールの確認",
@@ -541,7 +542,8 @@
       "spaceRequired": "必要な容量",
       "lastPlayed": "最後にプレイ",
       "playTime": "プレイ時間",
-      "never": "なし"
+      "never": "なし",
+      "cloudSaves": "クラウドセーブ"
     },
     "compatibility": {
       "modalTitle": "Steam Deck 互換性",
@@ -553,7 +555,11 @@
       "unknown": "不明"
     },
     "failedToLoadMetadata": "メタデータの読み込みに失敗しました",
-    "lastSession": "前回のセッション: {{names}} を解除"
+    "lastSession": "前回のセッション: {{names}} を解除",
+    "cloudSaves": {
+      "supported": "対応",
+      "unsupported": "非対応"
+    }
   },
   "gameDetailsSettings": {
     "title": "ゲーム詳細表示",
@@ -697,7 +703,11 @@
       "statusSyncing": "クラウドセーブを同期中…",
       "statusUnresolved": "セーブ場所が見つかりません — このゲームでは同期が機能しない可能性があります。",
       "unresolvedHint": "セーブフォルダを検出するためにゲームを一度起動するか、手動で場所を設定してください。",
-      "upload": "ローカルセーブをアップロード"
+      "upload": "ローカルセーブをアップロード",
+      "currentLocation": "セーブデータの場所",
+      "changeLocation": "場所を変更",
+      "resetLocation": "自動に戻す",
+      "statusInSync": "クラウドセーブは最新です"
     },
     "exe": {
       "browse": "参照…",
@@ -736,7 +746,11 @@
       "completed": "完了",
       "cancelled": "キャンセル済み",
       "error": "エラー"
-    }
+    },
+    "installedCount": "インストール済み ({{count}})",
+    "failed": "失敗",
+    "clearFailed": "失敗した項目を消去",
+    "uninstall": "アンインストール"
   },
   "navigation": {
     "loading": "読み込み中...",

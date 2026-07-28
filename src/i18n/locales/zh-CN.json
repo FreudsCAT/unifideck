@@ -388,7 +388,8 @@
     "cloudPullDone": "已下载云端存档",
     "cloudPullFailed": "下载云端存档失败",
     "cloudPushDone": "已上传本地存档",
-    "cloudPushFailed": "上传本地存档失败"
+    "cloudPushFailed": "上传本地存档失败",
+    "cloudSavePathReset": "存档位置已重置为自动"
   },
   "uninstallModal": {
     "title": "确认卸载",
@@ -541,7 +542,8 @@
       "spaceRequired": "所需空间",
       "lastPlayed": "上次运行",
       "playTime": "运行时间",
-      "never": "无记录"
+      "never": "无记录",
+      "cloudSaves": "云存档"
     },
     "compatibility": {
       "modalTitle": "Steam Deck 兼容性",
@@ -553,7 +555,11 @@
       "unknown": "未知"
     },
     "failedToLoadMetadata": "加载元数据失败",
-    "lastSession": "上次游玩：解锁了 {{names}}"
+    "lastSession": "上次游玩：解锁了 {{names}}",
+    "cloudSaves": {
+      "supported": "支持",
+      "unsupported": "不支持"
+    }
   },
   "gameDetailsSettings": {
     "title": "游戏详情页面视图",
@@ -697,7 +703,11 @@
       "statusSyncing": "正在同步云端存档…",
       "statusUnresolved": "未找到存档位置 — 此游戏可能无法进行同步。",
       "unresolvedHint": "启动游戏一次以便我们检测其存档文件夹，或手动设置位置。",
-      "upload": "上传本地存档"
+      "upload": "上传本地存档",
+      "currentLocation": "存档位置",
+      "changeLocation": "更改位置",
+      "resetLocation": "重置为自动",
+      "statusInSync": "云存档已是最新"
     },
     "exe": {
       "browse": "浏览…",
@@ -736,7 +746,11 @@
       "completed": "已完成",
       "cancelled": "已取消",
       "error": "错误"
-    }
+    },
+    "installedCount": "已安装 ({{count}})",
+    "failed": "失败",
+    "clearFailed": "清除失败项",
+    "uninstall": "卸载"
   },
   "navigation": {
     "loading": "正在加载...",

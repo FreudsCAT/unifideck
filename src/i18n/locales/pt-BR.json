@@ -388,7 +388,8 @@
     "cloudPullDone": "Salvamento na nuvem baixado",
     "cloudPullFailed": "Falha ao baixar salvamento na nuvem",
     "cloudPushDone": "Salvamento local enviado",
-    "cloudPushFailed": "Falha ao enviar salvamento local"
+    "cloudPushFailed": "Falha ao enviar salvamento local",
+    "cloudSavePathReset": "Local de salvamento redefinido para automático"
   },
   "uninstallModal": {
     "title": "Confirmar Desinstalação",
@@ -541,7 +542,8 @@
       "spaceRequired": "Espaço Necessário",
       "lastPlayed": "Última vez jogado",
       "playTime": "Tempo de jogo",
-      "never": "Nunca"
+      "never": "Nunca",
+      "cloudSaves": "Saves na nuvem"
     },
     "compatibility": {
       "modalTitle": "Compatibilidade com Steam Deck",
@@ -553,7 +555,11 @@
       "unknown": "DESCONHECIDO"
     },
     "failedToLoadMetadata": "Falha ao carregar metadados",
-    "lastSession": "Última sessão: desbloqueado {{names}}"
+    "lastSession": "Última sessão: desbloqueado {{names}}",
+    "cloudSaves": {
+      "supported": "Compatível",
+      "unsupported": "Não compatível"
+    }
   },
   "gameDetailsSettings": {
     "title": "VISUALIZAÇÃO DOS DETALHES DO JOGO",
@@ -697,7 +703,11 @@
       "statusSyncing": "Sincronizando salvamentos na nuvem…",
       "statusUnresolved": "Local de salvamento não encontrado — a sincronização pode não funcionar para este jogo.",
       "unresolvedHint": "Inicie o jogo uma vez para que possamos detectar sua pasta de salvamento ou defina o local manualmente.",
-      "upload": "Enviar salvamento local"
+      "upload": "Enviar salvamento local",
+      "currentLocation": "Local de salvamento",
+      "changeLocation": "Alterar local",
+      "resetLocation": "Redefinir para automático",
+      "statusInSync": "Saves na nuvem atualizados"
     },
     "exe": {
       "browse": "Procurar…",
@@ -736,7 +746,11 @@
       "completed": "Concluído",
       "cancelled": "Cancelado",
       "error": "Falhou"
-    }
+    },
+    "installedCount": "Instalados ({{count}})",
+    "failed": "Falharam",
+    "clearFailed": "Limpar falhas",
+    "uninstall": "Desinstalar"
   },
   "navigation": {
     "loading": "Carregando...",

@@ -254,6 +254,7 @@
     "cloudPushDone": "Local save uploaded",
     "cloudPushFailed": "Local save upload failed",
     "cloudSavePathSet": "Save location updated",
+    "cloudSavePathReset": "Save location reset to automatic",
     "cloudSavePathFailed": "Couldn't set save location",
     "ubisoftLauncherOpening": "Opening Ubisoft Connect",
     "ubisoftLauncherOpeningMessage": "Ubisoft Connect is opening for {{title}}. Install the game there, then return to play.",
@@ -541,7 +542,8 @@
       "spaceRequired": "Space Required",
       "lastPlayed": "Last Played",
       "playTime": "Play Time",
-      "never": "Never"
+      "never": "Never",
+      "cloudSaves": "Cloud saves"
     },
     "compatibility": {
       "modalTitle": "Steam Deck Compatibility",
@@ -553,7 +555,11 @@
       "unknown": "UNKNOWN"
     },
     "failedToLoadMetadata": "Failed to load metadata",
-    "lastSession": "Last session: unlocked {{names}}"
+    "lastSession": "Last session: unlocked {{names}}",
+    "cloudSaves": {
+      "supported": "Supported",
+      "unsupported": "Not supported"
+    }
   },
   "achievements": {
     "unlockedTitle": "Achievement Unlocked",
@@ -720,7 +726,11 @@
       "setLocationHint": "Pick the folder where this game stores its saves.",
       "noCloudSupport": "No cloud-save support",
       "noCloudData": "Unknown",
-      "autoPullOn": "Cloud saves download automatically on launch."
+      "autoPullOn": "Cloud saves download automatically on launch.",
+      "currentLocation": "Save location",
+      "changeLocation": "Change location",
+      "resetLocation": "Reset to automatic",
+      "statusInSync": "Cloud saves up to date"
     },
     "exe": {
       "menuItem": "Change executable…",
@@ -746,7 +756,7 @@
   },
   "downloads": {
     "title": "Downloads",
-    "empty": "No downloads. Install games from your library to see them here.",
+    "empty": "No downloads or installed games yet. Install games from your library to see them here.",
     "current": "Now downloading",
     "queued": "Queued",
     "finished": "Recently finished",
@@ -759,7 +769,11 @@
       "completed": "Complete",
       "cancelled": "Cancelled",
       "error": "Failed"
-    }
+    },
+    "installedCount": "Installed ({{count}})",
+    "failed": "Failed",
+    "clearFailed": "Clear failed",
+    "uninstall": "Uninstall"
   },
   "navigation": {
     "loading": "Loading...",

@@ -388,7 +388,8 @@
     "cloudPullDone": "Salvataggio cloud scaricato",
     "cloudPullFailed": "Download del salvataggio cloud non riuscito",
     "cloudPushDone": "Salvataggio locale caricato",
-    "cloudPushFailed": "Caricamento del salvataggio locale non riuscito"
+    "cloudPushFailed": "Caricamento del salvataggio locale non riuscito",
+    "cloudSavePathReset": "Cartella di salvataggio ripristinata ad automatica"
   },
   "uninstallModal": {
     "title": "Conferma disinstallazione",
@@ -541,7 +542,8 @@
       "spaceRequired": "Spazio richiesto",
       "lastPlayed": "Ultima partita",
       "playTime": "Tempo di gioco",
-      "never": "Mai"
+      "never": "Mai",
+      "cloudSaves": "Salvataggi cloud"
     },
     "compatibility": {
       "modalTitle": "Compatibilità Steam Deck",
@@ -553,7 +555,11 @@
       "unknown": "SCONOSCIUTO"
     },
     "failedToLoadMetadata": "Impossibile caricare i metadati",
-    "lastSession": "Ultima sessione: sbloccato {{names}}"
+    "lastSession": "Ultima sessione: sbloccato {{names}}",
+    "cloudSaves": {
+      "supported": "Supportati",
+      "unsupported": "Non supportati"
+    }
   },
   "gameDetailsSettings": {
     "title": "VISTA DETTAGLI GIOCO",
@@ -697,7 +703,11 @@
       "statusSyncing": "Sincronizzazione dei salvataggi cloud…",
       "statusUnresolved": "Cartella di salvataggio non trovata — la sincronizzazione potrebbe non funzionare per questo gioco.",
       "unresolvedHint": "Avvia il gioco una volta per rilevare la sua cartella di salvataggio, o impostala manualmente.",
-      "upload": "Carica salvataggio locale"
+      "upload": "Carica salvataggio locale",
+      "currentLocation": "Cartella di salvataggio",
+      "changeLocation": "Cambia cartella",
+      "resetLocation": "Ripristina automatica",
+      "statusInSync": "Salvataggi cloud aggiornati"
     },
     "exe": {
       "browse": "Sfoglia…",
@@ -736,7 +746,11 @@
       "completed": "Completato",
       "cancelled": "Annullato",
       "error": "Fallito"
-    }
+    },
+    "installedCount": "Installati ({{count}})",
+    "failed": "Falliti",
+    "clearFailed": "Cancella falliti",
+    "uninstall": "Disinstalla"
   },
   "navigation": {
     "loading": "Caricamento...",

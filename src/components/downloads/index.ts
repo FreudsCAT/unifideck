@@ -8,3 +8,4 @@
  */
 export { DownloadsTab } from "./DownloadsTab";
 export { DownloadItemRow } from "./DownloadItemRow";
+export { InstalledGameRow } from "./InstalledGameRow";

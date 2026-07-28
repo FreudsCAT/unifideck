@@ -13,6 +13,8 @@ import {
   type UnifideckTab,
 } from "./tab-container";
 import { runFilters } from "../library-filters";
+import { EventBusClient } from "../../api/event-bus-client";
+import { Events } from "../../types/events";
 import type { SteamAppOverview } from "../../types/steam";
 
 const COLLECTION_PREFIX = "[Unifideck] ";
@@ -58,6 +60,11 @@ const COLLECTIONS_MIGRATED_KEY = "unifideck:collections.migrated";
  * insists on creating.
  */
 const COLLECTIONS_CLEANED_KEY = "unifideck:collections.cleaned";
+
+/** Coalescing window for install/uninstall-driven rebuilds. Long enough that
+ *  a queued batch of installs triggers one rebuild, short enough that a single
+ *  install feels immediate. */
+const COLLECTION_RESYNC_DEBOUNCE_MS = 1500;
 
 export function isCollectionsEnabled(): boolean {
   try {
@@ -448,14 +455,35 @@ export function startCollectionManager(): CollectionManagerHandle {
       console.error("[Unifideck Collections] resync failed", e),
     );
   };
+
+  // Install/uninstall used to reach the collections only via the NEXT library
+  // sync (or a Steam restart), so "[Unifideck] Installed" — and any TabMaster
+  // tab built on it — lagged behind reality. Both bus events already existed
+  // with no frontend consumer; rebuilding on them makes membership track the
+  // library live. Debounced because a multi-game operation emits a burst and
+  // each rebuild walks every collection.
+  let installDebounce: number | undefined;
+  const onInstallChange = () => {
+    window.clearTimeout(installDebounce);
+    installDebounce = window.setTimeout(onSync, COLLECTION_RESYNC_DEBOUNCE_MS);
+  };
+  let unsubInstallEvents: Array<() => void> = [];
+
   const attachSync = () => {
     if (syncAttached) return;
     window.addEventListener("unifideck-sync-completed", onSync);
+    unsubInstallEvents = [
+      EventBusClient.subscribe(Events.GAME_INSTALLED, onInstallChange),
+      EventBusClient.subscribe(Events.GAME_UNINSTALLED, onInstallChange),
+    ];
     syncAttached = true;
   };
   const detachSync = () => {
     if (!syncAttached) return;
     window.removeEventListener("unifideck-sync-completed", onSync);
+    window.clearTimeout(installDebounce);
+    for (const off of unsubInstallEvents) off();
+    unsubInstallEvents = [];
     syncAttached = false;
   };
 

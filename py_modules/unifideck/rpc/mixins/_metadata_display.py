@@ -350,9 +350,7 @@ def build_payload(
     return {
         "steam_app_id": steam_app_id,
         "has_steam_store_page": has_steam_store_page(steam_meta, steam_app_id),
-        "store": game.store,
-        "store_url": store_search_url(game.store, game.title),
-        "title": game.title,
+        **storefront_fields(game, enriched),
         "developer": pick_developer(steam_meta, enriched),
         "publisher": pick_publisher(steam_meta, enriched),
         "release_date": pick_release_date(steam_meta, enriched),
@@ -363,6 +361,40 @@ def build_payload(
         "genres": pick_genres(steam_meta, enriched),
         "homepage_url": homepage,
     }
+
+
+def storefront_fields(game: Any, enriched: dict[str, Any]) -> dict[str, Any]:
+    """The which-storefront-is-this block of the payload.
+
+    Grouped into one helper so ``build_payload`` stays inside the fan-out cap
+    (adding ``cloud_saves`` as a separate call pushed it to 11). Everything
+    here answers "which store's copy is this, and what does that copy offer".
+    """
+    return {
+        "store": game.store,
+        "store_url": store_search_url(game.store, game.title),
+        "title": game.title,
+        "cloud_saves": pick_cloud_saves(enriched, game.store),
+    }
+
+
+def pick_cloud_saves(enriched: dict[str, Any], store: str) -> bool | None:
+    """Whether ``store``'s copy of this game has native cloud saves.
+
+    Reads the ``cloud`` map the unifiDB save-location pipeline bakes in (the
+    same source :meth:`_StatusMixin._cloud_supported` uses for the cloud-save
+    button), so the answer needs no install, no prefix and no store CLI — it
+    is available for a game the user has not downloaded yet, which is the
+    whole point: pick the storefront whose copy actually syncs saves before
+    committing to a download.
+
+    ``None`` means "unknown" (no enriched entry for this game) and the UI
+    stays silent rather than claiming an absence it cannot back up.
+    """
+    cloud = enriched.get("cloud")
+    if not isinstance(cloud, dict) or store not in cloud:
+        return None
+    return bool(cloud[store])
 
 
 def store_search_url(store: str, title: str) -> str:

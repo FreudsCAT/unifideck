@@ -123,6 +123,26 @@ export const PLAY_FOCUS_CSS = `
 .unifideck-icon-btn { width: 48px; height: 48px; padding: 0 !important; }
 .unifideck-cancel-btn { min-width: 160px; height: 44px; }
 
+/* Icon sizing/colour to match vanilla Steam. Measured against Steam's own
+ * app-header icon buttons: an 18px glyph in pure white inside a 38x40 button
+ * (~47% fill). react-icons default to 1em — 16px inside our larger 48px
+ * button (~33% fill) — and inherited DialogButton Secondary's dim
+ * rgb(220,222,223), so ours read small and greyed next to Steam's.
+ * Done in CSS rather than per-call-site size= props so every icon in the
+ * row stays consistent (and new ones inherit it); CSS width/height beats
+ * react-icons' width/height ATTRIBUTES. */
+.unifideck-stop-btn > svg,
+.unifideck-icon-btn svg {
+  width: 22px;
+  height: 22px;
+  color: #ffffff;
+}
+/* The composed cloud-in-sync check badge keeps its own small size. */
+.unifideck-icon-btn svg.unifideck-cloud-badge {
+  width: 11px;
+  height: 11px;
+}
+
 /* Focus accent matches Steam: Install / Resume blue, Play green,
  * Cancel red, Update amber. We match three focus signals so the
  * colour lands no matter where Steam attaches the focus marker:

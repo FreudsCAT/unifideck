@@ -388,7 +388,8 @@
     "cloudPullDone": "Zapis z chmury pobrany",
     "cloudPullFailed": "Pobieranie zapisu z chmury nie powiodło się",
     "cloudPushDone": "Lokalny zapis przesłany",
-    "cloudPushFailed": "Przesyłanie lokalnego zapisu nie powiodło się"
+    "cloudPushFailed": "Przesyłanie lokalnego zapisu nie powiodło się",
+    "cloudSavePathReset": "Przywrócono automatyczną lokalizację zapisu"
   },
   "uninstallModal": {
     "title": "Potwierdź odinstalowanie",
@@ -541,7 +542,8 @@
       "spaceRequired": "Wymagane miejsce",
       "lastPlayed": "Ostatnio grano",
       "playTime": "Czas gry",
-      "never": "Nigdy"
+      "never": "Nigdy",
+      "cloudSaves": "Zapisy w chmurze"
     },
     "compatibility": {
       "modalTitle": "Zgodność ze Steam Deckiem",
@@ -553,7 +555,11 @@
       "unknown": "NIEZNANA"
     },
     "failedToLoadMetadata": "Nie udało się załadować metadanych",
-    "lastSession": "Ostatnia sesja: odblokowano {{names}}"
+    "lastSession": "Ostatnia sesja: odblokowano {{names}}",
+    "cloudSaves": {
+      "supported": "Obsługiwane",
+      "unsupported": "Nieobsługiwane"
+    }
   },
   "gameDetailsSettings": {
     "title": "WIDOK SZCZEGÓŁÓW GRY",
@@ -697,7 +703,11 @@
       "statusSyncing": "Synchronizowanie zapisów w chmurze…",
       "statusUnresolved": "Nie znaleziono lokalizacji zapisu — synchronizacja może nie działać dla tej gry.",
       "unresolvedHint": "Uruchom grę raz, abyśmy mogli wykryć jej folder zapisu, lub ustaw lokalizację ręcznie.",
-      "upload": "Prześlij lokalny zapis"
+      "upload": "Prześlij lokalny zapis",
+      "currentLocation": "Lokalizacja zapisu",
+      "changeLocation": "Zmień lokalizację",
+      "resetLocation": "Przywróć automatyczną",
+      "statusInSync": "Zapisy w chmurze aktualne"
     },
     "exe": {
       "browse": "Przeglądaj…",
@@ -736,7 +746,11 @@
       "completed": "Ukończono",
       "cancelled": "Anulowano",
       "error": "Nie powiodło się"
-    }
+    },
+    "installedCount": "Zainstalowane ({{count}})",
+    "failed": "Nieudane",
+    "clearFailed": "Wyczyść nieudane",
+    "uninstall": "Odinstaluj"
   },
   "navigation": {
     "loading": "Ładowanie...",
