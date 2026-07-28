@@ -149,7 +149,13 @@ export const QuickAccessPanel: FC = () => {
         flow-children="row"
         style={{ display: "flex", gap: 6, padding: "4px 8px 0" }}
       >
+        {/* Switching on FOCUS, not just on activate: moving the stick onto a
+            tab shows that tab immediately, the way Steam's own tab rows
+            behave. Requiring an extra A press made navigation feel like it
+            had stalled. `onActivate` stays so a click/A press still works
+            (and so each Focusable remains a focus target at all). */}
         <Focusable
+          onFocus={() => setTab("settings")}
           onActivate={() => setTab("settings")}
           className={tabClassName(tab === "settings")}
           style={tabButtonStyle(tab === "settings")}
@@ -157,6 +163,7 @@ export const QuickAccessPanel: FC = () => {
           {t("tabs.settings")}
         </Focusable>
         <Focusable
+          onFocus={() => setTab("downloads")}
           onActivate={() => setTab("downloads")}
           className={tabClassName(tab === "downloads")}
           style={tabButtonStyle(tab === "downloads")}

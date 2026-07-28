@@ -24,6 +24,7 @@ import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameSize } from "../../hooks/useGameSize";
 import { useGamePlaytime } from "../../hooks/useGamePlaytime";
+import { useGameMetadata } from "../../hooks/useGameMetadata";
 import { PLAY_FOCUS_CSS } from "./play.css";
 
 /** Inline style shared by every primary action button
@@ -229,6 +230,23 @@ export function formatPlaytime(
   return `${hours >= 100 ? Math.round(hours) : hours.toFixed(1)} ${hoursShort}`;
 }
 
+/** Stores with cloud-save sync — mirrors `useCloudSaveStatus`. */
+const CLOUD_SAVE_STORES = new Set(["gog", "epic"]);
+
+/**
+ * `cloud_saves` tri-state → i18n key, indexed by `String(value)`.
+ *
+ * "Unknown" is shown rather than hidden: for a store that HAS cloud-save
+ * sync, "we don't know" is itself the honest answer, and silently omitting
+ * the column would read as "no cloud saves".
+ */
+const CLOUD_SAVE_VALUE_KEY: Record<string, string> = {
+  true: "playMeta.cloudSupported",
+  false: "playMeta.cloudNotSupported",
+  null: "playMeta.cloudUnknown",
+  undefined: "playMeta.cloudUnknown",
+};
+
 /** One label/value column inside {@link MetaInline}. */
 const MetaItem: FC<{ label: string; value: string }> = ({ label, value }) => (
   <div>
@@ -283,6 +301,16 @@ export const MetaInline: FC<MetaInlineProps> = ({
 }) => {
   const { t } = useTranslation();
   const [steamLastPlayed, setSteamLastPlayed] = useState<number | null>(null);
+  // Cloud-save availability sits with the other at-a-glance facts rather than
+  // in the info panel below: it is a *decision* input (which storefront's copy
+  // to install), so it belongs next to Space Required / Last Played.
+  //
+  // Free to read here — `useGameMetadata` is appId-keyed with a 60 s TTL and
+  // in-flight de-duplication, and GameInfoPanel already requests the same
+  // appId, so both consumers share one fetch. It resolves to null first and
+  // never blocks this row.
+  const metadata = useGameMetadata(appId ?? null);
+  const cloudSaveStore = !!store && CLOUD_SAVE_STORES.has(store);
   // Size is fetched out-of-band (see useGameSize) so a slow store
   // lookup never blocks this row from rendering. Keyed on `installed`
   // so the on-disk size replaces the pre-install download size once
@@ -372,6 +400,12 @@ export const MetaInline: FC<MetaInlineProps> = ({
         <MetaItem
           label={t("playMeta.lastPlayed")}
           value={lastPlayedValue ?? t("playMeta.neverPlayed")}
+        />
+      )}
+      {cloudSaveStore && (
+        <MetaItem
+          label={t("playMeta.cloudSaves")}
+          value={t(CLOUD_SAVE_VALUE_KEY[String(metadata.data?.cloud_saves)])}
         />
       )}
     </div>

@@ -542,8 +542,7 @@
       "spaceRequired": "Требуется места",
       "lastPlayed": "Последний запуск",
       "playTime": "Время в игре",
-      "never": "Никогда",
-      "cloudSaves": "Облачные сохранения"
+      "never": "Никогда"
     },
     "compatibility": {
       "modalTitle": "Совместимость со Steam Deck",
@@ -555,11 +554,7 @@
       "unknown": "НЕИЗВЕСТНО"
     },
     "failedToLoadMetadata": "Не удалось загрузить метаданные",
-    "lastSession": "Прошлая сессия: получено {{names}}",
-    "cloudSaves": {
-      "supported": "Поддерживаются",
-      "unsupported": "Не поддерживаются"
-    }
+    "lastSession": "Прошлая сессия: получено {{names}}"
   },
   "gameDetailsSettings": {
     "title": "ВИД СТРАНИЦЫ ИГРЫ",
@@ -729,7 +724,11 @@
     "neverPlayed": "Ни разу не запускалась",
     "hoursShort": "ч.",
     "minutesShort": "мин.",
-    "played": "Сыграно"
+    "played": "Сыграно",
+    "cloudSaves": "Облачные сохранения",
+    "cloudSupported": "Поддерживаются",
+    "cloudNotSupported": "Не поддерживаются",
+    "cloudUnknown": "Неизвестно"
   },
   "downloads": {
     "title": "Загрузки",

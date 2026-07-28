@@ -542,8 +542,7 @@
       "spaceRequired": "Space Required",
       "lastPlayed": "Last Played",
       "playTime": "Play Time",
-      "never": "Never",
-      "cloudSaves": "Cloud saves"
+      "never": "Never"
     },
     "compatibility": {
       "modalTitle": "Steam Deck Compatibility",
@@ -555,11 +554,7 @@
       "unknown": "UNKNOWN"
     },
     "failedToLoadMetadata": "Failed to load metadata",
-    "lastSession": "Last session: unlocked {{names}}",
-    "cloudSaves": {
-      "supported": "Supported",
-      "unsupported": "Not supported"
-    }
+    "lastSession": "Last session: unlocked {{names}}"
   },
   "achievements": {
     "unlockedTitle": "Achievement Unlocked",
@@ -752,7 +747,11 @@
     "neverPlayed": "Never played",
     "played": "Played",
     "hoursShort": "h",
-    "minutesShort": "min"
+    "minutesShort": "min",
+    "cloudSaves": "Cloud saves",
+    "cloudSupported": "Supported",
+    "cloudNotSupported": "Not supported",
+    "cloudUnknown": "Unknown"
   },
   "downloads": {
     "title": "Downloads",

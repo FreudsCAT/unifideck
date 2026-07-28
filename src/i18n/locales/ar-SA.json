@@ -542,8 +542,7 @@
       "spaceRequired": "المساحة المطلوبة",
       "lastPlayed": "آخر تشغيل",
       "playTime": "وقت التشغيل",
-      "never": "أبداً",
-      "cloudSaves": "الحفظ السحابي"
+      "never": "أبداً"
     },
     "compatibility": {
       "modalTitle": "التوافق مع Steam Deck",
@@ -555,11 +554,7 @@
       "unknown": "غير معروف"
     },
     "failedToLoadMetadata": "فشل تحميل البيانات الوصفية",
-    "lastSession": "آخر جلسة: تم فتح {{names}}",
-    "cloudSaves": {
-      "supported": "مدعوم",
-      "unsupported": "غير مدعوم"
-    }
+    "lastSession": "آخر جلسة: تم فتح {{names}}"
   },
   "gameDetailsSettings": {
     "title": "واجهة تفاصيل اللعبة",
@@ -729,7 +724,11 @@
     "neverPlayed": "لم يتم اللعب بها قط",
     "hoursShort": "ساعة",
     "minutesShort": "دقيقة",
-    "played": "وقت اللعب"
+    "played": "وقت اللعب",
+    "cloudSaves": "الحفظ السحابي",
+    "cloudSupported": "مدعوم",
+    "cloudNotSupported": "غير مدعوم",
+    "cloudUnknown": "غير معروف"
   },
   "downloads": {
     "title": "التنزيلات",

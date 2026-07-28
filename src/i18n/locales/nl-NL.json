@@ -542,8 +542,7 @@
       "spaceRequired": "Benodigde ruimte",
       "lastPlayed": "Laatst gespeeld",
       "playTime": "Speeltijd",
-      "never": "Nooit",
-      "cloudSaves": "Cloudopslag"
+      "never": "Nooit"
     },
     "compatibility": {
       "modalTitle": "Steam Deck-compatibiliteit",
@@ -555,11 +554,7 @@
       "unknown": "ONBEKEND"
     },
     "failedToLoadMetadata": "Laden van metadata mislukt",
-    "lastSession": "Laatste sessie: {{names}} ontgrendeld",
-    "cloudSaves": {
-      "supported": "Ondersteund",
-      "unsupported": "Niet ondersteund"
-    }
+    "lastSession": "Laatste sessie: {{names}} ontgrendeld"
   },
   "gameDetailsSettings": {
     "title": "GAMEDETAILSWEERGAVE",
@@ -729,7 +724,11 @@
     "neverPlayed": "Nooit gespeeld",
     "hoursShort": "u",
     "minutesShort": "m",
-    "played": "Gespeeld"
+    "played": "Gespeeld",
+    "cloudSaves": "Cloudopslag",
+    "cloudSupported": "Ondersteund",
+    "cloudNotSupported": "Niet ondersteund",
+    "cloudUnknown": "Onbekend"
   },
   "downloads": {
     "title": "Downloads",

@@ -317,12 +317,49 @@ export const PLAY_FOCUS_CSS = `
   background: #22c55e !important;
   transition: filter 0.15s ease, box-shadow 0.15s ease !important;
 }
+/* Focus must be obvious at arm's length on a handheld. The previous
+ * treatment (brightness 1.15 + a 2px 80%-opacity white ring) was nearly
+ * invisible: a slightly brighter green is hard to judge without the unfocused
+ * button beside it for reference, and a translucent thin ring disappears
+ * against the panel. So: a solid white ring with a dark outer ring behind it
+ * (guarantees contrast whatever is underneath), plus a small scale-up, which
+ * reads instantly even in peripheral vision. */
 .unifideck-download-play-btn:hover,
 .unifideck-download-play-btn:focus,
 .unifideck-download-play-btn:focus-within,
 .unifideck-download-play-btn.gpfocus {
-  filter: brightness(1.15) !important;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8) !important;
+  filter: brightness(1.25) !important;
+  box-shadow:
+    0 0 0 3px #ffffff,
+    0 0 0 6px rgba(0, 0, 0, 0.7) !important;
+  transform: scale(1.05);
+  /* position needed for z-index to apply, so the ring paints over the
+     neighbouring button instead of being clipped by it. */
+  position: relative;
+  z-index: 1;
+}
+
+/* Uninstall sits in the same nav grid, so it needs an equally clear focus
+ * state — it had none at all, being a bare Secondary DialogButton. Steam's
+ * own convention for a focused neutral button is an inverted fill, which
+ * also keeps it visually distinct from the green Play beside it. */
+.unifideck-download-uninstall-btn {
+  transition: background 0.15s ease, box-shadow 0.15s ease !important;
+}
+.unifideck-download-uninstall-btn:hover,
+.unifideck-download-uninstall-btn:focus,
+.unifideck-download-uninstall-btn:focus-within,
+.unifideck-download-uninstall-btn.gpfocus {
+  background: #ffffff !important;
+  color: #23262e !important;
+  box-shadow:
+    0 0 0 3px #ffffff,
+    0 0 0 6px rgba(0, 0, 0, 0.7) !important;
+  transform: scale(1.05);
+  /* position needed for z-index to apply, so the ring paints over the
+     neighbouring button instead of being clipped by it. */
+  position: relative;
+  z-index: 1;
 }
 
 /* Spinning cloud icon while a save sync is in flight. */

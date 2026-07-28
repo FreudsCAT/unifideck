@@ -542,8 +542,7 @@
       "spaceRequired": "必要な容量",
       "lastPlayed": "最後にプレイ",
       "playTime": "プレイ時間",
-      "never": "なし",
-      "cloudSaves": "クラウドセーブ"
+      "never": "なし"
     },
     "compatibility": {
       "modalTitle": "Steam Deck 互換性",
@@ -555,11 +554,7 @@
       "unknown": "不明"
     },
     "failedToLoadMetadata": "メタデータの読み込みに失敗しました",
-    "lastSession": "前回のセッション: {{names}} を解除",
-    "cloudSaves": {
-      "supported": "対応",
-      "unsupported": "非対応"
-    }
+    "lastSession": "前回のセッション: {{names}} を解除"
   },
   "gameDetailsSettings": {
     "title": "ゲーム詳細表示",
@@ -729,7 +724,11 @@
     "neverPlayed": "未プレイ",
     "hoursShort": "時間",
     "minutesShort": "分",
-    "played": "プレイ済み"
+    "played": "プレイ済み",
+    "cloudSaves": "クラウドセーブ",
+    "cloudSupported": "対応",
+    "cloudNotSupported": "非対応",
+    "cloudUnknown": "不明"
   },
   "downloads": {
     "title": "ダウンロード",

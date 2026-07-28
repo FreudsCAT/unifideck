@@ -21,7 +21,12 @@
  * from GAME_INSTALLED / GAME_UNINSTALLED for the installed list.
  */
 import { FC, useCallback, useMemo } from "react";
-import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
+import {
+  ButtonItem,
+  Focusable,
+  PanelSection,
+  PanelSectionRow,
+} from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useDownloads } from "../../contexts/DownloadContext";
 import { useRPCQuery, useRPCMutation } from "../../api/useRPC";
@@ -106,13 +111,22 @@ export const DownloadsTab: FC = () => {
         <PanelSection
           title={t("downloads.installedCount", { count: installed.length })}
         >
-          {installed.map((game) => (
-            <InstalledGameRow
-              key={`${game.store}:${game.id}`}
-              game={game}
-              onUninstalled={refetchGames}
-            />
-          ))}
+          {/* ONE grid over the whole list, not one nav container per row.
+              Steam resolves "grid" flow geometrically in 2-D, so DOWN from a
+              Play button finds the Play button directly below it and DOWN
+              from Uninstall finds the next Uninstall — the columns stay
+              intact, and only LEFT/RIGHT crosses between them. Per-row
+              containers gave the opposite: every vertical step re-entered a
+              fresh container and landed on whichever button it felt like. */}
+          <Focusable flow-children="grid">
+            {installed.map((game) => (
+              <InstalledGameRow
+                key={`${game.store}:${game.id}`}
+                game={game}
+                onUninstalled={refetchGames}
+              />
+            ))}
+          </Focusable>
         </PanelSection>
       )}
       {failed.length > 0 && (

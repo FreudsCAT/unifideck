@@ -14,7 +14,7 @@
  * user's library.
  */
 import { FC, useMemo, useState } from "react";
-import { DialogButton, Focusable, showModal } from "@decky/ui";
+import { DialogButton, showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameActions } from "../../hooks/useGameActions";
 import { SteamBridge } from "../../lib/steam-bridge";
@@ -110,12 +110,13 @@ export const InstalledGameRow: FC<Props> = ({ game, onUninstalled }) => {
         {game.title}
       </span>
       {appId != null && (
-        // flow-children="row" so the pair navigates left/right rather than
-        // becoming two more stops in the panel's vertical run.
-        <Focusable
-          flow-children="row"
-          style={{ display: "flex", gap: 6, flex: "0 0 auto" }}
-        >
+        // A PLAIN div, not a Focusable: the whole Installed list is wrapped in
+        // one `flow-children="grid"` container (see DownloadsTab), and a
+        // per-row nav node would break that grid into isolated rows. Plain
+        // divs are transparent to the nav tree, so every Play/Uninstall button
+        // becomes a direct child of the one grid — which is what makes DOWN
+        // from Uninstall land on the next Uninstall instead of jumping column.
+        <div style={{ display: "flex", gap: 6, flex: "0 0 auto" }}>
           <DialogButton
             className="unifideck-download-play-btn"
             style={{
@@ -129,13 +130,14 @@ export const InstalledGameRow: FC<Props> = ({ game, onUninstalled }) => {
             {t("downloads.play")}
           </DialogButton>
           <DialogButton
+            className="unifideck-download-uninstall-btn"
             style={{ ...ACTION_BTN_STYLE }}
             disabled={busy || actions.isWorking}
             onClick={confirmUninstall}
           >
             {t("downloads.uninstall")}
           </DialogButton>
-        </Focusable>
+        </div>
       )}
     </div>
   );

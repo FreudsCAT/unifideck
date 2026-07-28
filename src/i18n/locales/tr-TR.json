@@ -542,8 +542,7 @@
       "spaceRequired": "Gerekli Alan",
       "lastPlayed": "Son Oynama",
       "playTime": "Oynama Süresi",
-      "never": "Hiçbir Zaman",
-      "cloudSaves": "Bulut kayıtları"
+      "never": "Hiçbir Zaman"
     },
     "compatibility": {
       "modalTitle": "Steam Deck Uyumluluğu",
@@ -555,11 +554,7 @@
       "unknown": "BİLİNMİYOR"
     },
     "failedToLoadMetadata": "Meta veriler yüklenemedi",
-    "lastSession": "Son oturum: {{names}} açıldı",
-    "cloudSaves": {
-      "supported": "Destekleniyor",
-      "unsupported": "Desteklenmiyor"
-    }
+    "lastSession": "Son oturum: {{names}} açıldı"
   },
   "gameDetailsSettings": {
     "title": "OYUN DETAYLARI GÖRÜNÜMÜ",
@@ -729,7 +724,11 @@
     "neverPlayed": "Hiç Oynanmadı",
     "hoursShort": "sa",
     "minutesShort": "dk",
-    "played": "Oynandı"
+    "played": "Oynandı",
+    "cloudSaves": "Bulut kayıtları",
+    "cloudSupported": "Destekleniyor",
+    "cloudNotSupported": "Desteklenmiyor",
+    "cloudUnknown": "Bilinmiyor"
   },
   "downloads": {
     "title": "İndirmeler",

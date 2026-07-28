@@ -1,28 +1,22 @@
 /**
  * GameInfoInfoRow — inline info card under the compatibility row.
  *
- * Renders `[StoreIcon] Title · Size · Cloud saves · Developer ·
- * Publisher · Released · Metacritic` in one wrap-friendly flex
- * row. Each cell is hidden when its value is empty / null, so a
- * non-Steam shortcut with no enrichment data collapses to just
- * the store icon and title.
+ * Renders `[StoreIcon] Title · Size · Developer · Publisher ·
+ * Released · Metacritic` in one wrap-friendly flex row. Each
+ * cell is hidden when its value is empty / null, so a non-Steam
+ * shortcut with no enrichment data collapses to just the store
+ * icon and title.
  *
- * The cloud-saves cell is deliberately here rather than on the
- * install flow: it comes from cached catalog data, so it answers
- * "does THIS store's copy sync saves?" before the game is
- * downloaded — the deciding factor when the same title is owned
- * on both Epic and GOG.
+ * Cloud-save availability used to live here but moved up to the
+ * Play row's `MetaInline` (next to Last Played) — it is an
+ * at-a-glance decision input, not reference data.
  */
 import { FC } from "react";
 import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { FaCloud, FaTimes } from "react-icons/fa";
 import { StoreIcon } from "../shared/StoreIcon";
 import { useGameSize } from "../../hooks/useGameSize";
 import type { Game, GameMetadata } from "../../types/api";
-
-/** Stores with cloud-save sync — mirrors `useCloudSaveStatus`. */
-const CLOUD_SAVE_STORES = new Set(["gog", "epic"]);
 
 interface Props {
   appId: number;
@@ -69,14 +63,6 @@ export const GameInfoInfoRow: FC<Props> = ({ appId, game, meta }) => {
   const size = formatSize(
     fetchedSize && fetchedSize > 0 ? fetchedSize : game.size_bytes,
   );
-  // Only Epic and GOG have cloud-save sync, so a yes/no is only meaningful
-  // there; elsewhere the absence of the cell is the honest answer. `null`
-  // means the enriched catalog has no entry for this game — also silent,
-  // rather than reporting "no cloud saves" we can't stand behind.
-  const showCloudSaves =
-    CLOUD_SAVE_STORES.has(game.store) &&
-    meta.cloud_saves !== null &&
-    meta.cloud_saves !== undefined;
   return (
     <Focusable
       flow-children="row"
@@ -106,26 +92,6 @@ export const GameInfoInfoRow: FC<Props> = ({ appId, game, meta }) => {
         </span>
       </span>
       {size && <Cell label={t("gameInfoPanel.labels.size")}>{size}</Cell>}
-      {showCloudSaves && (
-        // Rendered whether or not the game is installed — that is the point.
-        // With the same title owned on both Epic and GOG, this is what tells
-        // the user which copy actually syncs saves BEFORE they download one.
-        <Cell label={t("gameInfoPanel.labels.cloudSaves")}>
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              color: meta.cloud_saves ? "#66cc33" : "#8f98a0",
-            }}
-          >
-            {meta.cloud_saves ? <FaCloud size={12} /> : <FaTimes size={12} />}
-            {meta.cloud_saves
-              ? t("gameInfoPanel.cloudSaves.supported")
-              : t("gameInfoPanel.cloudSaves.unsupported")}
-          </span>
-        </Cell>
-      )}
       {meta.developer && (
         <Cell label={t("gameInfoPanel.labels.developer")}>
           {meta.developer}

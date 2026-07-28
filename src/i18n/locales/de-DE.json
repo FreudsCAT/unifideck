@@ -542,8 +542,7 @@
       "spaceRequired": "Benötigter Speicher",
       "lastPlayed": "Zuletzt gespielt",
       "playTime": "Spielzeit",
-      "never": "Nie",
-      "cloudSaves": "Cloud-Speicherstände"
+      "never": "Nie"
     },
     "compatibility": {
       "modalTitle": "Steam Deck Kompatibilität",
@@ -555,11 +554,7 @@
       "unknown": "UNBEKANNT"
     },
     "failedToLoadMetadata": "Metadaten konnten nicht geladen werden",
-    "lastSession": "Letzte Sitzung: {{names}} freigeschaltet",
-    "cloudSaves": {
-      "supported": "Unterstützt",
-      "unsupported": "Nicht unterstützt"
-    }
+    "lastSession": "Letzte Sitzung: {{names}} freigeschaltet"
   },
   "gameDetailsSettings": {
     "title": "SPIELDETAIL-ANSICHT",
@@ -729,7 +724,11 @@
     "neverPlayed": "Nie gespielt",
     "hoursShort": "Std.",
     "minutesShort": "Min.",
-    "played": "Gespielt"
+    "played": "Gespielt",
+    "cloudSaves": "Cloud-Speicherstände",
+    "cloudSupported": "Unterstützt",
+    "cloudNotSupported": "Nicht unterstützt",
+    "cloudUnknown": "Unbekannt"
   },
   "downloads": {
     "title": "Downloads",

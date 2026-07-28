@@ -542,8 +542,7 @@
       "spaceRequired": "Необхідно місця",
       "lastPlayed": "Останній запуск",
       "playTime": "Час у грі",
-      "never": "Ніколи",
-      "cloudSaves": "Хмарні збереження"
+      "never": "Ніколи"
     },
     "compatibility": {
       "modalTitle": "Сумісність зі Steam Deck",
@@ -555,11 +554,7 @@
       "unknown": "НЕВІДОМО"
     },
     "failedToLoadMetadata": "Не вдалося завантажити метадані",
-    "lastSession": "Минула сесія: розблоковано {{names}}",
-    "cloudSaves": {
-      "supported": "Підтримуються",
-      "unsupported": "Не підтримуються"
-    }
+    "lastSession": "Минула сесія: розблоковано {{names}}"
   },
   "gameDetailsSettings": {
     "title": "ВИД СТОРІНКИ ГРИ",
@@ -729,7 +724,11 @@
     "neverPlayed": "Жодного разу не запускалася",
     "hoursShort": "год.",
     "minutesShort": "хв.",
-    "played": "Зіграно"
+    "played": "Зіграно",
+    "cloudSaves": "Хмарні збереження",
+    "cloudSupported": "Підтримуються",
+    "cloudNotSupported": "Не підтримуються",
+    "cloudUnknown": "Невідомо"
   },
   "downloads": {
     "title": "Завантаження",

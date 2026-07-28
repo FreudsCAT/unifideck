@@ -542,8 +542,7 @@
       "spaceRequired": "Wymagane miejsce",
       "lastPlayed": "Ostatnio grano",
       "playTime": "Czas gry",
-      "never": "Nigdy",
-      "cloudSaves": "Zapisy w chmurze"
+      "never": "Nigdy"
     },
     "compatibility": {
       "modalTitle": "Zgodność ze Steam Deckiem",
@@ -555,11 +554,7 @@
       "unknown": "NIEZNANA"
     },
     "failedToLoadMetadata": "Nie udało się załadować metadanych",
-    "lastSession": "Ostatnia sesja: odblokowano {{names}}",
-    "cloudSaves": {
-      "supported": "Obsługiwane",
-      "unsupported": "Nieobsługiwane"
-    }
+    "lastSession": "Ostatnia sesja: odblokowano {{names}}"
   },
   "gameDetailsSettings": {
     "title": "WIDOK SZCZEGÓŁÓW GRY",
@@ -729,7 +724,11 @@
     "neverPlayed": "Nigdy nie grano",
     "hoursShort": "godz.",
     "minutesShort": "min.",
-    "played": "Rozegrano"
+    "played": "Rozegrano",
+    "cloudSaves": "Zapisy w chmurze",
+    "cloudSupported": "Obsługiwane",
+    "cloudNotSupported": "Nieobsługiwane",
+    "cloudUnknown": "Nieznane"
   },
   "downloads": {
     "title": "Pobieranie",

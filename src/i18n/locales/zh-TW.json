@@ -542,8 +542,7 @@
       "spaceRequired": "所需空間",
       "lastPlayed": "上次執行",
       "playTime": "執行時間",
-      "never": "無記錄",
-      "cloudSaves": "雲端存檔"
+      "never": "無記錄"
     },
     "compatibility": {
       "modalTitle": "Steam Deck 相容性",
@@ -555,11 +554,7 @@
       "unknown": "未知"
     },
     "failedToLoadMetadata": "載入元資料失敗",
-    "lastSession": "上次遊玩：解鎖了 {{names}}",
-    "cloudSaves": {
-      "supported": "支援",
-      "unsupported": "不支援"
-    }
+    "lastSession": "上次遊玩：解鎖了 {{names}}"
   },
   "gameDetailsSettings": {
     "title": "遊戲詳情頁面視圖",
@@ -729,7 +724,11 @@
     "neverPlayed": "從未執行過",
     "hoursShort": "小時",
     "minutesShort": "分鐘",
-    "played": "已玩"
+    "played": "已玩",
+    "cloudSaves": "雲端存檔",
+    "cloudSupported": "支援",
+    "cloudNotSupported": "不支援",
+    "cloudUnknown": "未知"
   },
   "downloads": {
     "title": "下載",

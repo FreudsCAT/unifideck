@@ -542,8 +542,7 @@
       "spaceRequired": "필요 공간",
       "lastPlayed": "최근 플레이",
       "playTime": "플레이 시간",
-      "never": "없음",
-      "cloudSaves": "클라우드 저장"
+      "never": "없음"
     },
     "compatibility": {
       "modalTitle": "Steam Deck 호환성 정보",
@@ -555,11 +554,7 @@
       "unknown": "정보 없음"
     },
     "failedToLoadMetadata": "메타데이터 로드 실패",
-    "lastSession": "지난 세션: {{names}} 달성",
-    "cloudSaves": {
-      "supported": "지원됨",
-      "unsupported": "지원 안 함"
-    }
+    "lastSession": "지난 세션: {{names}} 달성"
   },
   "gameDetailsSettings": {
     "title": "게임 상세 화면 레이아웃",
@@ -729,7 +724,11 @@
     "neverPlayed": "플레이한 적 없음",
     "hoursShort": "시간",
     "minutesShort": "분",
-    "played": "플레이함"
+    "played": "플레이함",
+    "cloudSaves": "클라우드 저장",
+    "cloudSupported": "지원됨",
+    "cloudNotSupported": "지원 안 함",
+    "cloudUnknown": "알 수 없음"
   },
   "downloads": {
     "title": "다운로드",
