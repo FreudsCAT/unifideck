@@ -59,12 +59,14 @@ def _install_probe(flow: AmazonAuthFlow, outcomes: list[object]) -> list[str]:
             raise outcome
         return outcome
 
-    async def fake_logout() -> bool:
+    async def fake_clear() -> bool:
         calls.append("logout")
         return True
 
     flow._run_nile_login_probe = fake_probe  # type: ignore[method-assign]
-    flow._run_nile_logout = fake_logout  # type: ignore[method-assign]
+    # Stub the whole credential-clearing step: the real one inspects (and can
+    # rename) nile's config under $HOME, which a unit test must never touch.
+    flow._clear_nile_credentials = fake_clear  # type: ignore[method-assign]
     return calls
 
 
@@ -120,11 +122,11 @@ async def test_no_retry_when_logout_unavailable() -> None:
     refused = _NileProbeRefusedError("nile auth failed (rc=1)", store="amazon")
     calls = _install_probe(flow, [refused])
 
-    async def failed_logout() -> bool:
+    async def failed_clear() -> bool:
         calls.append("logout")
         return False
 
-    flow._run_nile_logout = failed_logout  # type: ignore[method-assign]
+    flow._clear_nile_credentials = failed_clear  # type: ignore[method-assign]
 
     with pytest.raises(StoreAuthError):
         await flow._fetch_login_url()

@@ -26,11 +26,61 @@ including it here would stall every size lookup behind a download.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+import time
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Module-level: one nile config file per user, so one lock per process.
 _NILE_CLI_LOCK = asyncio.Lock()
+
+NILE_USER_FILE = "~/.config/nile/user.json"
 
 
 def nile_cli_lock() -> asyncio.Lock:
     """The process-wide lock guarding short nile invocations."""
     return _NILE_CLI_LOCK
+
+
+def quarantine_corrupt_user_file(user_file: str = NILE_USER_FILE) -> bool:
+    """Move an unparseable nile ``user.json`` aside. True if we moved one.
+
+    Once that file is damaged, nile cannot repair itself: EVERY subcommand
+    routes through ``is_logged_in`` → ``config.get`` → ``json.loads`` and
+    dies there. Verified on-device — even ``nile auth --logout``, the
+    obvious remedy, exits 1 with the same ``JSONDecodeError`` and leaves the
+    file byte-for-byte unchanged. So a CLI-level self-heal is impossible;
+    the file has to be cleared by us, from outside nile.
+
+    Renamed rather than deleted, with a timestamp suffix: the credentials
+    inside are already unusable, but keeping the artefact means a corruption
+    report can still be diagnosed after the user has signed back in.
+
+    Never raises — a failure here just leaves the caller where it was.
+    """
+    path = Path(user_file).expanduser()
+    try:
+        if not path.is_file():
+            return False
+        json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return False
+    except json.JSONDecodeError as e:
+        backup = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+        try:
+            path.rename(backup)
+        except OSError as move_err:
+            logger.warning(
+                "[nile] user.json is corrupt (%s) but could not be moved "
+                "aside: %s", e, move_err,
+            )
+            return False
+        logger.warning(
+            "[nile] user.json was unparseable (%s) — moved to %s so nile can "
+            "start clean; the user must sign in to Amazon again.",
+            e, backup.name,
+        )
+        return True
+    return False

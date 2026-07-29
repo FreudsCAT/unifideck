@@ -30,7 +30,10 @@ from unifideck.core.binaries import clean_cli_env
 from unifideck.core.types import AuthResult, Events, Result, StoreAuthError
 from unifideck.event_bus.event_bus import EventBus
 from unifideck.security import audit_auth_flow
-from unifideck.stores.amazon.nile_lock import nile_cli_lock
+from unifideck.stores.amazon.nile_lock import (
+    nile_cli_lock,
+    quarantine_corrupt_user_file,
+)
 
 logger = logging.getLogger(__name__)
 _AMAZON_REDIRECT_URIS: list[str] = [
@@ -174,6 +177,24 @@ class AmazonAuthFlow:
             return False
         return True
 
+    async def _clear_nile_credentials(self) -> bool:
+        """Get nile back to a signable-in state. True if anything changed.
+
+        Two distinct broken states, and only one of them is nile's to fix:
+
+        * **Stale but parseable** creds — ``nile auth --logout`` clears them.
+        * **Corrupt** ``user.json`` — nile cannot help. Every subcommand
+          parses that file first, so ``--logout`` dies with the same
+          ``JSONDecodeError`` (verified: rc=1, file untouched). We move it
+          aside ourselves before nile ever runs.
+
+        Quarantine is attempted first: if the file is unparseable the logout
+        would only burn a subprocess to fail.
+        """
+        if await asyncio.to_thread(quarantine_corrupt_user_file):
+            return True
+        return await self._run_nile_logout()
+
     async def logout(self) -> Result:
         """Logout."""
         await self._run_nile_logout()
@@ -209,7 +230,7 @@ class AmazonAuthFlow:
                 "[amazon_auth] nile refused the login probe (%s) — clearing "
                 "its stored credentials and retrying once", refused,
             )
-            if not await self._run_nile_logout():
+            if not await self._clear_nile_credentials():
                 raise
             # A second refusal is the real answer; let it propagate with its
             # nile stderr tail intact.
