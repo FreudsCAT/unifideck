@@ -26,6 +26,9 @@ import {
   IconGroup,
   actionBtnStyle,
   iconBtnStyle,
+  actionBtnClass,
+  iconBtnClass,
+  controllerBtnClass,
 } from "./PlayMeta";
 
 interface Props {
@@ -86,7 +89,7 @@ export const NotInstalledButtons: FC<Props> = ({
     // eslint-disable-next-line jsx-a11y/no-autofocus
     <PlayShell autoFocus>
       <DialogButton
-        className="unifideck-install-btn"
+        className={actionBtnClass("unifideck-install-btn")}
         disabled={loading || installFlow.isWorking || !game}
         onClick={onInstall}
         style={actionBtnStyle}
@@ -107,7 +110,7 @@ export const NotInstalledButtons: FC<Props> = ({
 
       <IconGroup>
         <DialogButton
-          className="unifideck-icon-btn"
+          className={controllerBtnClass()}
           style={iconBtnStyle}
           onClick={() => openControllerConfig(appId)}
           aria-label={t("playButton.controllerConfig")}
@@ -115,7 +118,7 @@ export const NotInstalledButtons: FC<Props> = ({
           <SteamControllerIcon />
         </DialogButton>
         <DialogButton
-          className="unifideck-icon-btn"
+          className={iconBtnClass()}
           style={iconBtnStyle}
           onClick={(e) => {
             // Open Steam's native app menu (Manage / Properties / …),

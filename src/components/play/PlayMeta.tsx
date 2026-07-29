@@ -25,13 +25,55 @@ import { useTranslation } from "react-i18next";
 import { useGameSize } from "../../hooks/useGameSize";
 import { useGamePlaytime } from "../../hooks/useGamePlaytime";
 import { useGameMetadata } from "../../hooks/useGameMetadata";
+import { getThemeableClasses } from "../../lib/steam-bridge";
 import { PLAY_FOCUS_CSS } from "./play.css";
+
+/**
+ * Class-name builders that make our buttons visible to CSS Loader
+ * themes. See `getThemeableClasses()` for how theme selectors reach
+ * them; the short version is that a theme can only style what wears
+ * Steam's own class, so we wear it and stop hardcoding the properties
+ * themes want to change (radius, idle fill).
+ *
+ * Called during render rather than memoised at module scope: the
+ * `@decky/ui` class exports are only populated once Steam's webpack
+ * chunks have loaded, which is not guaranteed at plugin import time.
+ */
+
+/** Square icon button (cloud / controller / gear / trash / stop). */
+export function iconBtnClass(
+  marker = "unifideck-icon-btn",
+  ...extra: string[]
+): string {
+  return [marker, getThemeableClasses().menuButton, ...extra]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** Controller-config button — Steam gives this one its own variant. */
+export function controllerBtnClass(): string {
+  return iconBtnClass(
+    "unifideck-icon-btn",
+    getThemeableClasses().controllerConfigButton,
+  );
+}
+
+/** Primary action button. Both Steam names must land together — the
+ *  theme rule is a compound selector, not a descendant one. */
+export function actionBtnClass(marker: string): string {
+  const c = getThemeableClasses();
+  return [marker, c.actionButton, c.playButtonContainer]
+    .filter(Boolean)
+    .join(" ");
+}
 
 /** Inline style shared by every primary action button
  *  (Install / Play / Resume / Update / Cancel).
  *
- *  `borderRadius` is Steam's own 2px — see the note on
- *  `iconBtnStyle` below before "correcting" it. */
+ *  Deliberately sets no `borderRadius`: Steam's own
+ *  `AppActionButton`+`PlayButtonContainer` classes supply it
+ *  (2px vanilla), and an inline value would beat any CSS Loader
+ *  theme rule. See `iconBtnStyle` below. */
 export const actionBtnStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -45,7 +87,6 @@ export const actionBtnStyle: CSSProperties = {
   color: "#fff",
   fontSize: 16,
   fontWeight: 500,
-  borderRadius: 2,
   border: "none",
   textTransform: "uppercase",
   letterSpacing: "0.05em",
@@ -54,19 +95,20 @@ export const actionBtnStyle: CSSProperties = {
 /** Inline style for square icon buttons (cloud / controller /
  *  settings / trash / X).
  *
- *  Box, radius and idle fill are measured off Steam's own
- *  app-details icon buttons so the cluster is indistinguishable
- *  from vanilla. Vanilla Steam uses a 2px radius on BOTH these
- *  and the primary action button — it is not the rounded-square
- *  look you may remember.
+ *  Sets NO `borderRadius` and NO `background` on purpose. Steam's
+ *  `MenuButton` class already supplies both (2px radius,
+ *  rgba(172,178,201,0.14) fill — verified identical to what we used
+ *  to hardcode), and an inline value here would outrank any CSS
+ *  Loader theme rule, which is exactly what used to make our row
+ *  stay square while a theme rounded Steam's own buttons.
  *
- *  Measure with CSS Loader DISABLED. An enabled theme rounds
- *  these buttons to ~10px, which reads as native and is easy to
- *  copy by mistake; the fill and glyph size below survive a theme
- *  unchanged, so only the radius is untrustworthy.
+ *  Corollary for anyone measuring vanilla values to hardcode: do it
+ *  with CSS Loader DISABLED. An enabled theme rounds these to ~10px,
+ *  which reads convincingly native. Better still, don't hardcode —
+ *  let the class supply it, as here.
  *
- *  `background` is duplicated (with `!important`) in
- *  `play.css.ts`; the two must stay in sync or the CSS wins. */
+ *  Width/height stay pinned so the row cannot collapse if Steam
+ *  renames `MenuButton` and the class resolves to "". */
 export const iconBtnStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -74,9 +116,6 @@ export const iconBtnStyle: CSSProperties = {
   width: 48,
   height: 48,
   minWidth: 48,
-  padding: 0,
-  background: "rgba(172, 178, 201, 0.14)",
-  borderRadius: 2,
 };
 
 /**
@@ -175,9 +214,16 @@ export const PlayLoadingSkeleton: FC = () => (
 );
 
 /** Right-floated icon group. ``marginLeft: auto`` pushes it
- *  to the far right of the row. */
+ *  to the far right of the row.
+ *
+ *  Wears Steam's ``AppButtons`` class because the theme rule for the
+ *  icon buttons is `.AppButtons .MenuButton` — without this ancestor
+ *  the buttons' own class is not enough. Steam's own AppButtons is
+ *  just `display:flex; row; align-items:center`, so it does not fight
+ *  the layout below. */
 export const IconGroup: FC<{ children: ReactNode }> = ({ children }) => (
   <div
+    className={getThemeableClasses().appButtons}
     style={{
       display: "flex",
       gap: 8,

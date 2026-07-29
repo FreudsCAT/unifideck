@@ -31,6 +31,9 @@ import {
   IconGroup,
   actionBtnStyle,
   iconBtnStyle,
+  actionBtnClass,
+  iconBtnClass,
+  controllerBtnClass,
 } from "./PlayMeta";
 
 interface Props {
@@ -198,7 +201,7 @@ export const InstalledButtons: FC<Props> = ({
       return (
         <>
           <DialogButton
-            className="unifideck-resume-btn"
+            className={actionBtnClass("unifideck-resume-btn")}
             disabled={loading}
             onClick={onPlay}
             style={actionBtnStyle}
@@ -206,7 +209,7 @@ export const InstalledButtons: FC<Props> = ({
             <FaPlay /> {t("play.resume")}
           </DialogButton>
           <DialogButton
-            className="unifideck-stop-btn"
+            className={iconBtnClass("unifideck-stop-btn")}
             onClick={onStop}
             style={iconBtnStyle}
             aria-label={t("play.stop")}
@@ -219,7 +222,7 @@ export const InstalledButtons: FC<Props> = ({
     if (hasUpdate) {
       return (
         <DialogButton
-          className="unifideck-update-btn"
+          className={actionBtnClass("unifideck-update-btn")}
           disabled={loading || actions.isWorking}
           onClick={onUpdate}
           style={actionBtnStyle}
@@ -230,7 +233,7 @@ export const InstalledButtons: FC<Props> = ({
     }
     return (
       <DialogButton
-        className="unifideck-play-btn"
+        className={actionBtnClass("unifideck-play-btn")}
         disabled={loading}
         onClick={onPlay}
         style={actionBtnStyle}
@@ -262,7 +265,7 @@ export const InstalledButtons: FC<Props> = ({
           />
         )}
         <DialogButton
-          className="unifideck-icon-btn"
+          className={controllerBtnClass()}
           style={iconBtnStyle}
           onClick={() => openControllerConfig(appId)}
           aria-label={t("playButton.controllerConfig")}
@@ -270,7 +273,7 @@ export const InstalledButtons: FC<Props> = ({
           <SteamControllerIcon />
         </DialogButton>
         <DialogButton
-          className="unifideck-icon-btn"
+          className={iconBtnClass()}
           style={iconBtnStyle}
           onClick={(e) => {
             // Open Steam's native app menu (Manage / Properties / …),
@@ -284,7 +287,7 @@ export const InstalledButtons: FC<Props> = ({
           <SteamGearIcon />
         </DialogButton>
         <DialogButton
-          className="unifideck-icon-btn"
+          className={iconBtnClass()}
           style={iconBtnStyle}
           disabled={loading || actions.isWorking}
           onClick={onUninstall}

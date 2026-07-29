@@ -21,6 +21,9 @@ import {
   IconGroup,
   actionBtnStyle,
   iconBtnStyle,
+  actionBtnClass,
+  iconBtnClass,
+  controllerBtnClass,
 } from "./PlayMeta";
 
 interface Props {
@@ -68,7 +71,7 @@ export const XCloudButtons: FC<Props> = ({ appId, gameId }) => {
     // eslint-disable-next-line jsx-a11y/no-autofocus
     <PlayShell autoFocus>
       <DialogButton
-        className="unifideck-play-btn"
+        className={actionBtnClass("unifideck-play-btn")}
         onClick={onPlay}
         style={actionBtnStyle}
       >
@@ -79,7 +82,7 @@ export const XCloudButtons: FC<Props> = ({ appId, gameId }) => {
 
       <IconGroup>
         <DialogButton
-          className="unifideck-icon-btn"
+          className={controllerBtnClass()}
           style={iconBtnStyle}
           onClick={() => openControllerConfig(appId)}
           aria-label={t("playButton.controllerConfig")}
@@ -87,7 +90,7 @@ export const XCloudButtons: FC<Props> = ({ appId, gameId }) => {
           <SteamControllerIcon />
         </DialogButton>
         <DialogButton
-          className="unifideck-icon-btn"
+          className={iconBtnClass()}
           style={iconBtnStyle}
           onClick={(e) => {
             // Open Steam's native app menu (Manage / Properties / …),

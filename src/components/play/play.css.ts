@@ -122,15 +122,22 @@ export const PLAY_FOCUS_CSS = `
   background: rgba(255, 255, 255, 0.10) !important;
 }
 
-/* Square icon buttons take Steam's own idle fill instead of our lighter
- * white wash — measured off the native app-details MenuButton. Kept in
- * sync with iconBtnStyle in PlayMeta.tsx, which sets the same value
- * inline; the !important here would otherwise silently win. */
-.unifideck-stop-btn,
-.unifideck-icon-btn {
-  background: rgba(172, 178, 201, 0.14) !important;
-}
-
+/* Square icon buttons declare no background and no border-radius here, so
+ * Steam's MenuButton class (applied via iconBtnClass in PlayMeta) supplies
+ * them and a CSS Loader theme can restyle them — an !important of ours, or
+ * an inline style, outranks every theme rule and was why our row stayed
+ * square while themes rounded Steam's own buttons.
+ *
+ * padding IS pinned, and must stay pinned. Once we started wearing
+ * MenuButton, DialogButton's own "10px 24px" padding won the cascade,
+ * which on a 48px border-box leaves ZERO content width — the flex glyph
+ * shrank to 0 and every icon rendered invisible. Steam's native buttons
+ * carry 4-7px padding, but their glyph is a fixed 24px just like ours, so
+ * padding 0 renders pixel-identically to native. No theme we have seen
+ * touches padding on these.
+ *
+ * (Backticks are forbidden in this file's comments — they would close the
+ * PLAY_FOCUS_CSS template literal.) */
 .unifideck-install-btn { min-width: 200px; height: 48px; }
 .unifideck-play-btn,
 .unifideck-resume-btn,
@@ -147,11 +154,18 @@ export const PLAY_FOCUS_CSS = `
  * Done in CSS rather than per-call-site size= props so every icon in the
  * row stays consistent (and new ones inherit it); CSS width/height beats
  * both react-icons' width/height ATTRIBUTES and any on our own inline
- * SVGs in components/shared/SteamIcons.tsx. */
+ * SVGs in components/shared/SteamIcons.tsx.
+ *
+ * flex-shrink:0 is load-bearing insurance, not decoration: the button is
+ * a flex container, so ANY padding that squeezes its content box to under
+ * 24px silently shrinks the glyph instead of overflowing it. That is
+ * exactly how every icon went invisible once DialogButton's padding won
+ * the cascade. With this, a padding regression can never blank the row. */
 .unifideck-stop-btn > svg,
 .unifideck-icon-btn svg {
   width: 24px;
   height: 24px;
+  flex-shrink: 0;
   color: #ffffff;
 }
 /* The composed cloud-in-sync check badge keeps its own small size. */

@@ -22,7 +22,7 @@ import {
   FaCloudDownloadAlt,
   FaSyncAlt,
 } from "react-icons/fa";
-import { iconBtnStyle } from "./PlayMeta";
+import { iconBtnStyle, iconBtnClass } from "./PlayMeta";
 import { useCloudSaveStatus } from "../../hooks/useCloudSaveStatus";
 import { useEventBus } from "../../api/event-bus-client";
 import { consumeCloudOpPending } from "../../api/cloud-save-pending";
@@ -208,9 +208,10 @@ export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
 
   return (
     <DialogButton
-      className={`unifideck-icon-btn${
-        shouldBreathe ? " unifideck-breathe" : ""
-      }`}
+      className={iconBtnClass(
+        "unifideck-icon-btn",
+        shouldBreathe ? "unifideck-breathe" : "",
+      )}
       style={style}
       disabled={loading || syncing || noCloudSupport}
       onClick={open}
