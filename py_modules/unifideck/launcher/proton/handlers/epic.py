@@ -110,11 +110,53 @@ async def epic_launch(plan: ProtonLaunchPlan) -> int:
     )
     apply_rockstar_egs_setup(plan)
     legendary_bin, env = await _prepare_epic_env(plan)
-    argv = _build_legendary_argv(plan, legendary_bin)
-    rc = await run_umu_with_retry(
-        argv, env=env, on_start=plan.on_process_start,
-    )
+    rc = await _run_epic_game(plan, legendary_bin, env)
     return _finish_epic_launch(plan, rc)
+
+
+async def _run_epic_game(
+    plan: ProtonLaunchPlan, legendary_bin: str, env: dict[str, str],
+) -> int:
+    """Resolve legendary's launch recipe, then run umu-run ourselves.
+
+    UD-126: ``legendary launch`` fire-and-forgets the ``--wrapper``
+    command (``subprocess.Popen`` with no ``wait()``), so awaiting
+    legendary returned ~2s after the game was forked and this process
+    exited while the game was still starting. Steam ended the session
+    there — and in Gaming Mode gamescope will not raise a window whose
+    app Steam no longer considers running, which is why a slow-starting
+    title came up as audio with no window while Desktop Mode looked fine.
+
+    ``--json`` hands us the same parameters legendary was about to spawn,
+    so we spawn them ourselves and await the real umu-run: Epic now
+    behaves exactly like ``handlers/generic.py`` does for every other
+    store, and ``rc`` is the game's own exit code.
+
+    One consequence worth knowing: ``run_umu_with_retry`` may retry the
+    same argv, and ``egl_parameters`` carries a single-use Epic exchange
+    code. That is fine for the failure this retry exists for — a umu
+    bootstrap failure (rc 2/74/127) means the game never reached EGS, so
+    the code is still unused — and the long-session guard in
+    ``umu_runtime._is_recoverable`` keeps the window small for the rest.
+    """
+    from unifideck.launcher.proton.compat.epic_launch_params import (
+        build_umu_argv,
+        maybe_run_pre_launch,
+        merge_environment,
+        resolve_cwd,
+        resolve_launch_params,
+    )
+    params = await resolve_launch_params(
+        _build_legendary_argv(plan, legendary_bin, json_mode=True), env,
+    )
+    game_env = merge_environment(env, params)
+    await maybe_run_pre_launch(params, game_env)
+    return await run_umu_with_retry(
+        build_umu_argv(plan, params),
+        env=game_env,
+        cwd=resolve_cwd(params),
+        on_start=plan.on_process_start,
+    )
 
 
 async def _prepare_epic_env(
@@ -143,11 +185,19 @@ async def _prepare_epic_env(
 
 
 def _build_legendary_argv(
-    plan: ProtonLaunchPlan, legendary_bin: str,
+    plan: ProtonLaunchPlan, legendary_bin: str, *, json_mode: bool = False,
 ) -> list[str]:
-    """Assemble the ``legendary launch`` argv (offline, language, overrides)."""
+    """Assemble the ``legendary launch`` argv (offline, language, overrides).
+
+    ``json_mode`` appends ``--json``, which makes legendary print the
+    resolved launch parameters and exit instead of forking the game (see
+    :func:`_run_epic_game`). User wrappers are dropped for that call —
+    a Steam launch-option wrapper (gamemoderun, mangohud…) belongs on the
+    game, not on a metadata query — and are re-applied by
+    ``epic_launch_params.build_umu_argv``.
+    """
     from unifideck.launcher.proton.compat.epic import detect_offline
-    argv: list[str] = list(plan.state.wrappers)
+    argv: list[str] = [] if json_mode else list(plan.state.wrappers)
     argv.extend([
         legendary_bin,
         "launch",
@@ -155,17 +205,25 @@ def _build_legendary_argv(
         "--no-wine",
         "--skip-version-check",
     ])
+    if json_mode:
+        argv.append("--json")
     if detect_offline():
         argv.append("--offline")
         logger.info("[launcher.proton.epic] offline mode — passing --offline")
     argv.extend([
         "--wrapper",
-        # legendary is a PyInstaller onefile binary; it may hand its own
-        # bundled LD_LIBRARY_PATH/LD_PRELOAD down to this wrapper child
-        # instead of restoring the clean env it was launched with. That
-        # pollution then rides umu-run straight into the pressure-vessel
-        # container, breaking the container's own python3 (missing
-        # libz.so.1). Force-clear both right at the boundary.
+        # This string comes back verbatim as the JSON's ``launch_command``
+        # and becomes the head of the argv we spawn ourselves.
+        #
+        # The ``env -u`` prefix predates that: legendary used to fork this
+        # wrapper itself and could hand down its own bundled
+        # LD_LIBRARY_PATH/LD_PRELOAD instead of the clean env it was
+        # launched with, and that pollution rode umu-run into the
+        # pressure-vessel container, breaking the container's own python3
+        # ("libz.so.1", umu rc=127). We now own the spawn and
+        # ``umu_runtime._strip_loader_env`` pops both there, so this is
+        # belt-and-suspenders — kept because it costs nothing and keeps
+        # the exec line byte-identical to the pre-UD-126 one.
         f"env -u LD_LIBRARY_PATH -u LD_PRELOAD {plan.python_bin} {plan.umu_wrapper}",
         "--language",
         os.environ.get("EPIC_LANG", "en"),
@@ -185,12 +243,17 @@ def _build_legendary_argv(
 def _finish_epic_launch(plan: ProtonLaunchPlan, rc: int) -> int:
     """Record the exit code; raise on unrecoverable failures.
 
-    legendary returns the instant it spawns umu (Popen, no wait), so
-    ``rc`` reflects legendary, not the game — the game runs in an
-    orphaned umu/Proton tree and survives this process exiting. We
-    deliberately do NOT block on a wait-for-container loop: a broad
-    process match snags Steam's own ``steam-runtime-launch-client`` in
-    Gaming Mode and hangs the launcher forever.
+    Since UD-126 ``rc`` is the **game's** exit code, not legendary's:
+    :func:`_run_epic_game` awaits the umu-run it spawned itself, so this
+    process lives exactly as long as the game and Steam tracks the
+    session (window focus in Gaming Mode, Stop, playtime, cloud sync-up).
+    Identical handling to ``generic_launch`` — Epic is no longer special.
+
+    Historical note for anyone tempted to reintroduce a wait loop: an
+    early 0.7 build "waited" by polling ``pgrep -f
+    steam-runtime-launch-client``, which matches Steam's OWN container
+    manager in Gaming Mode and hung the launcher forever. No process
+    matching is involved here; we hold the pid.
     """
     plan.state.game_exit_code = rc
     if rc == 0:

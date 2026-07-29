@@ -54,16 +54,36 @@ class LauncherService:
         self._active_subprocess: Any = None
         self._cancelled = False
         self._launch_started_at: float | None = None
+        self._launch_task: asyncio.Task[Any] | None = None
 
     async def start(self) -> None:
         """Install signal handlers. Called by ServiceBootstrap.
 
-        One-shot: ``SIGTERM``/``SIGINT`` routed to cancel the
-        active launch subprocess gracefully.
+        ``SIGTERM``/``SIGINT`` (Steam's Stop button, the Play-UI X) cancel
+        the in-flight launch **task**, which unwinds into
+        ``umu_runtime._run_umu_once``'s ``except asyncio.CancelledError``
+        and reaps umu-run's whole process group plus the prefix's
+        wineserver. Cancelling beats the previous single
+        ``_active_subprocess.terminate()``: umu-run runs with
+        ``start_new_session=True``, so one SIGTERM racing Steam's SIGKILL
+        was the only thing standing between "Stop" and a game that keeps
+        running. ``CancelledError`` also bypasses ``handle_launcher_error``,
+        so a user-initiated stop no longer raises a bogus "launcher error"
+        toast or feeds the circuit breaker.
+
+        ``add_signal_handler`` is preferred (the callback runs on the loop,
+        not between bytecodes); the old handler stays as the fallback for
+        any context without a running loop. Only ever installed in the
+        launcher subprocess — ``LauncherService`` is built solely by the
+        CLI dispatcher's bootstrap, never by the plugin backend.
         """
-        def _handle_signal(sig: int, frame: Any) -> None:
+        def _cancel_launch(sig: int) -> None:
             logger.info("[LauncherService] received signal %s, cancelling launch", sig)
             self._cancelled = True
+            task = self._launch_task
+            if task is not None and not task.done():
+                task.cancel()
+                return
             if self._active_subprocess:
                 try:
                     self._active_subprocess.terminate()
@@ -71,8 +91,16 @@ class LauncherService:
                     logger.debug("[LauncherService] terminate failed: %s", e)
 
         try:
-            signal.signal(signal.SIGTERM, _handle_signal)
-            signal.signal(signal.SIGINT, _handle_signal)
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(sig, _cancel_launch, sig)
+            return
+        except (NotImplementedError, RuntimeError) as e:
+            logger.debug("[LauncherService] loop signal install failed: %s", e)
+
+        try:
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                signal.signal(sig, lambda s, _f: _cancel_launch(s))
         except ValueError:
             # We might not be in the main thread
             pass
@@ -103,10 +131,16 @@ class LauncherService:
         if await self._check_circuit_breaker(ctx):
             return self._circuit_open_result()
         state = self._build_runtime_state(ctx)
+        # The task a Stop/SIGTERM cancels — see ``start``. Recorded here
+        # rather than in ``start`` so only a launch in flight is ever
+        # cancellable.
+        self._launch_task = asyncio.current_task()
         try:
             return await self._try_launch(ctx, state)
         except Exception as e:
             return await self._handle_launcher_error(ctx, e)
+        finally:
+            self._launch_task = None
 
     def _start_launch_clock(self) -> None:
         """Record the launch start time used by ``_elapsed_since_launch``.

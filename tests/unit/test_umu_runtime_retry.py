@@ -159,3 +159,54 @@ async def test_success_first_attempt_no_toast(retry_harness):
     assert retry_harness.once_calls() == 1
     assert retry_harness.toasts == []
     assert retry_harness.wipes() == 0
+
+
+# ── UD-126: a recoverable code is only "recoverable" when it arrives fast ──
+#
+# Epic used to report *legendary's* exit code (always 0 — legendary
+# fire-and-forgot the game), so this loop never saw a real game's status.
+# Now that the launcher owns umu-run for every store, a title whose normal
+# quit code happens to be 2/74/127 would otherwise relaunch itself after
+# the user quit — and, for 2/74, wipe the shared runtime every session.
+
+
+@pytest.fixture()
+def slow_attempt(monkeypatch):
+    """Make every attempt look like it ran past the recoverable window."""
+    ticks = iter(range(0, 10_000, ur._RECOVERABLE_MAX_RUNTIME_SECONDS + 1))
+    monkeypatch.setattr(ur, "_now", lambda: float(next(ticks)))
+
+
+async def test_long_session_recoverable_code_is_not_retried(
+    retry_harness, slow_attempt,
+):
+    """A game that ran for ages and exits 74 is a quit, not a bad runtime."""
+    retry_harness.script([74, 0])
+
+    rc = await ur.run_umu_with_retry(["umu"], max_attempts=2)
+
+    assert rc == 74
+    assert retry_harness.once_calls() == 1
+    assert retry_harness.wipes() == 0, "must not nuke the shared runtime cache"
+    assert retry_harness.toasts == [], "no 'Retrying Launch' toast after a session"
+
+
+async def test_long_session_127_is_not_retried(retry_harness, slow_attempt):
+    """Same for 127 — long-running means the command was clearly found."""
+    retry_harness.script([127, 0])
+
+    rc = await ur.run_umu_with_retry(["umu"], max_attempts=2)
+
+    assert rc == 127
+    assert retry_harness.once_calls() == 1
+
+
+async def test_fast_failure_still_retries(retry_harness):
+    """The guard must not disarm the real case: a fast 2 still retries."""
+    retry_harness.script([2, 0])
+
+    rc = await ur.run_umu_with_retry(["umu"], max_attempts=2)
+
+    assert rc == 0
+    assert retry_harness.once_calls() == 2
+    assert retry_harness.wipes() == 1
