@@ -374,27 +374,28 @@ def storefront_fields(game: Any, enriched: dict[str, Any]) -> dict[str, Any]:
         "store": game.store,
         "store_url": store_search_url(game.store, game.title),
         "title": game.title,
-        "cloud_saves": pick_cloud_saves(enriched, game.store),
+        "cloud_saves": pick_cloud_saves(
+            enriched, game.store, getattr(game, "store_game_id", "") or "",
+        ),
     }
 
 
-def pick_cloud_saves(enriched: dict[str, Any], store: str) -> bool | None:
+def pick_cloud_saves(
+    enriched: dict[str, Any], store: str, game_id: str = "",
+) -> bool | None:
     """Whether ``store``'s copy of this game has native cloud saves.
 
-    Reads the ``cloud`` map the unifiDB save-location pipeline bakes in (the
-    same source :meth:`_StatusMixin._cloud_supported` uses for the cloud-save
-    button), so the answer needs no install, no prefix and no store CLI — it
-    is available for a game the user has not downloaded yet, which is the
-    whole point: pick the storefront whose copy actually syncs saves before
-    committing to a download.
+    Delegates to the shared resolver so this and the cloud-save button's
+    ``cloud_supported`` can never disagree — Epic answers from its own cached
+    metadata, everything else from the unifiDB catalog. No install, no prefix
+    and no store CLI, which is what lets the panel answer for a game the user
+    has not downloaded yet.
 
-    ``None`` means "unknown" (no enriched entry for this game) and the UI
-    stays silent rather than claiming an absence it cannot back up.
+    ``None`` means "unknown", and the UI says so rather than claiming an
+    absence it cannot back up.
     """
-    cloud = enriched.get("cloud")
-    if not isinstance(cloud, dict) or store not in cloud:
-        return None
-    return bool(cloud[store])
+    from unifideck.services.cloud_save.support import resolve_cloud_support
+    return resolve_cloud_support(store, game_id, enriched)
 
 
 def store_search_url(store: str, title: str) -> str:

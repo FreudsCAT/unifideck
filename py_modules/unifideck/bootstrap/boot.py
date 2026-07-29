@@ -257,6 +257,14 @@ async def _boot_layer5_services(
         download.set_prefix_warmup(
             make_prefix_warmup(getattr(plugin.services, "cloudsave", None)),
         )
+    # Resume the download-size warm-up. The walk is a plain asyncio task in
+    # THIS process, and the plugin is restarted independently of both Steam
+    # and plugin_loader — notably right after a sync, when the user restarts
+    # Steam to pick up new shortcuts/artwork. Every resolved size is written
+    # through to disk immediately, so a restart only ever loses the couple of
+    # lookups in flight; kicking it again here means the remainder finishes
+    # instead of waiting for the next sync. No-ops once the cache is full.
+    plugin.sync_service.resume_size_backfill()
     await start_async_services(plugin.services)
 
 

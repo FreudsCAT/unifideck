@@ -136,24 +136,23 @@ class _StatusMixin:
         return bool(lock and lock.locked())
 
     def _cloud_supported(self, store: str, game_id: str) -> bool | None:
-        """Native cloud-save support for ``store``, from enriched metadata.
+        """Native cloud-save support for ``store``, or ``None`` if unknown.
 
-        Reads the ``cloud`` flag baked in by the unifiDB save-location
-        pipeline (Ludusavi). ``None`` when unknown (no enriched data) — many
-        Epic games genuinely lack cloud support, which is why "didn't sync"
-        is sometimes "nothing to sync".
+        Shares :func:`~.support.resolve_cloud_support` with the App-Details
+        panel so the button and the panel can never contradict each other:
+        Epic answers from its own cached metadata, everything else from the
+        unifiDB ``cloud`` map. ``None`` when neither knows — many Epic games
+        genuinely lack cloud support, which is why "didn't sync" is sometimes
+        "nothing to sync".
         """
-        if self._cache is None:
-            return None
-        try:
-            meta = self._cache.get("metadata", f"{store}:{game_id}")
-        except Exception:
-            return None
-        if isinstance(meta, dict):
-            cloud = meta.get("cloud")
-            if isinstance(cloud, dict) and store in cloud:
-                return bool(cloud[store])
-        return None
+        from .support import resolve_cloud_support
+        meta: Any = None
+        if self._cache is not None:
+            try:
+                meta = self._cache.get("metadata", f"{store}:{game_id}")
+            except Exception:
+                meta = None
+        return resolve_cloud_support(store, game_id, meta)
 
     def _browse_start(self, game_id: str, save_dir: str | None) -> str:
         """Best starting folder for the manual save-location picker.

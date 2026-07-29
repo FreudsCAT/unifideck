@@ -28,8 +28,10 @@ State retained across sync passes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.event_bus import EventBus
@@ -388,7 +390,72 @@ class SyncService(
             # otherwise flip status from "cancelled" to "complete".
             if self._progress.status != "cancelled":
                 self._progress.mark_complete()
+                self._spawn_size_backfill()
             self._bus.set_sync_progress(None)
+
+    def resume_size_backfill(self) -> None:
+        """Restart an interrupted size warm-up at plugin boot.
+
+        The walk is an asyncio task inside the plugin's own process, and that
+        process is restarted independently of Steam and of ``plugin_loader``
+        — including in the most likely moment of all: right after a sync,
+        when the user restarts Steam so new shortcuts and artwork load.
+
+        Nothing is lost when that happens (every resolved size is flushed to
+        ``game_sizes.json`` as it lands, so at most the two in-flight lookups
+        are discarded), but without this the *remaining* games would sit
+        un-warmed until the next sync. Re-running here makes the warm-up
+        eventually-complete across any number of restarts.
+
+        Safe to call unconditionally: the walk skips games that already have
+        a cached size, so once the library is warm this costs one pass over
+        the in-memory list and zero network calls.
+        """
+        if not self._all_games:
+            return
+        self._spawn_size_backfill()
+
+    def _spawn_size_backfill(self) -> None:
+        """Warm the download-size cache once every post-sync phase is done.
+
+        "Space Required" is looked up lazily per game and each lookup is a
+        live store call, so an un-warmed cache means a multi-second gap on
+        the App-Details page — every game, the first time it is opened.
+
+        Deliberately started HERE rather than at SYNC_COMPLETE: the metadata
+        / artwork / compat phases are all network-bound and already serialise
+        against each other, so starting a fourth walk alongside them would
+        just contend for the same bandwidth and store rate limits. By this
+        point the progress bar has hit 100% and the pipeline is idle.
+
+        Fire-and-forget and fully guarded — this is an optimisation, and it
+        must never be able to fail a sync that has already succeeded.
+        """
+        try:
+            from unifideck.services import size_backfill
+            games = [g for games in self._all_games.values() for g in games]
+            size_backfill.spawn(
+                self._registry, games, self._size_cache_path(),
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug("[SyncService] size backfill not started: %s", e)
+
+    def _size_cache_path(self) -> str:
+        """Path to the persistent download-size cache (in the data dir).
+
+        Mirrors ``SyncRPCMixin._size_cache_path`` — both must resolve to the
+        same file or the warm-up would fill a cache nothing reads.
+        """
+        data_dir = "~/.local/share/unifideck"
+        cfg = self._config
+        if cfg is not None:
+            with contextlib.suppress(Exception):
+                data_dir = (
+                    cfg.get("paths.data_dir", None)
+                    or cfg.get("data_dir", data_dir)
+                    or data_dir
+                )
+        return str(Path(data_dir).expanduser() / "game_sizes.json")
 
     async def _on_shortcut_install_state_changed(self, **kwargs: Any) -> None:
         """Flip the in-memory Game record's installed state.

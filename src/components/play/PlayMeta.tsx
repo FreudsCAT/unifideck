@@ -310,7 +310,12 @@ export const MetaInline: FC<MetaInlineProps> = ({
   // appId, so both consumers share one fetch. It resolves to null first and
   // never blocks this row.
   const metadata = useGameMetadata(appId ?? null);
-  const cloudSaveStore = !!store && CLOUD_SAVE_STORES.has(store);
+  // Only for a NOT-installed game. Once it is installed the cloud-save icon
+  // button sits right there in the same row and reports the live state
+  // (syncing / in sync / no support / unresolved), so a static
+  // "Supported/Unknown" beside it is redundant at best and contradictory at
+  // worst — an enabled button next to the word "Unknown" reads like a bug.
+  const showCloudSaves = !installed && !!store && CLOUD_SAVE_STORES.has(store);
   // Size is fetched out-of-band (see useGameSize) so a slow store
   // lookup never blocks this row from rendering. Keyed on `installed`
   // so the on-disk size replaces the pre-install download size once
@@ -402,7 +407,7 @@ export const MetaInline: FC<MetaInlineProps> = ({
           value={lastPlayedValue ?? t("playMeta.neverPlayed")}
         />
       )}
-      {cloudSaveStore && (
+      {showCloudSaves && (
         <MetaItem
           label={t("playMeta.cloudSaves")}
           value={t(CLOUD_SAVE_VALUE_KEY[String(metadata.data?.cloud_saves)])}

@@ -43,7 +43,11 @@ CACHE_NAMESPACE = "metadata"
 # ``save_locations``/``cloud``/``save_source`` changes in a way that needs a
 # re-fetch; it does NOT invalidate the (expensive) Steam half of the entry.
 _SAVEDATA_SCHEMA_KEY = "_savedata_v"
-_SAVEDATA_SCHEMA = 1
+# v2: the unifiDB bucket lookup stripped leading articles while the catalog
+# buckets by the raw title, so every "The …" / "A …" title missed its shard
+# entirely and got stamped v1 with no save data (The Witcher 3 among them).
+# The bump makes those entries re-query now that the shard is right.
+_SAVEDATA_SCHEMA = 2
 DEFAULT_CACHE_TTL = 7 * 24 * 3600  # fallback if config missing
 
 # Per-game concurrency cap. Steam's ``appdetails`` rate limit is the
