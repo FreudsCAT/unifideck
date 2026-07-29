@@ -110,6 +110,60 @@ async def test_already_cached_games_cost_no_lookup(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_walk_failures_do_not_write_an_unknown_stamp(monkeypatch) -> None:
+    """The walk must never suppress a later on-demand lookup.
+
+    Its misses are not always the store's fault: 63 GOG games came back
+    empty during a parallel walk and every one resolved first try when
+    called individually. Stamping those "unknown" would hide sizes that
+    actually work, so only the user-facing RPC records a miss.
+    """
+    cache = _Cache()
+    marks: list[tuple[str, str]] = []
+
+    async def mark_unknown(store: str, gid: str) -> None:
+        marks.append((store, gid))
+    cache.mark_unknown = mark_unknown  # type: ignore[attr-defined]
+
+    class _Failing(_Registry):
+        def get_store(self, store: str) -> Any:
+            async def get_game_size(_gid: str) -> int:
+                raise RuntimeError("boom")
+            return SimpleNamespace(get_game_size=get_game_size)
+
+    monkeypatch.setattr(size_backfill, "get_size_cache", lambda _p: cache)
+    await size_backfill._run(_Failing({}), [_game("gog", "a")], "/x")
+    assert marks == []
+
+
+@pytest.mark.asyncio
+async def test_lookups_are_serialised_per_store(monkeypatch) -> None:
+    """Two gogdl processes race on a shared config dir and both fail."""
+    cache = _Cache()
+    monkeypatch.setattr(size_backfill, "get_size_cache", lambda _p: cache)
+    live: dict[str, int] = {"gog": 0, "epic": 0}
+    peak: dict[str, int] = {"gog": 0, "epic": 0}
+
+    class _Tracking(_Registry):
+        def get_store(self, store: str) -> Any:
+            async def get_game_size(_gid: str) -> int:
+                live[store] += 1
+                peak[store] = max(peak[store], live[store])
+                await asyncio.sleep(0.02)
+                live[store] -= 1
+                return 5
+            return SimpleNamespace(get_game_size=get_game_size)
+
+    games = [_game("gog", f"g{i}") for i in range(4)]
+    games += [_game("epic", f"e{i}") for i in range(4)]
+    await size_backfill._run(_Tracking({}), games, "/x")
+
+    assert peak["gog"] == 1, "gogdl must never run concurrently with itself"
+    assert peak["epic"] == 1
+    assert len(cache.data) == 8
+
+
+@pytest.mark.asyncio
 async def test_zero_and_none_sizes_are_not_cached(monkeypatch) -> None:
     """Caching 0 would make a real size unreachable forever."""
     cache = _Cache()

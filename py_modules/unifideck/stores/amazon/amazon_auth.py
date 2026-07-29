@@ -30,6 +30,7 @@ from unifideck.core.binaries import clean_cli_env
 from unifideck.core.types import AuthResult, Events, Result, StoreAuthError
 from unifideck.event_bus.event_bus import EventBus
 from unifideck.security import audit_auth_flow
+from unifideck.stores.amazon.nile_lock import nile_cli_lock
 
 logger = logging.getLogger(__name__)
 _AMAZON_REDIRECT_URIS: list[str] = [
@@ -116,19 +117,20 @@ class AmazonAuthFlow:
         """
         assert self._cli_path is not None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                self._cli_path,
-                "auth",
-                "--login",
-                "--non-interactive",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=clean_cli_env(),
-            )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=min(self._cli_timeout, 5),
-            )
+            async with nile_cli_lock():
+                proc = await asyncio.create_subprocess_exec(
+                    self._cli_path,
+                    "auth",
+                    "--login",
+                    "--non-interactive",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=clean_cli_env(),
+                )
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=min(self._cli_timeout, 5),
+                )
         except (TimeoutError, OSError) as e:
             logger.warning("[amazon_auth] auth-check failed: %s", e)
             return False
@@ -154,18 +156,19 @@ class AmazonAuthFlow:
         if not self._cli_path:
             return False
         try:
-            proc = await asyncio.create_subprocess_exec(
-                self._cli_path,
-                "auth",
-                "--logout",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=clean_cli_env(),
-            )
-            await asyncio.wait_for(
-                proc.communicate(),
-                timeout=self._cli_timeout,
-            )
+            async with nile_cli_lock():
+                proc = await asyncio.create_subprocess_exec(
+                    self._cli_path,
+                    "auth",
+                    "--logout",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=clean_cli_env(),
+                )
+                await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=self._cli_timeout,
+                )
         except (TimeoutError, OSError) as e:
             logger.warning("[amazon_auth] logout: %s", e)
             return False
@@ -229,20 +232,21 @@ class AmazonAuthFlow:
                 "nile CLI not resolved",
                 store="amazon",
             )
-        proc = await asyncio.create_subprocess_exec(
-            self._cli_path,
-            "auth",
-            "--login",
-            "--non-interactive",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=clean_cli_env(),
-        )
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=self._cli_timeout,
-            )
+            async with nile_cli_lock():
+                proc = await asyncio.create_subprocess_exec(
+                    self._cli_path,
+                    "auth",
+                    "--login",
+                    "--non-interactive",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=clean_cli_env(),
+                )
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=self._cli_timeout,
+                )
         except TimeoutError as e:
             raise StoreAuthError(
                 f"nile auth timed out after {self._cli_timeout}s",

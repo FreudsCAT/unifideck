@@ -38,11 +38,19 @@ logger = logging.getLogger(__name__)
 # without this the walk could be collected mid-flight (RUF006).
 _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
-# These are store APIs, not a CDN: legendary/nile each spawn a process and
-# talk to the storefront. Two at a time keeps the walk off the critical path
-# and well clear of anything that looks like abuse; a 600-game library still
-# finishes in a few minutes, once, in the background.
-BACKFILL_CONCURRENCY = 2
+# Concurrency is PER STORE, and deliberately 1.
+#
+# Running two lookups against the same store in parallel makes them fail:
+# 63 GOG games came back empty during a concurrent walk, yet every one of
+# them resolved first try when called on its own (5.18 GB, 41.56 GB, …).
+# gogdl invocations share a persistent GOGDL_CONFIG_PATH holding its
+# manifest and dependencies-repo caches, so two processes race on it — the
+# same shared-state hazard that previously hung installs at "Getting
+# Dependencies repository".
+#
+# Different stores are independent processes with independent caches, so
+# they still run in parallel: the walk is as wide as the number of stores.
+PER_STORE_CONCURRENCY = 1
 
 # Per-game ceiling. A store that hangs must not park a worker slot forever.
 LOOKUP_TIMEOUT_S = 30
@@ -129,9 +137,18 @@ async def _run(registry: Any, games: list[Game], cache_path: str) -> None:
     for game in candidates:
         store = game.store
         game_id = game.store_game_id
+        skip = False
         with contextlib.suppress(Exception):
-            if await cache.get(store, game_id) is not None:
-                continue
+            # Skip both a known size AND a recent failure — re-walking games
+            # the store cannot answer for just burns the whole window on
+            # them (measured: 142 of 277 in one pass) and starves the ones
+            # that would have resolved.
+            skip = (
+                await cache.get(store, game_id) is not None
+                or await cache.is_unknown(store, game_id)
+            )
+        if skip:
+            continue
         pending.append(game)
     if not pending:
         logger.info("[SizeBackfill] all %d sizes cached", len(candidates))
@@ -140,9 +157,13 @@ async def _run(registry: Any, games: list[Game], cache_path: str) -> None:
         "[SizeBackfill] warming %d of %d download sizes",
         len(pending), len(candidates),
     )
-    sem = asyncio.Semaphore(BACKFILL_CONCURRENCY)
+    # One semaphore per store, so gogdl never races another gogdl while
+    # Epic and Amazon still proceed alongside it.
+    sems: dict[str, asyncio.Semaphore] = {
+        s: asyncio.Semaphore(PER_STORE_CONCURRENCY) for s in SIZE_CAPABLE_STORES
+    }
     results = await asyncio.gather(
-        *(_fill_one(registry, cache, sem, g) for g in pending),
+        *(_fill_one(registry, cache, sems[g.store], g) for g in pending),
         return_exceptions=True,
     )
     filled = sum(1 for r in results if r is True)
@@ -155,7 +176,16 @@ async def _run(registry: Any, games: list[Game], cache_path: str) -> None:
 async def _fill_one(
     registry: Any, cache: Any, sem: asyncio.Semaphore, game: Game,
 ) -> bool:
-    """Resolve and persist one game's download size. Never raises."""
+    """Resolve and persist one game's download size. Never raises.
+
+    A failure here is deliberately NOT recorded as "unknown". The walk runs
+    unattended and its misses are not always the store's fault — a whole
+    batch of GOG games came back empty purely from parallel invocations and
+    resolved fine individually. Writing a stamp on that would suppress the
+    on-demand lookup too, hiding sizes that actually work. Only the
+    user-facing RPC, whose single attempt is the thing whose latency we are
+    protecting, records a miss.
+    """
     async with sem:
         store = game.store
         game_id = game.store_game_id

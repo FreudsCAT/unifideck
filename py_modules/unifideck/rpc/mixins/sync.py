@@ -229,6 +229,13 @@ class SyncRPCMixin(CleanupRPCMixin):
         cached = await cache.get(store, game_id)
         if cached is not None:
             return cached
+        # A store that already failed for this game recently is not worth
+        # waiting on again: the caller is a page open, and re-paying a
+        # multi-second lookup to display nothing is the worst outcome. The
+        # stamp expires (UNKNOWN_TTL_S) so a fixed login or a transient
+        # outage recovers on its own.
+        if await cache.is_unknown(store, game_id):
+            return 0
 
         if adapter is None or not hasattr(adapter, "get_game_size"):
             return 0
@@ -242,10 +249,13 @@ class SyncRPCMixin(CleanupRPCMixin):
                 "[sync] get_game_size(%s:%s) failed/timed out",
                 store, game_id, exc_info=True,
             )
+            await cache.mark_unknown(store, game_id)
             return 0
         size_int = int(size or 0)
         if size_int > 0:
             await cache.put(store, game_id, size_int)
+        else:
+            await cache.mark_unknown(store, game_id)
         return size_int
 
     def _size_cache_path(self) -> str:
