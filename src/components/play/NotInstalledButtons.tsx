@@ -13,7 +13,8 @@
 import { FC, useCallback } from "react";
 import { DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { FaGamepad, FaCog, FaDownload } from "react-icons/fa";
+import { FaDownload } from "react-icons/fa";
+import { SteamControllerIcon, SteamGearIcon } from "../shared";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useInstallFlow } from "../../hooks/useInstallFlow";
 import { useToast } from "../../hooks/useToast";
@@ -111,7 +112,7 @@ export const NotInstalledButtons: FC<Props> = ({
           onClick={() => openControllerConfig(appId)}
           aria-label={t("playButton.controllerConfig")}
         >
-          <FaGamepad />
+          <SteamControllerIcon />
         </DialogButton>
         <DialogButton
           className="unifideck-icon-btn"
@@ -125,7 +126,7 @@ export const NotInstalledButtons: FC<Props> = ({
           }}
           aria-label={t("playButton.appSettings")}
         >
-          <FaCog />
+          <SteamGearIcon />
         </DialogButton>
       </IconGroup>
     </PlayShell>

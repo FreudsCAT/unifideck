@@ -11,7 +11,8 @@
 import { FC, useCallback } from "react";
 import { DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { FaCloud, FaGamepad, FaCog } from "react-icons/fa";
+import { FaCloud } from "react-icons/fa";
+import { SteamControllerIcon, SteamGearIcon } from "../shared";
 import { launchAppWithConfiguredGamepad } from "../../utils/controllerConfig";
 import { openNativeAppManageMenu } from "../../utils/nativeAppMenu";
 import {
@@ -83,7 +84,7 @@ export const XCloudButtons: FC<Props> = ({ appId, gameId }) => {
           onClick={() => openControllerConfig(appId)}
           aria-label={t("playButton.controllerConfig")}
         >
-          <FaGamepad />
+          <SteamControllerIcon />
         </DialogButton>
         <DialogButton
           className="unifideck-icon-btn"
@@ -97,7 +98,7 @@ export const XCloudButtons: FC<Props> = ({ appId, gameId }) => {
           }}
           aria-label={t("playButton.appSettings")}
         >
-          <FaCog />
+          <SteamGearIcon />
         </DialogButton>
       </IconGroup>
     </PlayShell>

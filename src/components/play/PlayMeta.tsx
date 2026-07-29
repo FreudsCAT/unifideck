@@ -28,8 +28,10 @@ import { useGameMetadata } from "../../hooks/useGameMetadata";
 import { PLAY_FOCUS_CSS } from "./play.css";
 
 /** Inline style shared by every primary action button
- *  (Install / Play / Resume / Update / Cancel). Matches
- *  staging's ``actionBtnStyle``. */
+ *  (Install / Play / Resume / Update / Cancel).
+ *
+ *  `borderRadius` is Steam's own 2px — see the note on
+ *  `iconBtnStyle` below before "correcting" it. */
 export const actionBtnStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -43,14 +45,28 @@ export const actionBtnStyle: CSSProperties = {
   color: "#fff",
   fontSize: 16,
   fontWeight: 500,
-  borderRadius: 4,
+  borderRadius: 2,
   border: "none",
   textTransform: "uppercase",
   letterSpacing: "0.05em",
 };
 
-/** Inline style for square icon buttons (controller / settings
- *  / X). Matches staging's icon DialogButton inline style. */
+/** Inline style for square icon buttons (cloud / controller /
+ *  settings / trash / X).
+ *
+ *  Box, radius and idle fill are measured off Steam's own
+ *  app-details icon buttons so the cluster is indistinguishable
+ *  from vanilla. Vanilla Steam uses a 2px radius on BOTH these
+ *  and the primary action button — it is not the rounded-square
+ *  look you may remember.
+ *
+ *  Measure with CSS Loader DISABLED. An enabled theme rounds
+ *  these buttons to ~10px, which reads as native and is easy to
+ *  copy by mistake; the fill and glyph size below survive a theme
+ *  unchanged, so only the radius is untrustworthy.
+ *
+ *  `background` is duplicated (with `!important`) in
+ *  `play.css.ts`; the two must stay in sync or the CSS wins. */
 export const iconBtnStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -59,8 +75,8 @@ export const iconBtnStyle: CSSProperties = {
   height: 48,
   minWidth: 48,
   padding: 0,
-  background: "rgba(255, 255, 255, 0.1)",
-  borderRadius: 4,
+  background: "rgba(172, 178, 201, 0.14)",
+  borderRadius: 2,
 };
 
 /**
