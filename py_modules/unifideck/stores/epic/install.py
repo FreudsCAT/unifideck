@@ -28,11 +28,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
-import json
 import logging
 import os
 import re
-import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +50,9 @@ from unifideck.stores.shared.cli_install_helpers import (
     wait_with_timeout,
 )
 
+# Imported as modules, not names: ``uninstall_game``'s own
+# ``delete_prefix`` parameter would otherwise shadow the function.
+from . import sdl, uninstall
 from .exe_resolver import EpicExeResolver
 from .library import EpicLibraryReader
 
@@ -90,64 +91,16 @@ def _format_exit_error(outcome: _RunOutcome) -> str:
     return f"{base}: {outcome.tail}" if outcome.tail else base
 
 
-def _legendary_config_dir() -> Path:
-    """Return legendary's config dir (honours ``LEGENDARY_CONFIG_DIR``)."""
-    env = os.environ.get("LEGENDARY_CONFIG_DIR")
-    return (
-        Path(env).expanduser() if env
-        else Path("~/.config/legendary").expanduser()
-    )
+# How legendary dies when its Selective Downloads prompt can't read
+# stdin (``sdl_prompt`` → bare ``input()`` → EOFError). Retrying is
+# pointless — attempt two hits the same prompt — so the DLC fallback
+# must not burn a whole second download on it.
+_PROMPT_CRASH_MARKERS = ("EOFError", "sdl_prompt")
 
 
-def _read_legendary_install_path(game_id: str) -> str | None:
-    """Read a game's ``install_path`` from legendary's ``installed.json``.
-
-    A local file read — no catalog/network call — so it works even when
-    ``legendary uninstall`` 401s on Epic's catalog API and bails out.
-    """
-    path = _legendary_config_dir() / "installed.json"
-    try:
-        with path.open() as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
-    entry = data.get(game_id) if isinstance(data, dict) else None
-    if isinstance(entry, dict):
-        p = entry.get("install_path")
-        return p if isinstance(p, str) and p else None
-    return None
-
-
-def _purge_legendary_install_entry(game_id: str) -> None:
-    """Drop a game from legendary's ``installed.json``.
-
-    ``legendary uninstall`` leaves the entry behind when its catalog
-    lookup fails (HTTP 401), which makes the next library sync re-flag
-    the game installed (the Epic library derives install state from
-    ``legendary list-installed``). Removing the row keeps it honest.
-    """
-    path = _legendary_config_dir() / "installed.json"
-    try:
-        with path.open() as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return
-    if isinstance(data, dict) and game_id in data:
-        data.pop(game_id, None)
-        try:
-            with path.open("w") as f:
-                json.dump(data, f, indent=2)
-        except OSError as e:
-            logger.warning(
-                "[EpicUninstall] could not rewrite installed.json: %s", e,
-            )
-
-
-def _is_safe_to_delete(p: Path) -> bool:
-    """Guard against ``rmtree`` on the home dir, ``/``, or shallow roots."""
-    resolved = p.resolve()
-    home = Path.home().resolve()
-    return resolved not in (home, Path("/")) and len(resolved.parts) >= 3
+def _is_prompt_crash(tail: str) -> bool:
+    """True when legendary died on an unanswerable interactive prompt."""
+    return any(marker in tail for marker in _PROMPT_CRASH_MARKERS)
 
 
 class EpicInstaller:
@@ -177,8 +130,16 @@ class EpicInstaller:
         game_id: str,
         base_path: str | None = None,
         progress_cb: ProgressCallback | None = None,
+        language: str | None = None,
     ) -> InstallResult:
-        """Install game."""
+        """Install game.
+
+        ``language`` is the user's install-language choice for a
+        Selective Downloads title (one of the option keys the picker
+        offered, or a bare locale tag when nothing was picked). It only
+        affects which optional language pack is downloaded — see
+        :mod:`unifideck.stores.epic.sdl`.
+        """
         logger.info("[EpicInstall] install_game game_id=%s base_path=%s cli_path=%s",
                      game_id, base_path, self._cli_path)
         if not self._cli_path:
@@ -206,7 +167,9 @@ class EpicInstaller:
             game_id=game_id,
         )
         logger.info("[EpicInstall] running legendary install %s -> %s", game_id, base)
-        outcome = await self._run_install_with_dlc_fallback(base, game_id, progress_cb)
+        outcome = await self._run_install_with_dlc_fallback(
+            base, game_id, progress_cb, language,
+        )
         logger.info("[EpicInstall] legendary exit_code=%d", outcome.rc)
         if outcome.rc != 0:
             error = _format_exit_error(outcome)
@@ -227,6 +190,7 @@ class EpicInstaller:
 
     async def _run_install_with_dlc_fallback(
         self, base: str, game_id: str, progress_cb: ProgressCallback | None,
+        language: str | None = None,
     ) -> _RunOutcome:
         """Install with DLC, then retry the base game alone on failure.
 
@@ -239,27 +203,40 @@ class EpicInstaller:
         DLC) to recover the playable base game. No ``DOWNLOAD_FAILED`` is
         emitted for the first attempt; only ``install_game`` emits the
         terminal failure if the retry also fails.
+
+        Install tags are resolved once and reused across both attempts —
+        the retry differs only in its DLC flag.
         """
+        tags = await sdl.resolve_install_tags(game_id, language)
         with_dlc = dlc.store_supports_dlc("epic")
-        outcome = await self._run_install(base, game_id, with_dlc, progress_cb)
+        outcome = await self._run_install(base, game_id, with_dlc, progress_cb, tags)
         if outcome.rc == 0 or not with_dlc:
+            return outcome
+        if _is_prompt_crash(outcome.tail):
+            logger.error(
+                "[EpicInstall] %s died on an interactive prompt: %s — not "
+                "retrying (the retry would hit the same prompt)",
+                game_id, outcome.tail or "(no output captured)",
+            )
             return outcome
         logger.warning(
             "[EpicInstall] DLC install of %s failed (exit %d): %s — "
             "retrying base game without DLC",
             game_id, outcome.rc, outcome.tail or "(no output captured)",
         )
-        return await self._run_install(base, game_id, False, progress_cb)
+        return await self._run_install(base, game_id, False, progress_cb, tags)
 
     async def _run_install(
         self, base: str, game_id: str, with_dlc: bool,
         progress_cb: ProgressCallback | None = None,
+        install_tags: list[str] | None = None,
     ) -> _RunOutcome:
         """Run one ``legendary install``, capturing its output tail."""
-        cmd = self._build_install_cmd(base, game_id, with_dlc)
+        cmd = self._build_install_cmd(base, game_id, with_dlc, install_tags)
         logger.info("[EpicInstall] executing: %s", " ".join(cmd))
         proc = await asyncio.create_subprocess_exec(
             *cmd,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=clean_cli_env(),
@@ -275,8 +252,22 @@ class EpicInstaller:
             raise drain_exc
         return _RunOutcome(rc=rc, tail=tail_buf.tail())
 
-    def _build_install_cmd(self, base: str, game_id: str, with_dlc: bool) -> list[str]:
-        """Build install cmd (``--with-dlcs`` or an explicit ``--skip-dlcs``)."""
+    def _build_install_cmd(
+        self, base: str, game_id: str, with_dlc: bool,
+        install_tags: list[str] | None = None,
+    ) -> list[str]:
+        """Build install cmd (DLC flag + Selective Downloads answer).
+
+        ``--skip-sdl`` goes on unconditionally: it is inert for a
+        non-SDL title, and it is the belt that keeps legendary from ever
+        reaching its unanswerable ``sdl_prompt`` (the UD-026 install
+        failure) should our tag resolution have come up empty.
+
+        When tags *were* resolved they are passed as explicit
+        ``--install-tag`` values, which also suppresses the prompt
+        (legendary's ``sdl_enabled`` is false whenever ``install_tag``
+        is set) while downloading the packs we actually chose.
+        """
         if self._cli_path is None:
             raise RuntimeError("legendary CLI path is not set; cannot build install cmd")
         cmd = [
@@ -286,7 +277,10 @@ class EpicInstaller:
             "--base-path",
             base,
             "--yes",
+            "--skip-sdl",
         ]
+        for tag in install_tags or []:
+            cmd.extend(["--install-tag", tag])
         cmd.extend(dlc.get_dlc_flags("epic", with_dlc))
         return cmd
 
@@ -425,25 +419,28 @@ class EpicInstaller:
         purge the registry entry ourselves — the latter is essential
         because a leftover entry makes the next library sync re-flag the
         game installed.
+
+        The mechanics live in :mod:`unifideck.stores.epic.uninstall`;
+        this method owns the ordering and what gets reported.
         """
         # Resolve the install dir while legendary's bookkeeping is intact.
         install_path = await asyncio.to_thread(
-            _read_legendary_install_path, game_id,
+            uninstall.read_legendary_install_path, game_id,
         )
 
-        # Best-effort: lets legendary tidy its own manifest/metadata when
-        # it's online + authed. Never fatal — we delete files ourselves.
         if self._cli_path:
-            await self._best_effort_legendary_uninstall(game_id)
+            await uninstall.best_effort_legendary_uninstall(
+                self._cli_path, game_id, self._uninstall_timeout,
+            )
 
-        removed = await self._delete_install_dir(install_path, game_id)
+        removed = await uninstall.delete_install_dir(install_path, game_id)
 
         # legendary leaves the installed.json row behind when it 401s;
         # drop it so the next sync doesn't resurrect the game as installed.
-        await asyncio.to_thread(_purge_legendary_install_entry, game_id)
+        await asyncio.to_thread(uninstall.purge_legendary_install_entry, game_id)
 
         if delete_prefix:
-            await self._delete_prefix(game_id)
+            await uninstall.delete_prefix(game_id)
 
         self._library.invalidate_installed_cache()
         await self._bus.emit(
@@ -458,67 +455,3 @@ class EpicInstaller:
             )
         return Result(success=True)
 
-    async def _best_effort_legendary_uninstall(self, game_id: str) -> None:
-        """Run ``legendary uninstall`` without trusting its outcome."""
-        if not self._cli_path:
-            return
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                self._cli_path,
-                "uninstall",
-                game_id,
-                "--yes",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=clean_cli_env(),
-            )
-        except OSError as e:
-            logger.warning("[EpicUninstall] could not spawn legendary: %s", e)
-            return
-        try:
-            await asyncio.wait_for(
-                proc.communicate(), timeout=self._uninstall_timeout,
-            )
-        except TimeoutError:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            logger.warning("[EpicUninstall] legendary uninstall timed out")
-
-    async def _delete_install_dir(
-        self, install_path: str | None, game_id: str,
-    ) -> bool:
-        """``rmtree`` the install dir. Returns True if it's gone after."""
-        if not install_path:
-            logger.warning(
-                "[EpicUninstall] no tracked install path for %s; "
-                "nothing to delete", game_id,
-            )
-            return True
-        p = Path(install_path)
-        if not await asyncio.to_thread(p.exists):
-            return True
-        if not _is_safe_to_delete(p):
-            logger.error(
-                "[EpicUninstall] refusing to delete unsafe path %s", p,
-            )
-            return False
-        try:
-            await asyncio.to_thread(shutil.rmtree, p, ignore_errors=False)
-        except OSError as e:
-            logger.warning("[EpicUninstall] rmtree %s failed: %s", p, e)
-        gone = not await asyncio.to_thread(p.exists)
-        logger.info("[EpicUninstall] deleted %s (gone=%s)", p, gone)
-        return gone
-
-    async def _delete_prefix(self, game_id: str) -> None:
-        """Remove the game's Proton prefix (``delete_prefix`` path)."""
-        prefix = Path.home() / ".local/share/unifideck/prefixes" / game_id
-        if not await asyncio.to_thread(prefix.exists):
-            return
-        if not _is_safe_to_delete(prefix):
-            logger.error(
-                "[EpicUninstall] refusing to delete unsafe prefix %s", prefix,
-            )
-            return
-        await asyncio.to_thread(shutil.rmtree, prefix, ignore_errors=True)
-        logger.info("[EpicUninstall] deleted prefix %s", prefix)

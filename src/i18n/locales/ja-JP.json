@@ -561,7 +561,7 @@
     "simple": "シンプル",
     "detailed": "詳細表示"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "言語を選択",
     "description": "{{title}} のダウンロード言語を選択してください",
     "label": "言語",

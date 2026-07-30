@@ -561,7 +561,7 @@
     "simple": "Простий",
     "detailed": "Детальний"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "Вибрати мову",
     "description": "Виберіть мову завантаження для гри {{title}}",
     "label": "Мова",

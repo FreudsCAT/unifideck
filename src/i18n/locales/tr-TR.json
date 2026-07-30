@@ -561,7 +561,7 @@
     "simple": "Basit",
     "detailed": "Detaylı"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "Dil Seçin",
     "description": "{{title}} için hangi dilin indirileceğini seçin",
     "label": "Dil",

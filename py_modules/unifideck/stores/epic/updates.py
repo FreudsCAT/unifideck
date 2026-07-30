@@ -73,6 +73,7 @@ class EpicUpdateChecker:
                 self._cli_path,
                 "list-installed",
                 "--check-updates",
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=clean_cli_env(),

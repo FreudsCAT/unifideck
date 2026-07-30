@@ -561,7 +561,7 @@
     "simple": "Simpel",
     "detailed": "Gedetailleerd"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "Taal selecteren",
     "description": "Kies welke taal je wilt downloaden voor {{title}}",
     "label": "Taal",

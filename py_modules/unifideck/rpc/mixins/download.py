@@ -282,6 +282,35 @@ class DownloadRPCMixin:
             logger.exception("[download] get_gog_game_languages(%s) failed", game_id)
             return {"success": False, "error": str(e), "languages": ["en-US"]}
 
+    async def get_epic_game_languages(self, game_id: str) -> Any:
+        """Return the install languages available for an Epic game.
+
+        Drives the same language-select modal as GOG. Non-empty only for
+        legendary's Selective Downloads titles (Fallout 3 GOTY, Hogwarts
+        Legacy, Cyberpunk 2077, …), where the optional language packs are
+        separate downloads; every other Epic title returns an empty list
+        and the frontend skips the picker.
+
+        ``languages`` are legendary's own SDL option keys and ``labels``
+        maps each to legendary's display name, which is richer than the
+        bare locale codes GOG reports. Fails open to an empty list — a
+        lookup failure must never block an install, since the backend
+        falls back to installing the base game only.
+        """
+        try:
+            store = self.registry.get_store("epic")
+            if store is None:
+                return {"success": False, "error": "store_not_found", "languages": []}
+            options = await store.get_install_language_options(game_id)
+            return {
+                "success": True,
+                "languages": list(options.keys()),
+                "labels": options,
+            }
+        except Exception as e:
+            logger.exception("[download] get_epic_game_languages(%s) failed", game_id)
+            return {"success": False, "error": str(e), "languages": []}
+
     async def cancel_download(self, store: str, game_id: str) -> Any:
         """Cancel an in-progress download.
 

@@ -584,7 +584,7 @@
     "enabled": "Collections enabled",
     "disabled": "Collections disabled"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "Select Language",
     "description": "Choose which language to download for {{title}}",
     "label": "Language",

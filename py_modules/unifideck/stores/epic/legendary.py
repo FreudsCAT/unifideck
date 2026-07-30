@@ -15,9 +15,13 @@ JSON output. Used by ``install.py``, ``library.py``, and
 * swallows subprocess errors and logs them — the caller decides
   how to react to a missing info response.
 
-Kept as a one-function module because the surface is trivial and
-extracting it elsewhere would just spread the legendary-CLI
-coupling across more files.
+``legendary_config_dir()`` resolves where legendary keeps its state,
+for the several callers that read those files directly instead of
+paying for a subprocess.
+
+Kept as a small module because the surface is trivial and extracting
+it elsewhere would just spread the legendary-CLI coupling across more
+files.
 """
 
 from __future__ import annotations
@@ -25,11 +29,26 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+from pathlib import Path
 from typing import Any, cast
 
 from unifideck.core.binaries import clean_cli_env
 
 _logger = logging.getLogger(__name__)
+
+
+def legendary_config_dir() -> Path:
+    """Return legendary's config dir (honours ``LEGENDARY_CONFIG_DIR``).
+
+    ``security.ephemeral_creds`` points that variable at an isolated
+    directory, so this must never hardcode the default path.
+    """
+    env = os.environ.get("LEGENDARY_CONFIG_DIR")
+    return (
+        Path(env).expanduser() if env
+        else Path("~/.config/legendary").expanduser()
+    )
 
 
 async def fetch_info(cli_path: str, game_id: str, *, timeout: float, log_prefix: str = "[epic_legendary]") -> dict[str, Any] | None:  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper
@@ -42,6 +61,7 @@ async def fetch_info(cli_path: str, game_id: str, *, timeout: float, log_prefix:
             "info",
             game_id,
             "--json",
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=clean_cli_env(),

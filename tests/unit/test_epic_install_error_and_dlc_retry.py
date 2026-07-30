@@ -29,8 +29,23 @@ from unittest.mock import AsyncMock
 import pytest
 
 from unifideck.services.download.models import classify_download_error
+from unifideck.stores.epic import sdl
 from unifideck.stores.epic.install import EpicInstaller, _format_exit_error
 from unifideck.stores.shared.cli_install_helpers import TailRingBuffer
+
+
+@pytest.fixture(autouse=True)
+def _isolate_legendary_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any,
+) -> None:
+    """Keep the install path off the developer's real legendary state.
+
+    ``install_game`` now resolves Selective Downloads tags, which reads
+    legendary's cached ``version.json``. Redirecting it keeps these tests
+    hermetic (and off the network) regardless of the host's Epic library.
+    """
+    monkeypatch.setenv("LEGENDARY_CONFIG_DIR", str(tmp_path / "legendary"))
+    monkeypatch.setattr(sdl, "_CACHE_DIR", str(tmp_path / "sdl-cache"))
 
 
 # --------------------------------------------------------------------------

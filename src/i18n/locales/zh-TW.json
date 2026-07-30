@@ -561,7 +561,7 @@
     "simple": "精簡",
     "detailed": "詳細"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "選擇語言",
     "description": "選擇要為 {{title}} 下載的語言",
     "label": "語言",

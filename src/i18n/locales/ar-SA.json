@@ -561,7 +561,7 @@
     "simple": "مبسطة",
     "detailed": "تفصيلية"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "اختر اللغة",
     "description": "اختر لغة التنزيل للعبة {{title}}",
     "label": "اللغة",
