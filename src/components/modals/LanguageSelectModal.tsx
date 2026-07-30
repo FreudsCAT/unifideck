@@ -10,9 +10,10 @@
  * language available the modal is skipped entirely (queued with
  * the default).
  *
- * Named for GOG because that's who needed it first; the copy and
- * the props are store-neutral. Epic passes `labels` since its SDL
- * configs carry their own display names.
+ * Store-neutral by design: it takes an option list and hands back
+ * the picked value verbatim, so a new store only has to report its
+ * languages. Epic passes `labels` since its SDL configs carry their
+ * own display names.
  *
  * Pure presentational : the actual install RPC is the caller's
  * responsibility — this component only collects the choice.
@@ -23,9 +24,10 @@ import { useTranslation } from "react-i18next";
 import i18n from "i18next";
 import { pickDefaultLanguage } from "../../lib/i18n/pick-default-language";
 
-/** Display labels for GOG language codes. Falls back to the
- *  raw code if a code isn't recognised — the modal still works,
- *  just without the localised name. */
+/** Display labels for bare locale codes, which is what GOG reports.
+ *  Falls back to the raw code if one isn't recognised — the modal
+ *  still works, just without the localised name. Stores that ship
+ *  their own labels pass them via `labels` instead. */
 const LANGUAGE_NAMES: Record<string, string> = {
   "en-US": "English",
   "de-DE": "Deutsch (German)",
@@ -69,9 +71,9 @@ interface Props {
 }
 
 /**
- * Single-select dropdown of GOG language codes. Confirm =
- * close + invoke `onConfirm(language)` so the parent can
- * call `install_game(..., { language })`.
+ * Single-select dropdown of the offered language options. Confirm =
+ * close + invoke `onConfirm(language)` so the parent can call
+ * `install_game(..., { language })`.
  */
 export const LanguageSelectModal: FC<Props> = ({
   gameTitle,
@@ -95,7 +97,9 @@ export const LanguageSelectModal: FC<Props> = ({
   return (
     <ConfirmModal
       strTitle={t("installLanguageModal.title")}
-      strDescription={t("installLanguageModal.description", { title: gameTitle })}
+      strDescription={t("installLanguageModal.description", {
+        title: gameTitle,
+      })}
       strOKButtonText={t("installLanguageModal.install")}
       strCancelButtonText={t("common.cancel")}
       onOK={() => {

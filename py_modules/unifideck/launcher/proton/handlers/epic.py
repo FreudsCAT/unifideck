@@ -13,6 +13,10 @@ from unifideck.launcher.types.errors import GameFailedError, UmuRuntimeError
 
 logger = logging.getLogger(__name__)
 
+# Last resort for ``-epiclocale`` when the user's language can't be read.
+# Matches legendary's own default (``language_code, country_code = 'en','US'``).
+_FALLBACK_EPIC_LANG = "en"
+
 
 def _rockstar_play_exe_rel(plan: ProtonLaunchPlan) -> str | None:
     """The ``--override-exe`` target (relative) for RDR2/GTA5, else None.
@@ -184,6 +188,55 @@ async def _prepare_epic_env(
     return legendary_bin, build_legendary_env(plan, config_path)
 
 
+def _resolve_epic_language(plan: ProtonLaunchPlan) -> str:
+    """Two-letter code for legendary's ``--language`` → ``-epiclocale=``.
+
+    ``-epiclocale`` is how the Epic Games Launcher itself tells a game
+    which language to run in, and legendary reproduces it in the
+    ``egl_parameters`` we forward. This used to be hardcoded ``"en"``
+    (behind an ``EPIC_LANG`` env var nothing ever set), so **every** Epic
+    game launched in English no matter what the user had chosen — the
+    UD-101 / UD-041 reports, and why a title installed with an Italian
+    audio pack still came up in English.
+
+    legendary resolves the final value as
+    ``config.get(app_name, 'language', fallback=<this>)``, so a per-game
+    choice recorded at install time (``legendary.write_app_language``)
+    deliberately outranks the value returned here — this is the default
+    for games with no recorded preference, i.e. the user's Unifideck
+    language. ``EPIC_LANG`` is kept as an explicit escape hatch.
+    """
+    override = os.environ.get("EPIC_LANG")
+    if override:
+        logger.info(
+            "[launcher.proton.epic] EPIC_LANG override: %s", override,
+        )
+        return override
+    try:
+        from unifideck.config.config_manager import ConfigManager
+        from unifideck.launcher.proton.language_setup import (
+            get_unifideck_language,
+        )
+        config = ConfigManager(
+            str(plan.context.plugin_dir / "defaults" / "config.json"),
+        )
+        locale_tag = get_unifideck_language(config)
+    except Exception as err:
+        logger.warning(
+            "[launcher.proton.epic] language resolution failed (%s); "
+            "falling back to %s", err, _FALLBACK_EPIC_LANG,
+        )
+        return _FALLBACK_EPIC_LANG
+    # legendary documents --language as a two-letter code and its own
+    # default is the pre-dash half of the locale, so match that.
+    code = locale_tag.split("-", maxsplit=1)[0].strip().lower()
+    logger.info(
+        "[launcher.proton.epic] language %s → -epiclocale=%s",
+        locale_tag, code or _FALLBACK_EPIC_LANG,
+    )
+    return code or _FALLBACK_EPIC_LANG
+
+
 def _build_legendary_argv(
     plan: ProtonLaunchPlan, legendary_bin: str, *, json_mode: bool = False,
 ) -> list[str]:
@@ -226,7 +279,7 @@ def _build_legendary_argv(
         # the exec line byte-identical to the pre-UD-126 one.
         f"env -u LD_LIBRARY_PATH -u LD_PRELOAD {plan.python_bin} {plan.umu_wrapper}",
         "--language",
-        os.environ.get("EPIC_LANG", "en"),
+        _resolve_epic_language(plan),
     ])
     exe_override = _resolve_exe_override(plan)
     if exe_override:

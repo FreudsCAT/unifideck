@@ -54,6 +54,7 @@ from unifideck.stores.shared.cli_install_helpers import (
 # ``delete_prefix`` parameter would otherwise shadow the function.
 from . import sdl, uninstall
 from .exe_resolver import EpicExeResolver
+from .legendary import write_app_language
 from .library import EpicLibraryReader
 
 logger = logging.getLogger(__name__)
@@ -186,6 +187,11 @@ class EpicInstaller:
                 game_id=game_id,
             )
         self._library.invalidate_installed_cache()
+        if language:
+            # Remember the per-game choice so the launcher's -epiclocale
+            # matches the language pack we just downloaded, instead of
+            # falling back to the global Unifideck language.
+            await asyncio.to_thread(write_app_language, game_id, language)
         return await self._finalize_install(game_id, base)
 
     async def _run_install_with_dlc_fallback(

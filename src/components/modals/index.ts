@@ -6,7 +6,7 @@
  *  - SteamRestartModal        (post-shortcut-write reboot prompt)
  *  - UninstallConfirmModal    (delete confirmation)
  *  - CloudSaveConflictModal   (cloud save resolution)
- *  - LanguageSelectModal   (multi-language GOG installs)
+ *  - LanguageSelectModal      (multi-language installs: GOG, Epic)
  *  - ForceSyncModal           (force-sync artwork picker)
  *  - StorageBrowserModal      (full-screen path picker)
  *  - ToastEventListener       (event-driven toast / modal host)
