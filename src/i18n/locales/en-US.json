@@ -772,7 +772,9 @@
     "installedCount": "Installed ({{count}})",
     "failed": "Failed",
     "clearFailed": "Clear failed",
-    "uninstall": "Uninstall"
+    "uninstall": "Uninstall",
+    "locationInternal": "Internal",
+    "locationExternal": "External"
   },
   "navigation": {
     "loading": "Loading...",

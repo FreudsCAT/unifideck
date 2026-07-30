@@ -21,10 +21,17 @@ import { SteamBridge } from "../../lib/steam-bridge";
 import { resolveAppIdFromStoreGame } from "../../lib/library-filters";
 import { StoreIcon } from "../shared/StoreIcon";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
+import { formatBytes } from "../../utils";
 import type { Game } from "../../types/api";
+import type { InstalledDiskInfo } from "../../types/downloads";
 
 interface Props {
   game: Game;
+  /** On-disk size + storage location, from the tab's bulk
+   *  `get_installed_disk_info` query. Undefined while that query is still in
+   *  flight, or for a game whose install directory couldn't be resolved —
+   *  the meta line is then simply omitted. */
+  disk?: InstalledDiskInfo;
   /** Called after a successful uninstall so the list can re-derive. */
   onUninstalled: () => void;
 }
@@ -43,10 +50,38 @@ const ACTION_BTN_STYLE = {
   border: "none",
 } as const;
 
-export const InstalledGameRow: FC<Props> = ({ game, onUninstalled }) => {
+/** Dimmed sub-line under the title. ~10px is the smallest size that stays
+ *  legible on a Deck screen at arm's length; the grey is Steam's own
+ *  secondary-text tone so it reads as metadata, not as a second title. */
+const META_STYLE = {
+  fontSize: 10,
+  lineHeight: 1.2,
+  color: "#8b949e",
+  marginTop: 2,
+} as const;
+
+export const InstalledGameRow: FC<Props> = ({ game, disk, onUninstalled }) => {
   const { t } = useTranslation();
   const actions = useGameActions(bridge);
   const [busy, setBusy] = useState(false);
+
+  // "12.4 GB · Internal". Each half is independently optional: an
+  // unresolvable size comes back as 0 and an unstat-able install directory as
+  // a null location, and showing "0 B" or a guessed location would be worse
+  // than showing neither.
+  const meta = useMemo(() => {
+    if (!disk) return "";
+    const parts: string[] = [];
+    if (disk.size_bytes > 0) parts.push(formatBytes(disk.size_bytes));
+    if (disk.location) {
+      parts.push(
+        disk.location === "internal"
+          ? t("downloads.locationInternal")
+          : t("downloads.locationExternal"),
+      );
+    }
+    return parts.join(" · ");
+  }, [disk, t]);
 
   // The shortcut cache is keyed by STORE_GAME_ID (see `updateUnifideckCache`),
   // which is not always the same string as `Game.id`.
@@ -90,25 +125,31 @@ export const InstalledGameRow: FC<Props> = ({ game, onUninstalled }) => {
       <span style={{ display: "inline-flex", flexShrink: 0 }}>
         <StoreIcon store={game.store} size={14} />
       </span>
-      {/* Wraps instead of truncating. The QAM panel is narrow and the two
-          action buttons take a fixed slice of it, so `nowrap` + ellipsis cut
-          most titles to a few characters ("Alex Kidd in …", "Beyond Goo…") —
-          useless for telling two games apart. Letting the title use as many
-          lines as it needs costs a little height and keeps every name
-          readable; `break-word` handles a single token longer than the
-          column. */}
-      <span
-        style={{
-          flex: 1,
-          fontWeight: 500,
-          minWidth: 0,
-          overflowWrap: "anywhere",
-          wordBreak: "break-word",
-          lineHeight: 1.3,
-        }}
-      >
-        {game.title}
-      </span>
+      {/* Title + meta share one column so the meta line sits UNDER the title
+          rather than competing with it for width — the QAM panel is narrow
+          enough that an inline "12.4 GB · Internal" would push most titles
+          onto an extra line. A plain div, like the button wrapper below: only
+          the DialogButtons should be nodes in the tab's nav grid. */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Wraps instead of truncating. The QAM panel is narrow and the two
+            action buttons take a fixed slice of it, so `nowrap` + ellipsis cut
+            most titles to a few characters ("Alex Kidd in …", "Beyond Goo…") —
+            useless for telling two games apart. Letting the title use as many
+            lines as it needs costs a little height and keeps every name
+            readable; `break-word` handles a single token longer than the
+            column. */}
+        <div
+          style={{
+            fontWeight: 500,
+            overflowWrap: "anywhere",
+            wordBreak: "break-word",
+            lineHeight: 1.3,
+          }}
+        >
+          {game.title}
+        </div>
+        {meta !== "" && <div style={META_STYLE}>{meta}</div>}
+      </div>
       {appId != null && (
         // A PLAIN div, not a Focusable: the whole Installed list is wrapped in
         // one `flow-children="grid"` container (see DownloadsTab), and a

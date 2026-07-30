@@ -749,7 +749,9 @@
     "installedCount": "Geïnstalleerd ({{count}})",
     "failed": "Mislukt",
     "clearFailed": "Mislukte wissen",
-    "uninstall": "Deïnstalleren"
+    "uninstall": "Deïnstalleren",
+    "locationInternal": "Intern",
+    "locationExternal": "Extern"
   },
   "navigation": {
     "loading": "Laden...",

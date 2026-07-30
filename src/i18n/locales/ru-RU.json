@@ -749,7 +749,9 @@
     "installedCount": "Установлено ({{count}})",
     "failed": "Ошибки",
     "clearFailed": "Очистить ошибки",
-    "uninstall": "Удалить"
+    "uninstall": "Удалить",
+    "locationInternal": "Внутренняя",
+    "locationExternal": "Внешняя"
   },
   "navigation": {
     "loading": "Загрузка...",

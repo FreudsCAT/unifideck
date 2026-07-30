@@ -10,7 +10,9 @@
  *
  * Tab state is held in a module-level `persistentActiveTab`
  * so the last-viewed tab survives Quick-Access dismount /
- * remount (legacy behaviour from staging index.tsx).
+ * remount (legacy behaviour from staging index.tsx). Steam's
+ * automatic focus pass on mount used to defeat that — see
+ * `autoFocusConsumed` in the component.
  *
  * Tab buttons are `Focusable`s carrying Steam's own `Tab` /
  * `Selected` classes, inside a `flow-children="row"` row.
@@ -24,7 +26,7 @@
  * Focusable-as-tab with `onActivate` is a different construct
  * and does take focus. Verified on-device.
  */
-import { CSSProperties, FC, useState } from "react";
+import { CSSProperties, FC, useEffect, useRef, useState } from "react";
 import { Focusable, findClassModule } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import {
@@ -133,6 +135,66 @@ export const QuickAccessPanel: FC = () => {
     setTabState(next);
   };
 
+  // ── Surviving a remount on the tab you were actually on ──────────
+  //
+  // Steam fires a focus event at whichever nav node it picks when the panel
+  // mounts, and for this layout that is the FIRST tab pill. Since focus
+  // switches tabs (see the comment on the pills below), that automatic pass
+  // dragged the panel back to Settings on every remount — and because
+  // `setTab` also writes `persistentActiveTab`, it overwrote the remembered
+  // tab, so the next open started on Settings too.
+  //
+  // The visible trigger was confirming an uninstall: in Gaming Mode the QAM
+  // renders into its own popup window, so opening a modal tears that window
+  // down and closing it mounts this panel afresh — landing the user on
+  // Settings mid-task, right after acting on a row in Downloads.
+  //
+  // Two halves, both needed: swallow that first focus event (it is Steam's,
+  // not the user's), and put focus on the pill for the tab we are actually
+  // showing so the highlight matches the content.
+  const autoFocusConsumed = useRef(false);
+  const settingsPill = useRef<HTMLDivElement>(null);
+  const downloadsPill = useRef<HTMLDivElement>(null);
+
+  /** Tab switch driven by focus movement — see `autoFocusConsumed` above. */
+  const focusTab = (next: ActiveTab): void => {
+    if (!autoFocusConsumed.current) {
+      autoFocusConsumed.current = true;
+      // Steam's own pass, aimed at a tab we are not on: ignore it rather
+      // than let it redefine where the user was.
+      if (next !== persistentActiveTab) return;
+    }
+    setTab(next);
+  };
+
+  // Claim focus for the active pill on mount. Mirrors `PlayShell`'s recipe
+  // (rAF plus one delayed retry) because a single synchronous focus call
+  // loses the race against Steam's own focus pass. Bails once focus has
+  // landed, so it can never yank focus the user has since moved.
+  useEffect(() => {
+    const target =
+      persistentActiveTab === "downloads"
+        ? downloadsPill.current
+        : settingsPill.current;
+    if (!target) return;
+    let raf = 0;
+    let timer = 0;
+    let retried = false;
+    const grab = (): void => {
+      if (target.ownerDocument.activeElement === target) return;
+      target.focus?.();
+      if (target.ownerDocument.activeElement !== target && !retried) {
+        retried = true;
+        timer = window.setTimeout(grab, 140);
+      }
+    };
+    raf = requestAnimationFrame(grab);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
+  }, []);
+
   // The tab label carries NO percentage. It used to show the library-SYNC
   // progress, which is a different operation from downloading a game — a tab
   // reading "Downloads (90%)" while nothing is downloading is just wrong, and
@@ -155,7 +217,8 @@ export const QuickAccessPanel: FC = () => {
             had stalled. `onActivate` stays so a click/A press still works
             (and so each Focusable remains a focus target at all). */}
         <Focusable
-          onFocus={() => setTab("settings")}
+          ref={settingsPill}
+          onFocus={() => focusTab("settings")}
           onActivate={() => setTab("settings")}
           className={tabClassName(tab === "settings")}
           style={tabButtonStyle(tab === "settings")}
@@ -163,7 +226,8 @@ export const QuickAccessPanel: FC = () => {
           {t("tabs.settings")}
         </Focusable>
         <Focusable
-          onFocus={() => setTab("downloads")}
+          ref={downloadsPill}
+          onFocus={() => focusTab("downloads")}
           onActivate={() => setTab("downloads")}
           className={tabClassName(tab === "downloads")}
           style={tabButtonStyle(tab === "downloads")}

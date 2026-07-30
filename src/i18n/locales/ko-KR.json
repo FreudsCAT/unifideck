@@ -749,7 +749,9 @@
     "installedCount": "설치됨 ({{count}})",
     "failed": "실패",
     "clearFailed": "실패 항목 지우기",
-    "uninstall": "설치 제거"
+    "uninstall": "설치 제거",
+    "locationInternal": "내부",
+    "locationExternal": "외부"
   },
   "navigation": {
     "loading": "불러오는 중...",

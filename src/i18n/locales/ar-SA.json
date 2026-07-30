@@ -749,7 +749,9 @@
     "installedCount": "المثبتة ({{count}})",
     "failed": "فشلت",
     "clearFailed": "مسح الفاشلة",
-    "uninstall": "إلغاء التثبيت"
+    "uninstall": "إلغاء التثبيت",
+    "locationInternal": "داخلي",
+    "locationExternal": "خارجي"
   },
   "navigation": {
     "loading": "جاري التحميل...",

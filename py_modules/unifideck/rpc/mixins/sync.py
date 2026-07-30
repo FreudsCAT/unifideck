@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from unifideck.rpc.mixins.sync_cleanup import CleanupRPCMixin
+from unifideck.services.installed_disk_info import collect_installed_disk_info
 from unifideck.services.size_cache import get_size_cache
 from unifideck.stores.shared.installed_size import installed_size_bytes
 
@@ -257,6 +258,23 @@ class SyncRPCMixin(CleanupRPCMixin):
         else:
             await cache.mark_unknown(store, game_id)
         return size_int
+
+    async def get_installed_disk_info(self) -> Any:
+        """Size + storage location for every installed game, in one call.
+
+        Feeds the Quick-Access "Installed" list's meta line
+        (``<size> · Internal|External``). Bulk on purpose: per-row calls
+        to :meth:`get_game_size_bytes` would mean one uncached directory
+        walk per visible game every time the panel opens — see
+        :mod:`unifideck.services.installed_disk_info`, which bounds and
+        memoises the walks.
+
+        Returns ``{"<store>:<store_game_id>": {"size_bytes", "location"}}``,
+        with games it could not resolve omitted rather than reported as
+        zero-sized.
+        """
+        games = self.sync_service.get_all_games() if self.sync_service else []
+        return await collect_installed_disk_info(games, self.registry)
 
     def _size_cache_path(self) -> str:
         """Path to the persistent download-size cache (in the data dir)."""

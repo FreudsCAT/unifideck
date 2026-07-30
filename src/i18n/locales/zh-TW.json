@@ -749,7 +749,9 @@
     "installedCount": "已安裝 ({{count}})",
     "failed": "失敗",
     "clearFailed": "清除失敗項目",
-    "uninstall": "解除安裝"
+    "uninstall": "解除安裝",
+    "locationInternal": "內部",
+    "locationExternal": "外部"
   },
   "navigation": {
     "loading": "正在載入...",

@@ -37,6 +37,7 @@ export const rpcRoutes = {
   getSyncProgress: "get_sync_progress",
   getAllUnifideckGames: "get_all_unifideck_games",
   getGameSizeBytes: "get_game_size_bytes",
+  getInstalledDiskInfo: "get_installed_disk_info",
   updateSteamOwnedTitles: "update_steam_owned_titles",
   setActiveSteamUser: "set_active_steam_user",
   // Orphaned-shortcut sweep — boot-time cleanup (CleanupRPCMixin)

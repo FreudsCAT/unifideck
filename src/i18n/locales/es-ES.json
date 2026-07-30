@@ -749,7 +749,9 @@
     "installedCount": "Instalados ({{count}})",
     "failed": "Fallidos",
     "clearFailed": "Borrar fallidos",
-    "uninstall": "Desinstalar"
+    "uninstall": "Desinstalar",
+    "locationInternal": "Interno",
+    "locationExternal": "Externo"
   },
   "navigation": {
     "loading": "Cargando...",

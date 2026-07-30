@@ -749,7 +749,9 @@
     "installedCount": "Installés ({{count}})",
     "failed": "Échecs",
     "clearFailed": "Effacer les échecs",
-    "uninstall": "Désinstaller"
+    "uninstall": "Désinstaller",
+    "locationInternal": "Interne",
+    "locationExternal": "Externe"
   },
   "navigation": {
     "loading": "Chargement...",

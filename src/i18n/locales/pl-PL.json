@@ -749,7 +749,9 @@
     "installedCount": "Zainstalowane ({{count}})",
     "failed": "Nieudane",
     "clearFailed": "Wyczyść nieudane",
-    "uninstall": "Odinstaluj"
+    "uninstall": "Odinstaluj",
+    "locationInternal": "Wewnętrzna",
+    "locationExternal": "Zewnętrzna"
   },
   "navigation": {
     "loading": "Ładowanie...",

@@ -749,7 +749,9 @@
     "installedCount": "Yüklü ({{count}})",
     "failed": "Başarısız",
     "clearFailed": "Başarısızları temizle",
-    "uninstall": "Kaldır"
+    "uninstall": "Kaldır",
+    "locationInternal": "Dahili",
+    "locationExternal": "Harici"
   },
   "navigation": {
     "loading": "Yükleniyor...",

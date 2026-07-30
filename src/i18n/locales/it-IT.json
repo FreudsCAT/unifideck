@@ -749,7 +749,9 @@
     "installedCount": "Installati ({{count}})",
     "failed": "Falliti",
     "clearFailed": "Cancella falliti",
-    "uninstall": "Disinstalla"
+    "uninstall": "Disinstalla",
+    "locationInternal": "Interno",
+    "locationExternal": "Esterno"
   },
   "navigation": {
     "loading": "Caricamento...",

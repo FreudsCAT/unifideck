@@ -18,9 +18,18 @@
  * and they can be dismissed once read.
  *
  * Live updates come from EventBus via `useDownloads()` for the queue, and
- * from GAME_INSTALLED / GAME_UNINSTALLED for the installed list.
+ * from SHORTCUT_INSTALL_STATE_CHANGED for the installed list.
+ *
+ * That event, specifically: it is the one the backend emits from
+ * `ShortcutService.mark_installed` / `mark_uninstalled`, and it is what
+ * *causes* the `installed` flag this list filters on
+ * (`SyncService._on_shortcut_install_state_changed`), so a refetch on it is
+ * guaranteed to see the new state. GAME_INSTALLED — which this used to
+ * listen for — has no runtime emitter at all (the download worker
+ * deliberately doesn't emit it, to avoid duplicate SteamGridDB lookups),
+ * which is why a finished install never appeared until the tab remounted.
  */
-import { FC, useCallback, useMemo } from "react";
+import { FC, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   ButtonItem,
   Focusable,
@@ -37,6 +46,14 @@ import { DownloadItemRow } from "./DownloadItemRow";
 import { InstalledGameRow } from "./InstalledGameRow";
 import { PLAY_FOCUS_CSS } from "../play/play.css";
 import type { Game } from "../../types/api";
+import type { InstalledDiskInfoMap } from "../../types/downloads";
+
+/** Trailing-edge window for coalescing install-state refetches. A sync or
+ *  reconcile flips many games in a burst, and one EventBus poll dispatches
+ *  every buffered record in a synchronous loop — without this, twenty
+ *  flipped games mean twenty pairs of refetches, one of which walks install
+ *  directories. Short enough to still feel immediate. */
+const REFETCH_DEBOUNCE_MS = 300;
 
 /**
  * Quick Access Menu tab: active downloads, the installed library, and any
@@ -46,6 +63,13 @@ export const DownloadsTab: FC = () => {
   const { t } = useTranslation();
   const { queue, loading, refresh } = useDownloads();
   const games = useRPCQuery<[], Game[]>(rpcRoutes.getAllUnifideckGames, []);
+  // Size + Internal/External per installed game. One bulk call rather than a
+  // per-row `get_game_size_bytes`, because an installed size is an uncached
+  // directory walk — see services/installed_disk_info.py.
+  const diskInfo = useRPCQuery<[], InstalledDiskInfoMap>(
+    rpcRoutes.getInstalledDiskInfo,
+    [],
+  );
   const clearHistory = useRPCMutation<[string | null], unknown>(
     rpcRoutes.clearDownloadHistory,
   );
@@ -54,9 +78,35 @@ export const DownloadsTab: FC = () => {
   // events rather than waiting for `unifideck-sync-completed`.
   const refetchGames = useCallback(() => {
     void games.refetch();
-  }, [games]);
-  useEventBus(Events.GAME_INSTALLED, refetchGames, []);
-  useEventBus(Events.GAME_UNINSTALLED, refetchGames, []);
+    void diskInfo.refetch();
+  }, [games, diskInfo]);
+
+  // Debounced so an event burst costs one refetch pair. The callback is read
+  // through a ref: `refetchGames` gets a new identity every render (both
+  // query objects do), and re-creating the timer with it would either reset
+  // the pending window or fire a stale closure.
+  const refetchRef = useRef(refetchGames);
+  refetchRef.current = refetchGames;
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleRefetch = useCallback(() => {
+    if (timerRef.current != null) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      refetchRef.current();
+    }, REFETCH_DEBOUNCE_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (timerRef.current != null) clearTimeout(timerRef.current);
+    },
+    [],
+  );
+
+  useEventBus(Events.SHORTCUT_INSTALL_STATE_CHANGED, scheduleRefetch, []);
+  // Redundant with the above (an uninstall reaches `mark_uninstalled`, which
+  // emits it) but harmless, and it keeps the list honest if a store ever
+  // grows an uninstall path that skips the shortcut layer.
+  useEventBus(Events.GAME_UNINSTALLED, scheduleRefetch, []);
 
   const installed = useMemo(() => {
     // Raw RPC rows carry the wire field `installed`; only adapter-normalised
@@ -123,6 +173,10 @@ export const DownloadsTab: FC = () => {
               <InstalledGameRow
                 key={`${game.store}:${game.id}`}
                 game={game}
+                // Keyed by STORE_GAME_ID, not `game.id` — the two are not
+                // always the same string (same caveat as the appId lookup
+                // inside the row).
+                disk={diskInfo.data?.[`${game.store}:${game.store_game_id}`]}
                 onUninstalled={refetchGames}
               />
             ))}
