@@ -486,6 +486,13 @@ async def test_install_passes_resolved_tags_and_closes_stdin(
     inst._finalize_install = AsyncMock(
         return_value=InstallResult(success=True, store="epic", game_id="Ginger"),
     )
+    # install_game verifies legendary's own installed.json before
+    # reporting success (legendary answers a refusal with exit 0 — see
+    # test_epic_phantom_install.py), so a mocked rc=0 must leave the row.
+    (tmp_path / "legendary").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "legendary" / "installed.json").write_text(
+        json.dumps({"Ginger": {"install_path": "/games/Ginger"}}),
+    )
     seen, kwargs_seen = _patch_subprocess(
         monkeypatch, [_FakeProc(["Progress: 100.0%"], returncode=0)],
     )

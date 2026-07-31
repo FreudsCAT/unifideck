@@ -47,6 +47,7 @@ from unifideck.stores.shared.cli_install_helpers import (
     parse_eta_seconds,
     parse_progress_line,
     parse_speed_bps,
+    terminate_process_tree,
     wait_with_timeout,
 )
 
@@ -104,6 +105,26 @@ def _is_prompt_crash(tail: str) -> bool:
     return any(marker in tail for marker in _PROMPT_CRASH_MARKERS)
 
 
+# legendary guards install/import/move with a FileLock on
+# ``installed.json.lock`` and allows exactly one at a time. When it can't
+# take the lock it logs this at CRITICAL and then **exits 0**, so the
+# refusal is indistinguishable from success by exit code alone.
+_LOCK_REFUSAL_MARKER = "Failed to acquire installed data lock"
+
+
+def _no_install_error(outcome: _RunOutcome) -> str:
+    """Name a ``rc == 0`` run that installed nothing.
+
+    Keeps a machine-parsable prefix, like :func:`_format_exit_error`.
+    """
+    if _LOCK_REFUSAL_MARKER in outcome.tail:
+        return (
+            "legendary_install_lock_busy: another Epic install is still "
+            f"holding legendary's install lock — {outcome.tail}"
+        )
+    return f"legendary_exit_0_no_install: {outcome.tail or '(no output captured)'}"
+
+
 class EpicInstaller:
     """Epic installer."""
 
@@ -152,13 +173,11 @@ class EpicInstaller:
                 game_id=game_id,
             )
         base = base_path or self._default_install_root
-        try:
-            await asyncio.to_thread(lambda: Path(base).mkdir(parents=True, exist_ok=True))
-        except OSError as e:
-            logger.exception("[EpicInstall] mkdir failed: %s", base)
+        mkdir_error = await self._prepare_base_dir(base)
+        if mkdir_error:
             return InstallResult(
                 success=False,
-                error=f"mkdir_failed: {e}",
+                error=mkdir_error,
                 store="epic",
                 game_id=game_id,
             )
@@ -167,25 +186,32 @@ class EpicInstaller:
             store="epic",
             game_id=game_id,
         )
-        logger.info("[EpicInstall] running legendary install %s -> %s", game_id, base)
         outcome = await self._run_install_with_dlc_fallback(
             base, game_id, progress_cb, language,
         )
         logger.info("[EpicInstall] legendary exit_code=%d", outcome.rc)
         if outcome.rc != 0:
-            error = _format_exit_error(outcome)
-            await self._bus.emit(
-                Events.DOWNLOAD_FAILED,
-                store="epic",
-                game_id=game_id,
-                error=error,
+            return await self._fail(game_id, _format_exit_error(outcome))
+        if not await self._install_was_recorded(game_id, outcome):
+            return await self._fail(game_id, _no_install_error(outcome))
+        return await self._complete_install(game_id, base, language)
+
+    async def _prepare_base_dir(self, base: str) -> str | None:
+        """Create the install root. Returns an error string on failure."""
+        try:
+            await asyncio.to_thread(
+                lambda: Path(base).mkdir(parents=True, exist_ok=True),
             )
-            return InstallResult(
-                success=False,
-                error=error,
-                store="epic",
-                game_id=game_id,
-            )
+        except OSError as e:
+            logger.exception("[EpicInstall] mkdir failed: %s", base)
+            return f"mkdir_failed: {e}"
+        logger.info("[EpicInstall] install root ready: %s", base)
+        return None
+
+    async def _complete_install(
+        self, game_id: str, base: str, language: str | None,
+    ) -> InstallResult:
+        """Post-install bookkeeping, then resolve the exe and register."""
         self._library.invalidate_installed_cache()
         if language:
             # Remember the per-game choice so the launcher's -epiclocale
@@ -193,6 +219,46 @@ class EpicInstaller:
             # falling back to the global Unifideck language.
             await asyncio.to_thread(write_app_language, game_id, language)
         return await self._finalize_install(game_id, base)
+
+    async def _fail(self, game_id: str, error: str) -> InstallResult:
+        """Emit the one terminal ``DOWNLOAD_FAILED`` and wrap the error."""
+        await self._bus.emit(
+            Events.DOWNLOAD_FAILED,
+            store="epic",
+            game_id=game_id,
+            error=error,
+        )
+        return InstallResult(
+            success=False,
+            error=error,
+            store="epic",
+            game_id=game_id,
+        )
+
+    async def _install_was_recorded(
+        self, game_id: str, outcome: _RunOutcome,
+    ) -> bool:
+        """True when legendary actually installed the game.
+
+        Exit 0 is NOT proof. legendary answers a refusal — most notably
+        "another instance holds the install lock" — with a CRITICAL log
+        line and then **exit 0**. That used to be reported as success:
+        the shortcut flipped to installed with an empty exe_path and
+        nothing on disk, so the download appeared to finish instantly.
+        legendary writes ``installed.json`` before exiting, so its own
+        bookkeeping is the only trustworthy signal.
+        """
+        recorded = await asyncio.to_thread(
+            uninstall.read_legendary_install_path, game_id,
+        )
+        if recorded:
+            return True
+        logger.error(
+            "[EpicInstall] %s: legendary exited 0 but recorded no install — "
+            "treating as failure. Output: %s",
+            game_id, outcome.tail or "(none captured)",
+        )
+        return False
 
     async def _run_install_with_dlc_fallback(
         self, base: str, game_id: str, progress_cb: ProgressCallback | None,
@@ -253,9 +319,15 @@ class EpicInstaller:
             await self._drain_install_output(proc, game_id, progress_cb, tail_buf)
         except BaseException as e:
             drain_exc = e
-        rc = await self._wait_with_timeout(proc)
         if drain_exc is not None:
+            # Cancelling the download task only unwinds *our* coroutine —
+            # legendary keeps running, and its multiprocessing children
+            # keep legendary's install lock held, which makes every later
+            # install exit 0 without installing. Kill the tree before
+            # propagating, or a cancel poisons the whole queue.
+            await terminate_process_tree(proc, "[epic_install]")
             raise drain_exc
+        rc = await self._wait_with_timeout(proc)
         return _RunOutcome(rc=rc, tail=tail_buf.tail())
 
     def _build_install_cmd(
