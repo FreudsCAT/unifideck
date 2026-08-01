@@ -452,10 +452,16 @@ class LauncherService:
         from .orchestrator import launch_native
         return await launch_native(self, ctx, state)
 
-    async def _prepare_windows_plan(self, ctx: LaunchContext, state: RuntimeState) -> tuple[ProtonLaunchPlan, object]:
+    async def _prepare_windows_plan(
+        self,
+        ctx: LaunchContext,
+        state: RuntimeState,
+        *,
+        tool_id: str | None = None,
+    ) -> tuple[ProtonLaunchPlan, object]:
         """Delegate to ``helpers.prepare_windows_plan``."""
         from .helpers import prepare_windows_plan
-        return await prepare_windows_plan(self, ctx, state)
+        return await prepare_windows_plan(self, ctx, state, tool_id=tool_id)
 
     async def _cloud_sync_phase(self, ctx: LaunchContext, direction: str) -> None:
         """Delegate to ``helpers.cloud_sync_phase``."""
