@@ -73,6 +73,7 @@ async def _run_one(
             plan.env.setdefault(env_key, env_val)
     try:
         await ensure_prefix_initialized(plan)
+        _bridge_into_compatdata(plan)
         return await apply_prefix_compat(plan)
     except Exception:
         logger.exception(
@@ -80,6 +81,32 @@ async def _run_one(
             ctx.game_key,
         )
         return False
+
+
+def _bridge_into_compatdata(plan: Any) -> None:
+    """Expose this prefix to external Wine tooling (Protontricks).
+
+    Protontricks resolves a non-Steam shortcut's prefix only at
+    ``steamapps/compatdata/<appid>``, which is nowhere near where we keep
+    ours, so without this link it reports "does not have a prefix" and skips
+    the game entirely. Doing it here rather than at install time also repairs
+    prefixes that predate the bridge, and covers Ubisoft, whose prefix path is
+    only known once resolved at launch.
+
+    ``ctx.steam_app_id`` comes straight from the games.map v3 row — never
+    recompute it: ``generate_app_id`` is anchored on the launcher exe path, so
+    a derived id does not match the stored one.
+    """
+    app_id = getattr(getattr(plan, "context", None), "steam_app_id", None)
+    if not app_id:
+        return
+    try:
+        from unifideck.core.compat_bridge import link_prefix
+        from unifideck.utils.vdf_compat import resolve_live_steam_root
+
+        link_prefix(plan.prefix_path, app_id, resolve_live_steam_root())
+    except Exception:
+        logger.exception("[prefix_setup] compatdata bridge failed (non-fatal)")
 
 
 def _pin_final_tool(ctx: LaunchContext, tool: str) -> None:

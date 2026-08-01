@@ -66,6 +66,9 @@ export const rpcRoutes = {
   injectGameToAppinfo: "inject_game_to_appinfo",
   // Library cleanup (SyncRPCMixin)
   performFullCleanup: "perform_full_cleanup",
+  // Stale Steam compatdata reclaim (CompatdataRPCMixin)
+  scanStaleCompatdata: "scan_stale_compatdata",
+  deleteStaleCompatdata: "delete_stale_compatdata",
   // UI helpers (UIRPCMixin)
   injectHideCss: "inject_hide_css",
   setLanguagePreference: "set_language_preference",

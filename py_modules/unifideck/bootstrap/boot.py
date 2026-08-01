@@ -101,6 +101,7 @@ async def boot_plugin(
     await _boot_layer5_services(plugin, pipeline, decky_plugin_dir)
     await _boot_updater(plugin, decky_plugin_dir)
     await _start_store_background_tasks(plugin)
+    _wire_prefix_bridge(plugin)
     logger.info("[Unifideck] plugin loaded")
 
 
@@ -290,6 +291,36 @@ async def _boot_updater(plugin: Any, decky_plugin_dir: str) -> None:
     except Exception:
         logger.exception("[Updater] failed to wire — update checking disabled")
         plugin._updater_service = None
+
+
+def _wire_prefix_bridge(plugin: Any) -> None:
+    """Keep ``compatdata`` bridge links in step with the installed games.
+
+    Runs one sweep at boot (repairing prefixes that predate the bridge, and
+    pruning links left by an uninstall that happened while the plugin was
+    down), then re-sweeps after every sync — which is what makes an uninstall
+    disappear from Protontricks without waiting for a restart. Scheduled, not
+    awaited: the sweep touches the filesystem and must never delay boot.
+    """
+    import asyncio
+
+    from unifideck.core.types.events import Events
+    from unifideck.services.prefix_bridge import sync_bridges
+    from unifideck.utils.vdf_compat import resolve_live_steam_root
+
+    def _sweep(*_args: Any, **_kwargs: Any) -> None:
+        # Sync handler on purpose — the bus runs these via ``asyncio.to_thread``,
+        # which is where this blocking filesystem work belongs.
+        try:
+            sync_bridges(resolve_live_steam_root())
+        except Exception:
+            logger.exception("[Unifideck] prefix bridge sweep failed")
+
+    try:
+        plugin.bus.on(Events.SYNC_COMPLETE, _sweep)
+        asyncio.get_running_loop().create_task(asyncio.to_thread(_sweep))
+    except Exception:
+        logger.exception("[Unifideck] could not wire the prefix bridge")
 
 
 async def _start_store_background_tasks(plugin: Any) -> None:

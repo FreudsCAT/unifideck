@@ -1,0 +1,124 @@
+"""Keep ``compatdata`` bridge links in sync with the installed games.
+
+py_modules/unifideck/services/prefix_bridge.py
+
+One sweep that makes external Wine tooling (Protontricks) agree with
+reality. It is driven by ``games.map``, which lists exactly the games that
+are *installed* and carries the canonical Steam ``app_id`` in its v3 column —
+so "installed games only" falls out of the data source rather than needing a
+separate install-state query. Recomputing the appid here would be wrong:
+``generate_app_id`` is anchored on the launcher **exe path**, so a derived id
+does not match the stored one (verified on-device).
+
+Three actions, all idempotent:
+
+1. link every installed game's prefix into ``steamapps/compatdata/<appid>``;
+2. prune bridge links whose prefix is gone — this is what makes an uninstall
+   (or a manual prefix deletion, or a half-failed uninstall) drop out of
+   Protontricks, with no hook needed in any per-store uninstall path;
+3. ensure the Protontricks Flatpak can actually read the prefixes dir.
+
+Running it on a schedule rather than wiring each store's uninstall keeps the
+logic in one place and driven by ground truth (does the prefix exist?),
+instead of five call sites that can each forget.
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+from unifideck.core import compat_bridge
+from unifideck.services.shortcut.games_map import parse_games_map
+
+logger = logging.getLogger(__name__)
+
+_DATA_DIR = Path("~/.local/share/unifideck").expanduser()
+_GAMES_MAP = _DATA_DIR / "games.map"
+_UBISOFT_ID_MAP = _DATA_DIR / "ubisoft_id_map.json"
+
+
+def _ubisoft_prefix(game_id: str) -> Path:
+    """Ubisoft's per-game prefix — mirrors the launcher's ``_resolve_prefix``.
+
+    Ubisoft games can be installed to a user-picked location, so the absolute
+    prefix path is recorded in ``ubisoft_id_map.json``; the namespaced default
+    is the fallback for games installed before that existed.
+    """
+    import json
+
+    try:
+        data = json.loads(_UBISOFT_ID_MAP.read_text(encoding="utf-8"))
+        entry = data.get(game_id) if isinstance(data, dict) else None
+        recorded = entry.get("prefix_path") if isinstance(entry, dict) else None
+        if recorded:
+            return Path(recorded).expanduser()
+    except (OSError, ValueError):
+        pass
+    return compat_bridge.PREFIX_ROOT / "ubisoft" / game_id
+
+
+def resolve_prefix(store: str, game_id: str) -> Path:
+    """Prefix path for *store*/*game_id*, matching the launcher's resolution."""
+    if store == "ubisoft":
+        return _ubisoft_prefix(game_id)
+    return compat_bridge.PREFIX_ROOT / game_id
+
+
+def _installed_rows() -> list[tuple[str, str, int]]:
+    """``(store, game_id, app_id)`` for every games.map row with a real appid."""
+    try:
+        content = _GAMES_MAP.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    rows: list[tuple[str, str, int]] = []
+    for key, entry in parse_games_map(content).items():
+        store, _, game_id = key.partition(":")
+        # app_id 0 is the "not yet backfilled" marker — skip rather than
+        # bridge a bogus appid.
+        if store and game_id and entry.app_id:
+            rows.append((store, game_id, entry.app_id))
+    return rows
+
+
+def sync_bridges(steam_root: Path | str | None) -> dict[str, Any]:
+    """Link installed prefixes, prune dead links, grant Flatpak access.
+
+    Returns a small tally for logging. Never raises — this runs on boot and
+    after every sync, and must not be able to break either.
+    """
+    result: dict[str, Any] = {
+        "linked": 0, "already": 0, "pruned": 0, "failed": 0, "flatpak": "skipped",
+    }
+    if not steam_root:
+        logger.debug("[prefix_bridge] no steam root, skipping sweep")
+        return result
+
+    for store, game_id, app_id in _installed_rows():
+        prefix = resolve_prefix(store, game_id)
+        if not prefix.is_dir():
+            continue
+        action = compat_bridge.link_prefix(prefix, app_id, steam_root)
+        if action == "noop":
+            result["already"] += 1
+        elif action in ("created", "repointed", "displaced"):
+            result["linked"] += 1
+        elif action == "failed":
+            result["failed"] += 1
+
+    result["pruned"] = compat_bridge.prune_dead_bridges(steam_root)
+
+    try:
+        from unifideck.services.protontricks_access import ensure_access
+
+        result["flatpak"] = ensure_access()
+    except Exception:  # optional tooling — never fatal
+        logger.exception("[prefix_bridge] flatpak access check failed")
+        result["flatpak"] = "failed"
+
+    logger.info(
+        "[prefix_bridge] linked=%d already=%d pruned=%d failed=%d flatpak=%s",
+        result["linked"], result["already"], result["pruned"],
+        result["failed"], result["flatpak"],
+    )
+    return result

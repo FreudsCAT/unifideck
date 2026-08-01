@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from unifideck.rpc.mixins.compatdata import CompatdataRPCMixin
 from unifideck.rpc.mixins.sync_cleanup import CleanupRPCMixin
 from unifideck.services.installed_disk_info import collect_installed_disk_info
 from unifideck.services.size_cache import get_size_cache
@@ -23,12 +24,14 @@ logger = logging.getLogger(__name__)
 _SIZE_LOOKUP_TIMEOUT_S = 30.0
 
 
-class SyncRPCMixin(CleanupRPCMixin):
+class SyncRPCMixin(CleanupRPCMixin, CompatdataRPCMixin):
     """Library sync, progress, and game queries.
 
     The "Delete all Unifideck data" flow lives in
-    :class:`~unifideck.rpc.mixins.sync_cleanup.CleanupRPCMixin`
-    (mixed in here) to keep this file under the volumetry cap.
+    :class:`~unifideck.rpc.mixins.sync_cleanup.CleanupRPCMixin`, and the
+    stale-``compatdata`` reclaim in
+    :class:`~unifideck.rpc.mixins.compatdata.CompatdataRPCMixin` (both mixed
+    in here) to keep this file under the volumetry cap.
     """
 
     sync_service: Any
