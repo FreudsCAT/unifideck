@@ -18,6 +18,7 @@ import unifideck.compatibility.proton_helpers as pth_mod
 import unifideck.launcher.proton.infrastructure.ge_installer as ge_mod
 from unifideck.launcher.proton.compat import ge_fallback as gf
 from unifideck.launcher.proton.compat import prefix_init as pi
+from unifideck.launcher.proton.compat import save_migration as sm
 
 
 def _plan(prefix_root: Path, tool: str):
@@ -75,7 +76,7 @@ async def test_fallback_succeeds_persists_choice_and_restamps_marker(
     async def _fake_restore(*a, **k):
         pass
 
-    monkeypatch.setattr(pi, "_restore_or_migrate_saves", _fake_restore)
+    monkeypatch.setattr(sm, "restore_or_migrate_saves", _fake_restore)
     saved: dict = {}
 
     def _fake_save(store_game_id, tool_name):

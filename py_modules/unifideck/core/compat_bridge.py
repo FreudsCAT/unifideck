@@ -39,10 +39,18 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-#: Root every Unifideck prefix lives under. ``unlink_prefix`` refuses to
-#: remove a ``compatdata`` entry that does not point inside this tree, so a
+#: Default root Unifideck prefixes live under. ``unlink_prefix`` refuses to
+#: remove a ``compatdata`` entry that does not look like one of ours, so a
 #: user's own prefix can never be deleted by the bridge.
 PREFIX_ROOT = Path("~/.local/share/unifideck/prefixes").expanduser()
+
+#: Ubisoft (and any store honouring a user-picked install location) keeps its
+#: prefixes at ``<base>/prefixes/<store>/<id>`` under whatever base the user
+#: chose — e.g. ``~/Games/prefixes/ubisoft/80`` — so :data:`PREFIX_ROOT` alone
+#: does not recognise them. Matching on the ``prefixes`` path segment covers
+#: every base without hardcoding one; without it those bridges were
+#: unprunable, and a dangling link outlived the prefix forever.
+_PREFIX_SEGMENT = "prefixes"
 
 #: Suffix given to a pre-existing real ``compatdata`` directory that occupies
 #: the appid we need. Renamed rather than deleted — reversible, and never
@@ -183,10 +191,13 @@ def unlink_prefix(
 
 
 def _is_ours(link: Path) -> bool:
-    """True iff *link* resolves to something inside :data:`PREFIX_ROOT`.
+    """True iff *link* resolves to a Unifideck prefix.
 
-    Uses the *unresolved* target when the prefix is already gone (a dangling
-    bridge left by an uninstall still counts as ours and must be prunable).
+    That means inside :data:`PREFIX_ROOT`, or under any ``.../prefixes/...``
+    tree (:data:`_PREFIX_SEGMENT`) — the layout a user-picked storage base
+    produces. Uses the *unresolved* target when the prefix is already gone (a
+    dangling bridge left by an uninstall still counts as ours and must be
+    prunable).
     """
     root = PREFIX_ROOT.expanduser()
     try:
@@ -200,11 +211,17 @@ def _is_ours(link: Path) -> bool:
     except (ValueError, OSError, RuntimeError):
         pass
     # Dangling target: fall back to a lexical check so prune still works.
+    lexical = Path(os.path.normpath(candidate))
     try:
-        Path(os.path.normpath(candidate)).relative_to(root)
+        lexical.relative_to(root)
         return True
     except ValueError:
-        return False
+        pass
+    # An alternate storage base. Match the two layouts Unifideck actually
+    # writes — ``<base>/prefixes/<id>`` and ``<base>/prefixes/<store>/<id>`` —
+    # rather than any path that happens to contain the segment, so a user
+    # directory deeper inside such a tree is still off limits.
+    return _PREFIX_SEGMENT in (lexical.parent.name, lexical.parent.parent.name)
 
 
 def prune_dead_bridges(steam_root: Path | str | None) -> int:

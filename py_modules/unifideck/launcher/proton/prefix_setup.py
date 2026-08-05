@@ -89,7 +89,6 @@ async def _run_one(
     plan = _build_plan(ctx, state, python_bin, proton, session_env)
     try:
         await ensure_prefix_initialized(plan)
-        _bridge_into_compatdata(plan)
         vcreg_plan = (
             _build_plan(ctx, state, python_bin, vcreg_proton, session_env)
             if vcreg_proton is not None
@@ -130,7 +129,7 @@ def _bridge_into_compatdata(plan: Any) -> None:
         logger.exception("[prefix_setup] compatdata bridge failed (non-fatal)")
 
 
-def _pin_final_tool(ctx: LaunchContext, tool: str) -> None:
+def _pin_final_tool(ctx: LaunchContext, state: RuntimeState, tool: str) -> None:
     """Persist ``tool`` as this game's Proton so the next launch reuses it.
 
     Called only after a GE recovery, when the tool that succeeded differs from
@@ -139,6 +138,15 @@ def _pin_final_tool(ctx: LaunchContext, tool: str) -> None:
     sees a "Proton family change" against the GE-built prefix, and wipes +
     rebuilds it — exactly the redo-at-Play this module exists to kill.
 
+    The prefix root comes from ``state.prefix_path``, which ``proton_prepare``
+    resolved for this launch. It must NOT be rebuilt as
+    ``~/.local/share/unifideck/prefixes/<game_id>``: that layout is right for
+    every store except Ubisoft, whose path is read from ``ubisoft_id_map.json``
+    and can live under any storage base the user picked. Reconstructing it
+    stamped ``prefixes/80`` — a directory no launch ever opens — while the real
+    prefix at ``~/Games/prefixes/ubisoft/80`` kept its stale marker, so the
+    family-change reset fired again on the very next launch (2026-08-01).
+
     Mirrors ``compat/ge_fallback.py``: re-stamp the prefix marker AND write the
     per-game pin. ``save_proton_setting`` lives in the aiohttp-heavy
     ``compatibility`` package, so import it lazily to keep this launcher module
@@ -146,13 +154,27 @@ def _pin_final_tool(ctx: LaunchContext, tool: str) -> None:
     setup (the prefix is already built; worst case is a redo next launch).
     """
     from unifideck.launcher.proton.compat.prefix_init import _MARKER_NAME
+    from unifideck.launcher.proton.infrastructure.prefix_layout import (
+        normalize_prefix_root,
+    )
 
-    prefix_root = Path(
-        "~/.local/share/unifideck/prefixes",
-    ).expanduser() / ctx.game_id
+    resolved = getattr(state, "prefix_path", None)
+    if not resolved:
+        logger.warning(
+            "[prefix_setup] no resolved prefix for %s — not stamping the "
+            "marker (the per-game pin below still applies)", ctx.game_key,
+        )
+        _save_pin(ctx, tool)
+        return
+    prefix_root = normalize_prefix_root(resolved)
     with contextlib.suppress(OSError):
         prefix_root.mkdir(parents=True, exist_ok=True)
         (prefix_root / _MARKER_NAME).write_text(tool, encoding="utf-8")
+    _save_pin(ctx, tool)
+
+
+def _save_pin(ctx: LaunchContext, tool: str) -> None:
+    """Write the per-game Force-Compat pin (tier 1 of ``select_proton_version``)."""
     try:
         from unifideck.compatibility.proton_helpers import save_proton_setting
 
@@ -195,6 +217,35 @@ def _can_run_winetricks_verb(proton_path: Path | str | None) -> bool:
         return True
 
 
+def _bridge_now(
+    ctx: LaunchContext,
+    state: RuntimeState,
+    python_bin: Path | str,
+    default: tuple[Path | str | None, str],
+) -> None:
+    """Bridge this game's prefix into ``compatdata``, best-effort.
+
+    Wraps :func:`_bridge_into_compatdata` with the cheap plan build it needs
+    (a mkdir plus env assembly, no subprocess). Separate from the setup ladder
+    so it can run before every early return — the bridge must not depend on
+    whether there is setup work left to do.
+    """
+    default_path, default_tool = default
+    if not default_path:
+        return
+    try:
+        _bridge_into_compatdata(
+            _build_plan(
+                ctx, state, python_bin, (Path(default_path), default_tool), None,
+            ),
+        )
+    except Exception:
+        logger.exception(
+            "[prefix_setup] compatdata bridge skipped for %s (non-fatal)",
+            ctx.game_key,
+        )
+
+
 def _compat_pending(
     ctx: LaunchContext,
     state: RuntimeState,
@@ -223,6 +274,45 @@ def _compat_pending(
             ctx.game_key,
         )
         return True
+
+
+def _nothing_to_do(
+    ctx: LaunchContext,
+    state: RuntimeState,
+    python_bin: Path | str,
+    default: tuple[Path | str | None, str],
+) -> bool:
+    """Whether :func:`setup_prefix` should return without touching anything.
+
+    Two reasons, both of which must short-circuit BEFORE the GE reroute:
+
+    **Ubisoft.** ``apply_prefix_compat`` skips the store outright (UPC installs
+    its own redistributables), so the only step left would be
+    ``ensure_prefix_initialized`` — and running that is what DELETED a user's
+    Rayman Origins on 2026-08-01. Ubisoft games live inside the prefix, so its
+    Proton-family reset is data loss. Naming the store here keeps the
+    destructive path unreachable rather than relying on the pending-check
+    below happening to say "nothing pending".
+
+    **An already-warmed prefix.** Skipping keeps a Proton switch cheap: the
+    reroute would otherwise borrow GE on EVERY launch of a fully set-up game,
+    and each Proton change makes Proton re-run ``wineboot -u`` and rewrite
+    ``system.reg``.
+    """
+    if ctx.store == "ubisoft":
+        logger.info(
+            "[prefix_setup] skipping setup for ubisoft:%s — UPC owns this "
+            "prefix (compat is skipped and a reset would delete the game)",
+            ctx.game_id,
+        )
+        return True
+    if not _compat_pending(ctx, state, python_bin, default):
+        logger.debug(
+            "[prefix_setup] nothing pending for %s under proton=%s",
+            ctx.game_key, default[1],
+        )
+        return True
+    return False
 
 
 async def _preempt_incapable_proton(
@@ -329,15 +419,14 @@ async def setup_prefix(
         steam_app_id=ctx.steam_app_id, store_game_id=ctx.game_key,
     )
 
-    # Step 0. A warmed prefix must not be touched. Skipping here is what keeps
-    # a Proton switch cheap: the reroute below would otherwise borrow GE on
-    # EVERY launch of a fully set-up game, and each Proton change makes Proton
-    # re-run ``wineboot -u`` and rewrite ``system.reg``.
-    if not _compat_pending(ctx, state, python_bin, (default_path, default_tool)):
-        logger.debug(
-            "[prefix_setup] nothing pending for %s under proton=%s",
-            ctx.game_key, default_tool,
-        )
+    # Bridge FIRST, before any early return: it is a cheap idempotent symlink
+    # (``link_prefix`` returns "noop" when already correct) and it is the only
+    # thing that makes the prefix reachable from Protontricks. Gating it behind
+    # the work-pending checks below would mean an already-warmed prefix — the
+    # common case on every relaunch — never gets bridged or repaired.
+    _bridge_now(ctx, state, python_bin, (default_path, default_tool))
+
+    if _nothing_to_do(ctx, state, python_bin, (default_path, default_tool)):
         return default_tool, False
 
     if await _preempt_incapable_proton(
@@ -385,5 +474,5 @@ async def _recover_from_hang(
         ctx.game_key, default_tool, ge_tool,
     )
     await _run_one(ctx, state, python_bin, (ge_path, ge_tool), session_env)
-    _pin_final_tool(ctx, ge_tool)
+    _pin_final_tool(ctx, state, ge_tool)
     return ge_tool, True

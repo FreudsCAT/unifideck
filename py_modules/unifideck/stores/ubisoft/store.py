@@ -29,6 +29,7 @@ etc. — every method is delegated to the appropriate sub-component.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -134,9 +135,53 @@ class UbisoftStore(StoreBase):
                     "for %s → auth refreshed",
                     game_id,
                 )
+            else:
+                await self._warn_if_stored_credential_is_dead(
+                    game_id, prefix_path,
+                )
         except Exception as e:
             logger.warning(
                 "[UbisoftStore] post-play session capture failed: %s", e,
+            )
+
+    async def _warn_if_stored_credential_is_dead(
+        self, game_id: str, prefix_path: str,
+    ) -> None:
+        """Tell the user when re-signing-in is the only way out.
+
+        ``capture`` returning nothing is normally a healthy no-op. But when the
+        prefix we injected a signed-in credential into comes back signed OUT,
+        the stored token is dead server-side and every future install will
+        inject it again — a silent loop of sign-in prompts with no UI affordance
+        to break it. Say so, and name the one action that fixes it.
+
+        Report-only: the credential is never purged here. Sign-out is
+        destructive and stays the user's decision.
+        """
+        try:
+            dead = await asyncio.to_thread(
+                self._session.stored_credential_was_rejected, prefix_path,
+            )
+        except Exception:
+            logger.exception("[UbisoftStore] credential health check failed")
+            return
+        if not dead:
+            return
+        logger.warning(
+            "[UbisoftStore] UPC signed out of %s despite the injected "
+            "credential — the stored Ubisoft token is no longer accepted. "
+            "Sign out and back in (QAM → Ubisoft) to replace it; until then "
+            "every install will keep asking for a sign-in.",
+            game_id,
+        )
+        with contextlib.suppress(Exception):
+            await self._bus.emit(
+                Events.STORE_AUTH_FAILED,
+                store="ubisoft",
+                error=(
+                    "Ubisoft sign-in expired — sign out and back in to "
+                    "reconnect your account"
+                ),
             )
 
     def _rebuild_auth_after_injection(self) -> None:

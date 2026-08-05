@@ -125,7 +125,8 @@ async def test_retry_with_ge_on_compat_timeout(tmp_path, wired, monkeypatch):
     assert (tool, recovered) == ("GE-Proton11-1", True)
     # A recovery pins the winning Proton so the next launch reuses it.
     wired.pin.assert_called_once()
-    assert wired.pin.call_args.args[1] == "GE-Proton11-1"
+    # (ctx, state, tool) — state carries the resolved prefix the marker goes in.
+    assert wired.pin.call_args.args[2] == "GE-Proton11-1"
 
 
 async def test_no_retry_when_hung_proton_was_already_ge(tmp_path, wired, monkeypatch):

@@ -159,3 +159,45 @@ def test_unlink_removes_our_own_bridge(env):
 def test_unlink_is_idempotent_when_nothing_is_there(env):
     _, steam_root = env
     assert compat_bridge.unlink_prefix(999, steam_root) is True
+
+
+# ── prefixes outside PREFIX_ROOT (user-picked storage bases) ──────
+
+
+def test_ubisoft_prefix_on_another_base_counts_as_ours(env, tmp_path):
+    """``~/Games/prefixes/ubisoft/80`` is ours even though it isn't under the root.
+
+    Ubisoft records a per-game prefix under whatever install base the user
+    picked, so ``PREFIX_ROOT`` alone never matched one — leaving those bridges
+    unprunable and a dangling link outliving the prefix forever.
+    """
+    _, steam_root = env
+    prefix = tmp_path / "Games" / "prefixes" / "ubisoft" / "80"
+    prefix.mkdir(parents=True)
+
+    assert compat_bridge.link_prefix(prefix, 3124767362, steam_root) == "created"
+    assert compat_bridge.unlink_prefix(3124767362, steam_root) is True
+    assert prefix.is_dir()  # only the bridge went
+
+
+def test_dangling_ubisoft_bridge_is_prunable(env, tmp_path):
+    """The case that motivated this: the prefix is gone, the link must follow."""
+    _, steam_root = env
+    prefix = tmp_path / "Games" / "prefixes" / "ubisoft" / "80"
+    prefix.mkdir(parents=True)
+    compat_bridge.link_prefix(prefix, 3124767362, steam_root)
+    prefix.rmdir()
+
+    assert compat_bridge.prune_dead_bridges(steam_root) == 1
+
+
+def test_a_dir_deeper_inside_a_prefixes_tree_is_not_ours(env, tmp_path):
+    """The match is the prefix itself, not anything nested under one."""
+    _, steam_root = env
+    inner = tmp_path / "Games" / "prefixes" / "ubisoft" / "80" / "drive_c" / "users"
+    inner.mkdir(parents=True)
+    link = steam_root / "steamapps" / "compatdata" / "777"
+    link.symlink_to(inner, target_is_directory=True)
+
+    assert compat_bridge.unlink_prefix(777, steam_root) is False
+    assert link.is_symlink()
