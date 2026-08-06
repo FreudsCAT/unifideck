@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 from unifideck.core.compat_bridge import PREFIX_ROOT
@@ -45,6 +46,9 @@ logger = logging.getLogger(__name__)
 #: The only Protontricks distribution that needs a permission grant. Native
 #: and pip installs read the bridge symlink with no sandbox in the way.
 FLATPAK_APP_ID = "com.github.Matoking.protontricks"
+
+#: Access-mode suffixes Flatpak appends to a ``filesystems=`` entry.
+_GRANT_MODES = (":ro", ":rw", ":create")
 
 _TIMEOUT = 15.0
 
@@ -104,6 +108,28 @@ def has_access(prefixes: Path) -> bool:
     return False
 
 
+def _filesystem_entries(show_output: str) -> Iterator[str]:
+    """Yield the non-empty ``filesystems=`` entries of *show_output*.
+
+    There may be more than one ``filesystems=`` line; every one contributes.
+    """
+    for line in show_output.splitlines():
+        key, sep, value = line.partition("=")
+        if not sep or key.strip() != "filesystems":
+            continue
+        for raw in value.split(";"):
+            if raw.strip():
+                yield raw.strip()
+
+
+def _strip_mode_suffix(item: str) -> str:
+    """Drop a trailing ``:ro``/``:rw``/``:create`` access mode from *item*."""
+    for mode in _GRANT_MODES:
+        if item.endswith(mode):
+            return item[: -len(mode)]
+    return item
+
+
 def _granted_paths(show_output: str) -> list[str]:
     """Extract filesystem grants from ``flatpak override --show`` output.
 
@@ -116,20 +142,10 @@ def _granted_paths(show_output: str) -> list[str]:
     placeholder tokens (``home``, ``host``, ``xdg-*``) which are not paths.
     """
     out: list[str] = []
-    for line in show_output.splitlines():
-        key, sep, value = line.partition("=")
-        if not sep or key.strip() != "filesystems":
-            continue
-        for raw in value.split(";"):
-            item = raw.strip()
-            if not item:
-                continue
-            for mode in (":ro", ":rw", ":create"):
-                if item.endswith(mode):
-                    item = item[: -len(mode)]
-                    break
-            if item.startswith(("/", "~")):
-                out.append(item)
+    for raw in _filesystem_entries(show_output):
+        item = _strip_mode_suffix(raw)
+        if item.startswith(("/", "~")):
+            out.append(item)
     return out
 
 

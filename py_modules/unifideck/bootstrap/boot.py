@@ -36,6 +36,7 @@ Mutates the plugin in place. Never raises.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,11 @@ from unifideck.services.bootstrap import (
 from unifideck.stores import StoreRegistry
 
 logger = logging.getLogger(__name__)
+
+#: Strong references to fire-and-forget boot tasks. Without this the event loop
+#: may garbage-collect a task that is still running; entries remove themselves
+#: on completion via ``add_done_callback``.
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 
 async def boot_plugin(
@@ -305,7 +311,10 @@ def _wire_prefix_bridge(plugin: Any) -> None:
     import asyncio
 
     from unifideck.core.types.events import Events
-    from unifideck.services.prefix_bridge import sync_bridges
+    from unifideck.services.prefix_bridge import (
+        reclaim_redundant_compatdata,
+        sync_bridges,
+    )
     from unifideck.utils.vdf_compat import resolve_live_steam_root
 
     def _sweep(*_args: Any, **_kwargs: Any) -> None:
@@ -316,9 +325,43 @@ def _wire_prefix_bridge(plugin: Any) -> None:
         except Exception:
             logger.exception("[Unifideck] prefix bridge sweep failed")
 
+    async def _reclaim() -> None:
+        """Delete Steam-made prefixes Unifideck initialised and abandoned.
+
+        Boot-only, and deliberately not wired to ``SYNC_COMPLETE``: a game can
+        be running by then, and there is no reason to re-scan on every sync.
+        Boot is also the one moment nothing can hold a prefix lock yet.
+
+        Needs ``shortcuts.vdf`` for the user-owned veto, so it goes through the
+        shortcut service rather than reading the file itself.
+        """
+        try:
+            shortcut_svc = getattr(plugin.services, "shortcut", None)
+            shortcuts: dict[str, Any] = {}
+            if shortcut_svc is not None:
+                await shortcut_svc._load_shortcuts()
+                raw = getattr(shortcut_svc, "_shortcuts", {}) or {}
+                if isinstance(raw, dict):
+                    shortcuts = raw.get("shortcuts", raw)
+            steam_root = await asyncio.to_thread(resolve_live_steam_root)
+            await asyncio.to_thread(
+                reclaim_redundant_compatdata, steam_root, shortcuts,
+            )
+        except Exception:
+            logger.exception("[Unifideck] compatdata reclaim failed")
+
     try:
         plugin.bus.on(Events.SYNC_COMPLETE, _sweep)
-        asyncio.get_running_loop().create_task(asyncio.to_thread(_sweep))
+        loop = asyncio.get_running_loop()
+        for coro, name in (
+            (asyncio.to_thread(_sweep), "prefix-bridge-sweep"),
+            (_reclaim(), "compatdata-reclaim"),
+        ):
+            # Hold a strong reference until completion, else the loop is free
+            # to garbage-collect a still-running task (ruff RUF006).
+            task = loop.create_task(coro, name=name)
+            _BACKGROUND_TASKS.add(task)
+            task.add_done_callback(_BACKGROUND_TASKS.discard)
     except Exception:
         logger.exception("[Unifideck] could not wire the prefix bridge")
 

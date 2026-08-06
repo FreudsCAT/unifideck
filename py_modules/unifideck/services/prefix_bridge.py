@@ -81,6 +81,96 @@ def _installed_rows() -> list[tuple[str, str, int]]:
     return rows
 
 
+def _live_prefixes() -> set[Path]:
+    """Resolved prefixes of every installed game, for the last-ditch guard."""
+    live: set[Path] = set()
+    for store, game_id, _app_id in _installed_rows():
+        try:
+            live.add(resolve_prefix(store, game_id).resolve())
+        except OSError:
+            continue
+    return live
+
+
+def _is_live_prefix(path: str, live: set[Path]) -> bool:
+    """True iff *path* is (or cannot be proven not to be) a live game prefix.
+
+    Normally impossible — ours live under ``PREFIX_ROOT``, not ``compatdata`` —
+    but a user-configured prefix root could overlap and deletion is
+    irreversible. An unresolvable path counts as live (fail closed).
+    """
+    try:
+        resolved = Path(path).resolve()
+    except OSError:
+        return True
+    if resolved in live:
+        logger.info("[prefix_bridge] %s is a live game prefix, keeping it", path)
+        return True
+    return False
+
+
+def reclaim_redundant_compatdata(
+    steam_root: Path | str | None, shortcuts: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Delete Steam-made ``compatdata`` prefixes that Unifideck initialised.
+
+    Steam creates a full Proton prefix at ``steamapps/compatdata/<appid>``
+    (300-800 MB) whenever a shortcut launches with a compat tool assigned, and
+    nothing prunes it on uninstall. The launcher points ``WINEPREFIX`` at our
+    own per-game directory, so that copy is dead weight, and Protontricks used
+    to list it *instead of* the real prefix.
+
+    Authorisation comes from a marker file **inside** the directory, never from
+    the appid — see ``services/shortcut/compatdata_scan``. Three guards, all of
+    which must pass:
+
+    1. the directory carries a ``.unifideck*`` marker we wrote;
+    2. its appid is not a *user*-owned shortcut, and its ``pfx.lock`` is not
+       currently held (both in ``compatdata_scan.scan``);
+    3. it is not the live prefix of an installed game (checked here, because
+       only this module resolves prefixes from ``games.map``).
+
+    Never raises: runs at boot and must not be able to break it.
+    """
+    from unifideck.core.safe_delete import safe_rmtree
+    from unifideck.services.shortcut import compatdata_scan
+
+    tally: dict[str, Any] = {
+        "deleted": 0, "freed_bytes": 0, "kept": 0, "skipped_in_use": 0,
+    }
+    if not steam_root:
+        return tally
+
+    result = compatdata_scan.scan(steam_root, shortcuts or {})
+    live = _live_prefixes()
+
+    for entry in result["entries"]:
+        if entry.get("in_use"):
+            tally["skipped_in_use"] += 1
+            continue
+        if not entry["deletable"] or _is_live_prefix(entry["path"], live):
+            tally["kept"] += 1
+            continue
+        path = Path(entry["path"])
+        if safe_rmtree(path):
+            logger.info(
+                "[prefix_bridge] reclaimed %s (%.0f MB, proof=%s, class=%s)",
+                path, entry["size_bytes"] / 2**20, entry["marker"],
+                entry["classification"],
+            )
+            tally["deleted"] += 1
+            tally["freed_bytes"] += entry["size_bytes"]
+        else:
+            logger.warning("[prefix_bridge] could not reclaim %s", path)
+
+    if tally["deleted"]:
+        logger.info(
+            "[prefix_bridge] reclaimed %d stale prefixes, freed %.2f GB",
+            tally["deleted"], tally["freed_bytes"] / 2**30,
+        )
+    return tally
+
+
 def sync_bridges(steam_root: Path | str | None) -> dict[str, Any]:
     """Link installed prefixes, prune dead links, grant Flatpak access.
 

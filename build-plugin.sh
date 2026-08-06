@@ -163,13 +163,34 @@ prebuild_binaries() {
     # Helper function: Downloads to a `.new` file, marks executable,
     # and runs a quick validation command (usually `--version`) before
     # swapping it in place. This prevents corrupt downloads from breaking the plugin.
+    #
+    # Skips the download entirely when the binary we already have was fetched
+    # from this exact URL. Every URL in the manifest is version-pinned (e.g.
+    # .../download/0.20.43/legendary_linux_x86_64), so "same URL" *is* "same
+    # version" — a bump changes the URL and re-downloads on its own.
+    #
+    # This matters more than it looks: the five binaries are ~28 MB combined and
+    # were re-fetched on EVERY build. GitHub's release-asset throughput to a
+    # Deck is not dependable (measured at ~100 KB/s, turning prebuild alone into
+    # 274 s, while the same assets can arrive in seconds on a good day). That
+    # single step was dominating total build time and made it look like the
+    # whole script had regressed.
     _download_bin() {
         local name="$1" url="$2" dest="$3" validate_cmd="$4"
+        local stamp="$dest.url"
         log_info "Checking $name..."
-        if curl -sL "$url" -o "$dest.new"; then
+
+        # Cache hit: binary present, executable, and stamped with this URL.
+        if [ -x "$dest" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$url" ]; then
+            log_success "$name up to date (cached)"
+            return 0
+        fi
+
+        if curl -fsSL "$url" -o "$dest.new"; then
             chmod +x "$dest.new"
             if eval "$validate_cmd" > /dev/null 2>&1; then
                 mv "$dest.new" "$dest"
+                printf '%s\n' "$url" > "$stamp"
                 log_success "$name downloaded/verified"
             else
                 rm -f "$dest.new"
@@ -197,12 +218,19 @@ prebuild_binaries() {
         '"$SCRIPT_DIR/bin/comet.new" --version'
 
     # Winetricks is a shell script, so it doesn't have a reliable --version flag.
-    # Instead, we validate it by checking if it contains the "WINETRICKS_VERSION" string.
+    # Validated by checking for the "WINETRICKS_VERSION" string instead, which is
+    # why it cannot reuse _download_bin — but it gets the same URL stamp so a
+    # rebuild skips it too.
     log_info "Checking winetricks..."
-    if curl -sL "$WINETRICKS_URL" -o "$SCRIPT_DIR/bin/winetricks.new"; then
+    if [ -x "$SCRIPT_DIR/bin/winetricks" ] \
+            && [ "$(cat "$SCRIPT_DIR/bin/winetricks.url" 2>/dev/null)" \
+                 = "$WINETRICKS_URL" ]; then
+        log_success "winetricks up to date (cached)"
+    elif curl -fsSL "$WINETRICKS_URL" -o "$SCRIPT_DIR/bin/winetricks.new"; then
         chmod +x "$SCRIPT_DIR/bin/winetricks.new"
         if grep -q "WINETRICKS_VERSION" "$SCRIPT_DIR/bin/winetricks.new"; then
             mv "$SCRIPT_DIR/bin/winetricks.new" "$SCRIPT_DIR/bin/winetricks"
+            printf '%s\n' "$WINETRICKS_URL" > "$SCRIPT_DIR/bin/winetricks.url"
             log_success "winetricks downloaded/verified"
         else
             rm -f "$SCRIPT_DIR/bin/winetricks.new"
@@ -586,6 +614,12 @@ _stage_plugin_files() {
               rollup.config.mjs requirements.txt LICENSE README.md; do
         [ -f "$SCRIPT_DIR/$f" ] && cp "$SCRIPT_DIR/$f" "$dest/"
     done
+
+    # Build-time leftovers that must never ship: the per-binary download stamps
+    # (see prebuild_binaries) and any half-finished download, plus mypy's cache,
+    # which the copy above otherwise drags in from py_modules/.
+    rm -f "$dest"/bin/*.url "$dest"/bin/*.new
+    rm -rf "$dest/py_modules/.mypy_cache"
 }
 
 # ── Build with Decky CLI (Docker/Podman) ─────────────────────

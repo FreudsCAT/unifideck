@@ -43,17 +43,30 @@ websockets>=13.1,<17
 # /etc/machine-id via scrypt. Standard library has no AEAD
 # primitive, so we depend on the canonical pyca lib.
 #
-# Floor 44.0.1 is mandatory:
-#   CVE-2024-26130 (HIGH 7.5) NULL deref + segfault in PKCS#12
-#     serialization — fixed in 42.0.4 but we go higher because:
-#   CVE-2024-12797 (HIGH 7.5) the wheels in 42.0.0–44.0.0 ship a
-#     statically-linked vulnerable OpenSSL (Bleichenbacher timing
-#     oracle on RSA key exchange). 44.0.1 is the earliest wheel
-#     with a patched OpenSSL. Since pyca/cryptography ships
-#     pre-built wheels on PyPI and Decky Loader installs from
-#     PyPI, the OpenSSL bundled in the wheel is what runs in
-#     production — the system OpenSSL doesn't shield us here.
-cryptography>=44.0.1,<49.0
+# The bundled-wheel rule governs every bound here: pyca/cryptography
+# ships pre-built wheels on PyPI and Decky Loader installs from PyPI,
+# so the OpenSSL statically linked into the wheel is what runs in
+# production. The system OpenSSL does not shield us, which is why the
+# floor tracks wheel content and not just Python-level patches.
+#
+# Floor 50.0.0 is mandatory (pip-audit --strict, hard gate on PR):
+#   PYSEC-2026-3552 pkcs7_decrypt_* reported the outcome of an RSA
+#     RecipientInfo decryption in distinguishable ways, disclosing the
+#     recovered key length. Fixed in 50.0.0 only.
+#   PYSEC-2026-3553 duplicate self-signed certs in an invalid chain
+#     recursed on the same candidate, giving exponential blowup within
+#     the max-depth limit. Fixed in 49.0.0.
+#   PYSEC-2026-3554 name-constraint escape: a leaf wildcard DNS SAN of
+#     *.example.com was accepted under an intermediate CA constrained
+#     to foo.example.com. Fixed in 49.0.0.
+#
+# The superseded 44.0.1 floor covered CVE-2024-26130 (PKCS#12 NULL
+# deref) and CVE-2024-12797 (vulnerable OpenSSL in the 42.0.0-44.0.0
+# wheels); both are long since below the current floor.
+#
+# 50.0.0 ships cp311-abi3 manylinux x86_64 wheels, which is the ABI
+# Decky's bundled Python 3.11 resolves.
+cryptography>=50.0.0,<51.0
 
 # JSON Schema validation for defaults/config.json and user
 # overrides at plugin boot. Used by config/validator.py to catch
