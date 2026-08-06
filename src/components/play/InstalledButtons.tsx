@@ -18,6 +18,8 @@ import { useTranslation } from "react-i18next";
 import { call } from "@decky/api";
 import { FaPlay, FaSyncAlt, FaTimes, FaTrash } from "react-icons/fa";
 import { SteamControllerIcon, SteamGearIcon } from "../shared";
+import { useRPC } from "../../api/useRPC";
+import { rpcRoutes } from "../../api/rpc-routes";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useGameActions } from "../../hooks/useGameActions";
 import { useToast } from "../../hooks/useToast";
@@ -98,6 +100,15 @@ export const InstalledButtons: FC<Props> = ({
   const toast = useToast();
   const [isRunning, setIsRunning] = useState(false);
   const [hasUpdate, setHasUpdate] = useState(false);
+  const checkGameUpdate = useRPC<[string, string], UpdateCheckResponse>(
+    rpcRoutes.checkGameUpdate,
+  );
+  // Depend on the identifiers, not the ``Game`` object: ``useGameInfo`` is
+  // stale-while-revalidate on a 5 s TTL, so every background refresh mints a
+  // new object identity and would otherwise re-fire the check for the same
+  // game (and, before the backend cache, a fresh legendary login with it).
+  const gameStore = game?.store;
+  const gameId = game?.id;
 
   // NOTE: we deliberately do NOT touch Steam's Force-Compatibility here.
   // This used to capture it into proton_settings.json and clear it so
@@ -131,17 +142,20 @@ export const InstalledButtons: FC<Props> = ({
   }, [appId]);
 
   // Update check — one-shot on mount. The backend RPC takes
-  // (store, game_id) and returns { has_update } — passing the raw
-  // appId (the old call) threw "missing argument: game_id" on every
-  // page load and update detection never worked.
+  // (store, game_id) and returns { has_update }.
+  //
+  // This MUST go through ``useRPC``, not a bare ``call()``. Every backend
+  // method is wrapped by ``@auto_wrap_rpc_methods``, so a return value with
+  // no top-level ``success`` key comes back nested:
+  //   {"has_update": true} -> {success: true, error: null, data: {has_update: true}}
+  // Reading ``res.has_update`` off that envelope is always ``undefined``,
+  // which is why the Update button never appeared for ANY store. ``useRPC``
+  // unwraps the envelope (and throws on a failed one — the catch below
+  // fails open to "no update", which is the right default).
   useEffect(() => {
-    if (!game) return;
+    if (!gameStore || !gameId) return;
     let cancelled = false;
-    call<[string, string], UpdateCheckResponse>(
-      "check_game_update",
-      game.store,
-      game.id,
-    )
+    checkGameUpdate(gameStore, gameId)
       .then((res) => {
         if (cancelled) return;
         setHasUpdate(Boolean(res?.has_update));
@@ -152,7 +166,7 @@ export const InstalledButtons: FC<Props> = ({
     return () => {
       cancelled = true;
     };
-  }, [game]);
+  }, [checkGameUpdate, gameStore, gameId]);
 
   const onPlay = useCallback(() => {
     if (!game) return;
@@ -166,8 +180,13 @@ export const InstalledButtons: FC<Props> = ({
   const onUpdate = useCallback(async () => {
     if (!game) return;
     try {
+      // Deliberately a raw ``call`` rather than ``useRPC``: this handler
+      // wants to SHOW the failure reason in a toast, and ``useRPC`` throws
+      // on a non-success envelope. ``update_game`` returns a dict that
+      // already carries ``success``, so the wrapper keeps both keys at the
+      // top level of the envelope — reading them here is correct.
       const res = await call<[number], { success: boolean; error?: string }>(
-        "update_game",
+        rpcRoutes.updateGame,
         appId,
       );
       if (res?.success) {

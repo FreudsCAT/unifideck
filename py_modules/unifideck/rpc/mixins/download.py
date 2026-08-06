@@ -39,6 +39,7 @@ from unifideck.core.types.identifiers import (
     validate_store_id,
 )
 from unifideck.rpc.errors import RpcError
+from unifideck.services import update_check_cache
 from unifideck.utils import mounts
 
 logger = logging.getLogger(__name__)
@@ -200,6 +201,12 @@ class DownloadRPCMixin:
             title=title,
             is_update=True,
         )
+        if result.success:
+            # The cached scan still lists this game as updatable. Drop it so
+            # the button stops offering an update that is already queued,
+            # and so the post-install re-check sees the new version instead
+            # of a stale "yes" for the rest of the TTL.
+            update_check_cache.invalidate(store)
         return {"success": result.success, "error": result.error}
 
     async def uninstall_game(self, app_id: int, delete_prefix: bool = False) -> Any:
@@ -254,9 +261,22 @@ class DownloadRPCMixin:
         returns a ``list[str]`` of game ids with pending updates.
         Earlier this mixin called ``check_update(game_id)`` which
         matched neither the name nor the signature.
+
+        The Play section fires this on every App-Details mount, so the
+        bulk scan goes through :mod:`~unifideck.services.update_check_cache`
+        — otherwise each page open costs a full Epic login (or one HTTPS
+        request per installed GOG game) to answer a single boolean.
+
+        Returns ``{"has_update": bool}``. Note that the RPC wrapper nests
+        that under ``data`` (the dict has no ``success`` key), so frontend
+        callers must unwrap the envelope — reading ``res.has_update``
+        directly is why the Update button never appeared for any store.
         """
         store, game_id = self._validate_pair(store, game_id)
-        updatable = await self._require_store(store).check_for_updates()
+        target = self._require_store(store)
+        updatable = await update_check_cache.get_or_fetch(
+            store, target.check_for_updates,
+        )
         return {"has_update": game_id in (updatable or [])}
 
     async def get_gog_game_languages(self, game_id: str) -> Any:
