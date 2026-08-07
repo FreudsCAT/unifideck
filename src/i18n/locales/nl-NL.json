@@ -401,6 +401,12 @@
     "cancel": "Annuleren",
     "uninstall": "Deïnstalleren"
   },
+  "updateModal": {
+    "title": "Update beschikbaar",
+    "description": "Er is een update beschikbaar voor {{title}}. Zonder deze update werken online functies mogelijk niet.",
+    "updateNow": "Nu bijwerken",
+    "playAnyway": "Toch spelen"
+  },
   "languageSettings": {
     "title": "TAAL",
     "label": "Weergavetaal",
@@ -739,6 +745,7 @@
     "cancel": "Annuleren",
     "removeFromQueue": "Verwijderen",
     "play": "Spelen",
+    "update": "Bijwerken",
     "outcome": {
       "queued": "In wachtrij",
       "downloading": "Downloaden",

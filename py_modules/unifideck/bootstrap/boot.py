@@ -106,6 +106,7 @@ async def boot_plugin(
     _boot_layer4_stores(plugin, decky_plugin_dir)
     await _boot_layer5_services(plugin, pipeline, decky_plugin_dir)
     await _boot_updater(plugin, decky_plugin_dir)
+    await _boot_update_sweep(plugin)
     await _start_store_background_tasks(plugin)
     _wire_prefix_bridge(plugin)
     logger.info("[Unifideck] plugin loaded")
@@ -297,6 +298,29 @@ async def _boot_updater(plugin: Any, decky_plugin_dir: str) -> None:
     except Exception:
         logger.exception("[Updater] failed to wire — update checking disabled")
         plugin._updater_service = None
+
+
+async def _boot_update_sweep(plugin: Any) -> None:
+    """Wire the background game-update sweep.
+
+    Like the self-updater, this only needs the EventBus and the store
+    registry, so it is constructed outside the ServiceContainer and a
+    failure here never blocks boot — it just means update state falls
+    back to being discovered on demand.
+
+    The service is hung off ``plugin`` (not ``plugin.services``) because
+    ``DownloadRPCMixin`` reaches it by ``getattr`` on ``self``, the same
+    contract ``UpdaterRPCMixin`` uses for ``_updater_service``.
+    """
+    try:
+        from unifideck.services.update_sweep import UpdateSweepService
+
+        svc = UpdateSweepService(plugin.bus, plugin.registry)
+        plugin._update_sweep_service = svc
+        await svc.start()
+    except Exception:
+        logger.exception("[UpdateSweep] failed to wire — updates checked on demand")
+        plugin._update_sweep_service = None
 
 
 def _wire_prefix_bridge(plugin: Any) -> None:

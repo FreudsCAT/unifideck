@@ -49,6 +49,7 @@ export const rpcRoutes = {
   getDownloadQueue: "get_download_queue",
   clearDownloadHistory: "clear_download_history",
   checkGameUpdate: "check_game_update",
+  getAvailableUpdates: "get_available_updates",
   updateGame: "update_game",
   // Game info / metadata (StoreRPCMixin)
   getGameInfo: "get_game_info",

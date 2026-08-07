@@ -36,14 +36,13 @@ from collections.abc import Awaitable, Callable
 
 # How long a scan result is trusted.
 #
-# Ten minutes is the balance point: repeat page opens within a browsing
-# session are free, while a genuinely new update (or a scan that failed
-# transiently — ``check_for_updates`` fails open with an empty list, and
-# an empty list is indistinguishable from "nothing to update") is picked
-# up on its own within the session rather than needing a plugin restart.
-# Queueing an update also invalidates its store explicitly, so the common
-# "I just updated this" case never waits for the TTL.
-TTL_S = 600
+# Deliberately LONGER than ``UpdateSweepService.POLL_INTERVAL_SECONDS``
+# (6 h): the sweep is what keeps this fresh, and the TTL is only the
+# safety net for when it isn't running (wedged task, a build with the
+# sweep disabled). A TTL shorter than the sweep interval would put the
+# 5-10 s legendary login back in front of the user between sweeps, which
+# is the whole thing the sweep exists to remove.
+TTL_S = 7 * 3600
 
 # store -> (game ids with updates, monotonic timestamp of the scan)
 _CACHE: dict[str, tuple[list[str], float]] = {}
@@ -103,6 +102,17 @@ async def get_or_fetch(
         value = list(await fetch())
         _CACHE[store] = (value, time.monotonic())
         return list(value)
+
+
+def peek(store: str, *, ttl: float = TTL_S) -> list[str] | None:
+    """Return ``store``'s cached scan, or ``None`` on a miss.
+
+    Never scans. This is what the RPC path uses: answering a page open
+    must not block on an Epic login, so a miss returns ``None`` and the
+    caller schedules a background refresh instead of waiting for one.
+    """
+    hit = _fresh(store, ttl)
+    return list(hit) if hit is not None else None
 
 
 def invalidate(store: str) -> None:

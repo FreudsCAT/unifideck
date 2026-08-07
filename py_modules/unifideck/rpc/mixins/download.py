@@ -207,7 +207,13 @@ class DownloadRPCMixin:
             # and so the post-install re-check sees the new version instead
             # of a stale "yes" for the rest of the TTL.
             update_check_cache.invalidate(store)
-        return {"success": result.success, "error": result.error}
+        # Return the ``Result`` dataclass, not a bare ``{success, error}``
+        # dict — for the same reason ``uninstall_game`` does. A dict that
+        # already carries ``success`` is folded INTO the envelope, leaving
+        # ``data`` null, and ``useRPC`` hands callers only ``data``. The
+        # dataclass lands in ``data`` as ``{success, error, ...}`` so the
+        # frontend's mutation hooks see it.
+        return Result(success=result.success, error=result.error)
 
     async def uninstall_game(self, app_id: int, delete_prefix: bool = False) -> Any:
         """Uninstall a game via the responsible store connector.
@@ -262,22 +268,66 @@ class DownloadRPCMixin:
         Earlier this mixin called ``check_update(game_id)`` which
         matched neither the name nor the signature.
 
-        The Play section fires this on every App-Details mount, so the
-        bulk scan goes through :mod:`~unifideck.services.update_check_cache`
-        — otherwise each page open costs a full Epic login (or one HTTPS
-        request per installed GOG game) to answer a single boolean.
+        **This never blocks on a store round-trip.** It reads whatever
+        :class:`~unifideck.services.update_sweep.UpdateSweepService` last
+        cached and returns immediately. Answering a page open by running
+        the scan inline is what made the Update button take 5-10 s to
+        appear — long enough for the user to have pressed Play already.
 
-        Returns ``{"has_update": bool}``. Note that the RPC wrapper nests
-        that under ``data`` (the dict has no ``success`` key), so frontend
-        callers must unwrap the envelope — reading ``res.has_update``
-        directly is why the Update button never appeared for any store.
+        On a cold cache (before the boot sweep has run) it reports "no
+        update" and schedules a background scan; the button arrives via
+        ``GAME_UPDATE_AVAILABLE`` when that lands. ``pending`` tells the
+        frontend which of the two it got, so "no update" and "don't know
+        yet" stay distinguishable.
+
+        Returns ``{"has_update": bool, "pending": bool}``. Note that the
+        RPC wrapper nests that under ``data`` (the dict has no
+        ``success`` key), so frontend callers must unwrap the envelope —
+        reading ``res.has_update`` directly is why the Update button
+        never appeared for any store.
         """
         store, game_id = self._validate_pair(store, game_id)
-        target = self._require_store(store)
-        updatable = await update_check_cache.get_or_fetch(
-            store, target.check_for_updates,
-        )
-        return {"has_update": game_id in (updatable or [])}
+        self._require_store(store)
+        updatable = update_check_cache.peek(store)
+        if updatable is None:
+            self._request_update_scan(store)
+            return {"has_update": False, "pending": True}
+        return {"has_update": game_id in updatable, "pending": False}
+
+    async def get_available_updates(self) -> Any:
+        """Return ``{store: [game_id, ...]}`` for every store, from cache only.
+
+        Bulk counterpart to :meth:`check_game_update`, for surfaces that
+        render many games at once (the QAM Downloads tab's Installed
+        list). Doing it per-row would mean one RPC per installed game.
+
+        Cache-only and non-blocking, same as above: a store that has not
+        been swept yet is simply absent from the mapping rather than
+        holding the whole list up behind a scan.
+        """
+        sweep = getattr(self, "_update_sweep_service", None)
+        out: dict[str, list[str]] = {}
+        for store_id in self.registry.store_ids():
+            cached = update_check_cache.peek(store_id)
+            if cached is None:
+                if sweep is not None:
+                    sweep.request_refresh(store_id)
+                continue
+            out[store_id] = cached
+        return out
+
+    def _request_update_scan(self, store: str) -> None:
+        """Ask the sweep service to refresh ``store`` in the background.
+
+        A no-op when the service failed to boot — update state then falls
+        back to whatever the cache holds, which is the pre-sweep
+        behaviour rather than an error.
+        """
+        sweep = getattr(self, "_update_sweep_service", None)
+        if sweep is None:
+            logger.debug("[download] no update sweep service; %s stays cold", store)
+            return
+        sweep.request_refresh(store)
 
     async def get_gog_game_languages(self, game_id: str) -> Any:
         """Return the install languages available for a GOG game.

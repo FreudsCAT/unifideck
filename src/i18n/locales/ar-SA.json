@@ -401,6 +401,12 @@
     "cancel": "إلغاء",
     "uninstall": "إلغاء التثبيت"
   },
+  "updateModal": {
+    "title": "يتوفر تحديث",
+    "description": "يتوفر تحديث للعبة {{title}}. قد لا تعمل الميزات عبر الإنترنت بدونه.",
+    "updateNow": "تحديث الآن",
+    "playAnyway": "اللعب على أي حال"
+  },
   "languageSettings": {
     "title": "اللغة",
     "label": "لغة العرض",
@@ -739,6 +745,7 @@
     "cancel": "إلغاء",
     "removeFromQueue": "إزالة من قائمة الانتظار",
     "play": "لعب",
+    "update": "تحديث",
     "outcome": {
       "queued": "في الانتظار",
       "downloading": "جاري التنزيل",

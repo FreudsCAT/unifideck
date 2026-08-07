@@ -401,6 +401,12 @@
     "cancel": "取消",
     "uninstall": "卸载"
   },
+  "updateModal": {
+    "title": "有可用更新",
+    "description": "{{title}} 有可用更新。不更新可能导致联机功能无法使用。",
+    "updateNow": "立即更新",
+    "playAnyway": "仍要游玩"
+  },
   "languageSettings": {
     "title": "语言",
     "label": "显示语言",
@@ -739,6 +745,7 @@
     "cancel": "取消",
     "removeFromQueue": "移出队列",
     "play": "游玩",
+    "update": "更新",
     "outcome": {
       "queued": "队列中",
       "downloading": "下载中",

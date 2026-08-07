@@ -17,10 +17,13 @@ import { FC, useMemo, useState } from "react";
 import { DialogButton, showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameActions } from "../../hooks/useGameActions";
+import { useGameUpdate } from "../../hooks/useGameUpdate";
+import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { resolveAppIdFromStoreGame } from "../../lib/library-filters";
 import { StoreIcon } from "../shared/StoreIcon";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
+import { UpdateAvailableModal } from "../modals/UpdateAvailableModal";
 import { formatBytes } from "../../utils";
 import type { Game } from "../../types/api";
 import type { InstalledDiskInfo } from "../../types/downloads";
@@ -63,6 +66,7 @@ const META_STYLE = {
 export const InstalledGameRow: FC<Props> = ({ game, disk, onUninstalled }) => {
   const { t } = useTranslation();
   const actions = useGameActions(bridge);
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
 
   // "12.4 GB · Internal". Each half is independently optional: an
@@ -89,6 +93,47 @@ export const InstalledGameRow: FC<Props> = ({ game, disk, onUninstalled }) => {
     () => resolveAppIdFromStoreGame(game.store, game.store_game_id),
     [game.store, game.store_game_id],
   );
+
+  // Same source of truth as the App-Details Play section, so the two can
+  // never disagree about whether a game is out of date.
+  const hasUpdate = useGameUpdate(game.store, game.store_game_id);
+
+  const queueUpdate = async () => {
+    if (appId == null) return;
+    setBusy(true);
+    try {
+      const result = await actions.update(
+        appId,
+        game.store,
+        game.store_game_id,
+      );
+      if (result?.success) {
+        toast.success(t("toasts.updateQueued"));
+      } else {
+        toast.error(t("toasts.updateFailed"), result?.error ?? "");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Mirrors InstalledButtons: ask before launching a stale build rather
+  // than blocking it.
+  const onPlay = () => {
+    if (appId == null) return;
+    if (!hasUpdate) {
+      actions.launch(appId);
+      return;
+    }
+    showModal(
+      <UpdateAvailableModal
+        gameTitle={game.title}
+        onUpdate={queueUpdate}
+        onPlayAnyway={() => actions.launch(appId)}
+        closeModal={() => {}}
+      />,
+    );
+  };
 
   const confirmUninstall = () => {
     if (appId == null) return;
@@ -158,17 +203,25 @@ export const InstalledGameRow: FC<Props> = ({ game, disk, onUninstalled }) => {
         // becomes a direct child of the one grid — which is what makes DOWN
         // from Uninstall land on the next Uninstall instead of jumping column.
         <div style={{ display: "flex", gap: 6, flex: "0 0 auto" }}>
+          {/* Update REPLACES Play when one is pending — the same rule the
+              App-Details Play section follows, so a game reads the same way
+              wherever the user meets it. Blue rather than the Play green:
+              at this size the label alone is easy to skim past. */}
           <DialogButton
-            className="unifideck-download-play-btn"
+            className={
+              hasUpdate
+                ? "unifideck-download-update-btn"
+                : "unifideck-download-play-btn"
+            }
             style={{
               ...ACTION_BTN_STYLE,
-              background: "#22c55e",
-              color: "#0f172a",
+              background: hasUpdate ? "#3b82f6" : "#22c55e",
+              color: hasUpdate ? "#f8fafc" : "#0f172a",
             }}
             disabled={busy || actions.isWorking}
-            onClick={() => actions.launch(appId)}
+            onClick={hasUpdate ? queueUpdate : onPlay}
           >
-            {t("downloads.play")}
+            {hasUpdate ? t("downloads.update") : t("downloads.play")}
           </DialogButton>
           <DialogButton
             className="unifideck-download-uninstall-btn"

@@ -401,6 +401,12 @@
     "cancel": "Скасувати",
     "uninstall": "Видалити"
   },
+  "updateModal": {
+    "title": "Доступне оновлення",
+    "description": "Для {{title}} доступне оновлення. Без нього мережеві функції можуть не працювати.",
+    "updateNow": "Оновити зараз",
+    "playAnyway": "Усе одно грати"
+  },
   "languageSettings": {
     "title": "МОВА",
     "label": "Мова інтерфейсу",
@@ -739,6 +745,7 @@
     "cancel": "Скасувати",
     "removeFromQueue": "Видалити",
     "play": "Грати",
+    "update": "Оновити",
     "outcome": {
       "queued": "У черзі",
       "downloading": "Завантаження",

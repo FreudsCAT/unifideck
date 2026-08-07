@@ -401,6 +401,12 @@
     "cancel": "İptal Et",
     "uninstall": "Kaldır"
   },
+  "updateModal": {
+    "title": "Güncelleme mevcut",
+    "description": "{{title}} için bir güncelleme mevcut. Güncellemeden çevrimiçi özellikler çalışmayabilir.",
+    "updateNow": "Şimdi güncelle",
+    "playAnyway": "Yine de oyna"
+  },
   "languageSettings": {
     "title": "DİL",
     "label": "Görüntüleme Dili",
@@ -739,6 +745,7 @@
     "cancel": "İptal Et",
     "removeFromQueue": "Kaldır",
     "play": "Oyna",
+    "update": "Güncelle",
     "outcome": {
       "queued": "Kuyrukta",
       "downloading": "İndiriliyor",

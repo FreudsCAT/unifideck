@@ -15,17 +15,16 @@
 import { FC, useCallback, useEffect, useState } from "react";
 import { DialogButton, showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { call } from "@decky/api";
 import { FaPlay, FaSyncAlt, FaTimes, FaTrash } from "react-icons/fa";
 import { SteamControllerIcon, SteamGearIcon } from "../shared";
-import { useRPC } from "../../api/useRPC";
-import { rpcRoutes } from "../../api/rpc-routes";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useGameActions } from "../../hooks/useGameActions";
+import { useGameUpdate } from "../../hooks/useGameUpdate";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { openNativeAppManageMenu } from "../../utils/nativeAppMenu";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
+import { UpdateAvailableModal } from "../modals/UpdateAvailableModal";
 import { CloudSaveButton } from "./CloudSaveButton";
 import {
   PlayShell,
@@ -86,10 +85,6 @@ function openAppSettings(appId: number): void {
   ).SteamClient?.Apps?.OpenAppSettingsDialog?.(appId, "general");
 }
 
-interface UpdateCheckResponse {
-  has_update?: boolean;
-}
-
 export const InstalledButtons: FC<Props> = ({
   appId,
   bridge = defaultBridge,
@@ -99,16 +94,13 @@ export const InstalledButtons: FC<Props> = ({
   const actions = useGameActions(bridge);
   const toast = useToast();
   const [isRunning, setIsRunning] = useState(false);
-  const [hasUpdate, setHasUpdate] = useState(false);
-  const checkGameUpdate = useRPC<[string, string], UpdateCheckResponse>(
-    rpcRoutes.checkGameUpdate,
-  );
-  // Depend on the identifiers, not the ``Game`` object: ``useGameInfo`` is
-  // stale-while-revalidate on a 5 s TTL, so every background refresh mints a
-  // new object identity and would otherwise re-fire the check for the same
-  // game (and, before the backend cache, a fresh legendary login with it).
   const gameStore = game?.store;
   const gameId = game?.id;
+  // Read-only view of the backend sweep's result — already in memory, so
+  // this costs nothing and cannot delay the button the way the old
+  // inline `check_game_update` scan did (5-10 s for Epic, because
+  // legendary logs in and refreshes its asset manifest first).
+  const hasUpdate = useGameUpdate(gameStore, gameId);
 
   // NOTE: we deliberately do NOT touch Steam's Force-Compatibility here.
   // This used to capture it into proton_settings.json and clear it so
@@ -141,56 +133,11 @@ export const InstalledButtons: FC<Props> = ({
     };
   }, [appId]);
 
-  // Update check — one-shot on mount. The backend RPC takes
-  // (store, game_id) and returns { has_update }.
-  //
-  // This MUST go through ``useRPC``, not a bare ``call()``. Every backend
-  // method is wrapped by ``@auto_wrap_rpc_methods``, so a return value with
-  // no top-level ``success`` key comes back nested:
-  //   {"has_update": true} -> {success: true, error: null, data: {has_update: true}}
-  // Reading ``res.has_update`` off that envelope is always ``undefined``,
-  // which is why the Update button never appeared for ANY store. ``useRPC``
-  // unwraps the envelope (and throws on a failed one — the catch below
-  // fails open to "no update", which is the right default).
-  useEffect(() => {
-    if (!gameStore || !gameId) return;
-    let cancelled = false;
-    checkGameUpdate(gameStore, gameId)
-      .then((res) => {
-        if (cancelled) return;
-        setHasUpdate(Boolean(res?.has_update));
-      })
-      .catch(() => {
-        /* non-critical */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [checkGameUpdate, gameStore, gameId]);
-
-  const onPlay = useCallback(() => {
-    if (!game) return;
-    actions.launch(appId);
-  }, [actions, appId, game]);
-
-  const onStop = useCallback(() => {
-    actions.terminate(appId);
-  }, [actions, appId]);
-
   const onUpdate = useCallback(async () => {
     if (!game) return;
     try {
-      // Deliberately a raw ``call`` rather than ``useRPC``: this handler
-      // wants to SHOW the failure reason in a toast, and ``useRPC`` throws
-      // on a non-success envelope. ``update_game`` returns a dict that
-      // already carries ``success``, so the wrapper keeps both keys at the
-      // top level of the envelope — reading them here is correct.
-      const res = await call<[number], { success: boolean; error?: string }>(
-        rpcRoutes.updateGame,
-        appId,
-      );
+      const res = await actions.update(appId, gameStore, gameId);
       if (res?.success) {
-        setHasUpdate(false);
         toast.success(t("toasts.updateQueued"));
       } else {
         toast.error(t("toasts.updateFailed"), res?.error ?? "");
@@ -198,7 +145,41 @@ export const InstalledButtons: FC<Props> = ({
     } catch (e) {
       toast.error(t("toasts.updateFailed"), String(e));
     }
-  }, [appId, game, t, toast]);
+  }, [actions, appId, game, gameId, gameStore, t, toast]);
+
+  const onResume = useCallback(() => {
+    actions.launch(appId);
+  }, [actions, appId]);
+
+  // Launching a game with a pending update asks first rather than
+  // blocking: most single-player titles run fine a build behind, but an
+  // online game will simply refuse to connect, and nothing on the launch
+  // path used to tell the user that was why. Reads cached state only —
+  // no network call, so a game with no update launches straight through.
+  //
+  // Defence in depth: the button below already renders Update INSTEAD of
+  // Play whenever we know about one, so this normally never fires. It
+  // covers the window where the sweep's event lands between render and
+  // press — without it, that press would silently launch a stale build.
+  const onPlay = useCallback(() => {
+    if (!game) return;
+    if (!hasUpdate) {
+      actions.launch(appId);
+      return;
+    }
+    showModal(
+      <UpdateAvailableModal
+        gameTitle={game.title}
+        onUpdate={onUpdate}
+        onPlayAnyway={() => actions.launch(appId)}
+        closeModal={() => {}}
+      />,
+    );
+  }, [actions, appId, game, hasUpdate, onUpdate]);
+
+  const onStop = useCallback(() => {
+    actions.terminate(appId);
+  }, [actions, appId]);
 
   const onUninstall = useCallback(() => {
     if (!game) return;
@@ -219,10 +200,14 @@ export const InstalledButtons: FC<Props> = ({
     if (isRunning) {
       return (
         <>
+          {/* Resume, not onPlay: the game is ALREADY running, so the
+              pending-update prompt would be nonsense here — there is
+              nothing left to decide, and updating over a running game
+              is not something we want to offer. */}
           <DialogButton
             className={actionBtnClass("unifideck-resume-btn")}
             disabled={loading}
-            onClick={onPlay}
+            onClick={onResume}
             style={actionBtnStyle}
           >
             <FaPlay /> {t("play.resume")}

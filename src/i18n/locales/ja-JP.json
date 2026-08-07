@@ -401,6 +401,12 @@
     "cancel": "キャンセル",
     "uninstall": "アンインストール"
   },
+  "updateModal": {
+    "title": "アップデートがあります",
+    "description": "{{title}} にアップデートがあります。適用しないとオンライン機能が利用できない場合があります。",
+    "updateNow": "今すぐアップデート",
+    "playAnyway": "このままプレイ"
+  },
   "languageSettings": {
     "title": "言語",
     "label": "表示言語",
@@ -739,6 +745,7 @@
     "cancel": "キャンセル",
     "removeFromQueue": "削除",
     "play": "プレイ",
+    "update": "アップデート",
     "outcome": {
       "queued": "待機中",
       "downloading": "ダウンロード中",

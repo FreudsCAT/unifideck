@@ -401,6 +401,12 @@
     "cancel": "Отмена",
     "uninstall": "Удалить"
   },
+  "updateModal": {
+    "title": "Доступно обновление",
+    "description": "Для {{title}} доступно обновление. Без него сетевые функции могут не работать.",
+    "updateNow": "Обновить сейчас",
+    "playAnyway": "Всё равно играть"
+  },
   "languageSettings": {
     "title": "ЯЗЫК",
     "label": "Язык интерфейса",
@@ -739,6 +745,7 @@
     "cancel": "Отмена",
     "removeFromQueue": "Удалить",
     "play": "Играть",
+    "update": "Обновить",
     "outcome": {
       "queued": "В очереди",
       "downloading": "Загрузка",

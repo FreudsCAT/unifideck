@@ -1061,6 +1061,186 @@ install_plugin() {
     echo "========================================="
 }
 
+# ── Publish the dev build to the shared "Dev" GitHub release ──
+# The Dev release (tag ``Dev``, a prerelease targeting staging, titled
+# "Dev Release for Testing") is how testers get an unreleased build: the
+# in-plugin updater lists prereleases in its version picker and installs the
+# ``.zip`` asset. It is a *mutable* tag whose single asset gets rotated, which
+# ``services/updater/service.py`` already accounts for.
+#
+# This rotates that asset automatically so a dev build does not have to be
+# uploaded by hand every time.
+#
+# CREDENTIALS ARE NEVER STORED IN THIS SCRIPT OR THE REPO. Resolution order:
+#   1. ``$GH_TOKEN`` / ``$GITHUB_TOKEN`` from the environment;
+#   2. the token the git credential helper already keeps in
+#      ``~/.git-credentials`` (``credential.helper=store``).
+# The value is only ever held in a local, never echoed. If neither source
+# yields a token the upload is skipped with a warning — it must never be
+# possible for a missing credential to fail somebody's build.
+#
+# Skipped entirely for: prod builds (those go to a real versioned release via
+# the draft flow), CI (a runner must not rotate the shared tester asset), and
+# whenever ``UNIFIDECK_SKIP_DEV_UPLOAD`` is set to anything non-empty.
+DEV_RELEASE_TAG="Dev"
+GH_REPO_SLUG="mubaraknumann/unifideck"
+
+_gh_token() {
+    # Echoes the token on stdout for capture into a local. Never log this.
+    if [ -n "${GH_TOKEN:-}" ]; then printf '%s' "$GH_TOKEN"; return 0; fi
+    if [ -n "${GITHUB_TOKEN:-}" ]; then printf '%s' "$GITHUB_TOKEN"; return 0; fi
+    [ -f "$HOME/.git-credentials" ] || return 1
+    sed -n 's|https://[^:]*:\([^@]*\)@github\.com.*|\1|p' \
+        "$HOME/.git-credentials" | head -1
+}
+
+publish_dev_release() {
+    if [[ "$ENV_MODE" == "prod" ]]; then
+        return 0
+    fi
+    if [ -n "${UNIFIDECK_SKIP_DEV_UPLOAD:-}" ]; then
+        log_info "Dev release upload skipped (UNIFIDECK_SKIP_DEV_UPLOAD set)"
+        return 0
+    fi
+    if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
+        log_info "Dev release upload skipped (CI environment)"
+        return 0
+    fi
+    if [ ! -f "$OUTPUT_FILE" ]; then
+        log_warn "Dev release upload skipped — $ZIP_NAME not found"
+        return 0
+    fi
+
+    local token; token=$(_gh_token 2>/dev/null || true)
+    if [ -z "$token" ]; then
+        log_warn "Dev release upload skipped — no GitHub token found."
+        log_warn "  Set GH_TOKEN, or run 'git push' once so the credential"
+        log_warn "  helper stores one. Build itself is unaffected."
+        return 0
+    fi
+
+    local api="https://api.github.com/repos/$GH_REPO_SLUG"
+    log_info "Publishing $ZIP_NAME to the '$DEV_RELEASE_TAG' release..."
+
+    # Resolve the release. Bail out rather than creating it: the Dev release is
+    # long-lived and hand-curated, and silently making a second one would split
+    # where testers look. First line of output is the id, the rest are the ids
+    # of existing .zip assets.
+    local lookup release_id asset_ids
+    lookup=$(GH_API="$api" GH_TAG="$DEV_RELEASE_TAG" GH_TOK="$token" python3 -c '
+import json, os, urllib.error, urllib.request
+
+req = urllib.request.Request(
+    os.environ["GH_API"] + "/releases/tags/" + os.environ["GH_TAG"])
+req.add_header("Authorization", "Bearer " + os.environ["GH_TOK"])
+req.add_header("Accept", "application/vnd.github+json")
+try:
+    data = json.load(urllib.request.urlopen(req, timeout=30))
+except (urllib.error.URLError, OSError, ValueError):
+    raise SystemExit(1)
+print(data["id"])
+for asset in data.get("assets", []):
+    if asset.get("name", "").endswith(".zip"):
+        print(asset["id"])
+' 2>/dev/null) || lookup=""
+    release_id=$(printf '%s\n' "$lookup" | sed -n '1p')
+    asset_ids=$(printf '%s\n' "$lookup" | sed -n '2,$p')
+    if [ -z "$release_id" ]; then
+        log_warn "Dev release upload skipped — could not resolve the"
+        log_warn "  '$DEV_RELEASE_TAG' release (missing, or the token lacks"
+        log_warn "  repo scope). Nothing was changed."
+        return 0
+    fi
+
+    # Upload FIRST, under a temporary name, so a failed upload can never leave
+    # the release with no asset at all. Only once the new build is safely up do
+    # we delete the old one and rename. GitHub rejects duplicate asset names,
+    # hence the temp name.
+    local tmp_name="uploading-$ZIP_NAME"
+    if ! curl -sf -X POST \
+            -H "Authorization: Bearer $token" \
+            -H "Content-Type: application/zip" \
+            --data-binary "@$OUTPUT_FILE" \
+            "https://uploads.github.com/repos/$GH_REPO_SLUG/releases/$release_id/assets?name=$tmp_name" \
+            >/dev/null 2>&1; then
+        log_warn "Dev release upload failed — the existing asset is untouched."
+        return 0
+    fi
+
+    local aid
+    for aid in $asset_ids; do
+        curl -sf -X DELETE -H "Authorization: Bearer $token" \
+            "$api/releases/assets/$aid" >/dev/null 2>&1 \
+            && log_info "  removed previous asset $aid" \
+            || log_warn "  could not remove previous asset $aid"
+    done
+
+    # Rename the temp asset to its real name now the slot is free.
+    if ! GH_API="$api" GH_TOK="$token" GH_NAME="$ZIP_NAME" \
+            GH_ASSET_QUERY="$release_id/$tmp_name" python3 -c '
+import json, os, urllib.error, urllib.request
+
+api, tok, name = os.environ["GH_API"], os.environ["GH_TOK"], os.environ["GH_NAME"]
+rid, tmp = os.environ["GH_ASSET_QUERY"].split("/", 1)
+
+req = urllib.request.Request(api + "/releases/" + rid)
+req.add_header("Authorization", "Bearer " + tok)
+try:
+    data = json.load(urllib.request.urlopen(req, timeout=30))
+except (urllib.error.URLError, OSError, ValueError):
+    raise SystemExit(1)
+target = next((a for a in data.get("assets", []) if a["name"] == tmp), None)
+if target is None:
+    raise SystemExit(1)
+
+patch = urllib.request.Request(
+    api + "/releases/assets/" + str(target["id"]),
+    data=json.dumps({"name": name}).encode(), method="PATCH")
+patch.add_header("Authorization", "Bearer " + tok)
+patch.add_header("Content-Type", "application/json")
+try:
+    urllib.request.urlopen(patch, timeout=30).read()
+except (urllib.error.URLError, OSError):
+    raise SystemExit(1)
+' 2>/dev/null; then
+        log_warn "Uploaded, but could not rename '$tmp_name' → '$ZIP_NAME'."
+        log_warn "  Rename it in the GitHub release UI."
+        return 0
+    fi
+    log_success "Uploaded $ZIP_NAME to the '$DEV_RELEASE_TAG' release"
+
+    # Stamp the body so a tester can tell what they are installing.
+    if ! GH_API="$api" GH_TOK="$token" GH_RID="$release_id" \
+            GH_BUILD="$DEV_BUILD_ID" GH_SHA="${GIT_SHA:-unknown}" \
+            GH_BR="${GIT_BRANCH:-unknown}" \
+            GH_WHEN="$(date -u '+%Y-%m-%d %H:%M UTC')" python3 -c '
+import json, os, urllib.error, urllib.request
+
+body = (
+    "**Latest dev build** — for testing, not general use.\n\n"
+    "- Build: `" + os.environ["GH_BUILD"] + "`\n"
+    "- Commit: `" + os.environ["GH_SHA"] + "` on branch `"
+    + os.environ["GH_BR"] + "`\n"
+    "- Built: " + os.environ["GH_WHEN"] + "\n\n"
+    "Install from Unifideck settings → Check for Updates → pick this version."
+)
+req = urllib.request.Request(
+    os.environ["GH_API"] + "/releases/" + os.environ["GH_RID"],
+    data=json.dumps({"body": body}).encode(), method="PATCH")
+req.add_header("Authorization", "Bearer " + os.environ["GH_TOK"])
+req.add_header("Content-Type", "application/json")
+try:
+    urllib.request.urlopen(req, timeout=30).read()
+except (urllib.error.URLError, OSError):
+    raise SystemExit(1)
+' 2>/dev/null; then
+        log_warn "Could not refresh the release notes (the asset is uploaded)"
+    else
+        log_success "Refreshed the '$DEV_RELEASE_TAG' release notes"
+    fi
+    echo ""
+}
+
 # ── Main Execution Flow ───────────────────────────────────────
 main() {
     # quick-install short-circuits the full build pipeline. Use it
@@ -1093,6 +1273,9 @@ main() {
         # Fallback if Decky CLI is totally broken
         build_local
     fi
+
+    # Rotate the shared Dev release asset so testers get this build.
+    publish_dev_release
 
     # Auto-install if requested
     if [[ "$INSTALL_AFTER" == "install" ]]; then

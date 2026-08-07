@@ -401,6 +401,12 @@
     "cancel": "Cancelar",
     "uninstall": "Desinstalar"
   },
+  "updateModal": {
+    "title": "Atualização disponível",
+    "description": "{{title}} tem uma atualização disponível. Sem ela, os recursos on-line podem não funcionar.",
+    "updateNow": "Atualizar agora",
+    "playAnyway": "Jogar mesmo assim"
+  },
   "languageSettings": {
     "title": "IDIOMA",
     "label": "Idioma de Exibição",
@@ -739,6 +745,7 @@
     "cancel": "Cancelar",
     "removeFromQueue": "Remover",
     "play": "Jogar",
+    "update": "Atualizar",
     "outcome": {
       "queued": "Na fila",
       "downloading": "Baixando",

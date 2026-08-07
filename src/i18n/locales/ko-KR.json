@@ -401,6 +401,12 @@
     "cancel": "취소",
     "uninstall": "설치 제거"
   },
+  "updateModal": {
+    "title": "업데이트 사용 가능",
+    "description": "{{title}}의 업데이트가 있습니다. 업데이트하지 않으면 온라인 기능이 작동하지 않을 수 있습니다.",
+    "updateNow": "지금 업데이트",
+    "playAnyway": "그대로 실행"
+  },
   "languageSettings": {
     "title": "언어 설정",
     "label": "표시 언어",
@@ -739,6 +745,7 @@
     "cancel": "취소",
     "removeFromQueue": "삭제",
     "play": "플레이",
+    "update": "업데이트",
     "outcome": {
       "queued": "대기 중",
       "downloading": "다운로드 중",

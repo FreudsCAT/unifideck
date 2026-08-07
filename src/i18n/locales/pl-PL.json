@@ -401,6 +401,12 @@
     "cancel": "Anuluj",
     "uninstall": "Odinstaluj"
   },
+  "updateModal": {
+    "title": "Dostępna aktualizacja",
+    "description": "Dostępna jest aktualizacja gry {{title}}. Bez niej funkcje online mogą nie działać.",
+    "updateNow": "Aktualizuj teraz",
+    "playAnyway": "Zagraj mimo to"
+  },
   "languageSettings": {
     "title": "JĘZYK",
     "label": "Język interfejsu",
@@ -739,6 +745,7 @@
     "cancel": "Anuluj",
     "removeFromQueue": "Usuń",
     "play": "Graj",
+    "update": "Aktualizuj",
     "outcome": {
       "queued": "W kolejce",
       "downloading": "Pobieranie",

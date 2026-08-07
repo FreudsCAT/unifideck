@@ -401,6 +401,12 @@
     "cancel": "Cancel",
     "uninstall": "Uninstall"
   },
+  "updateModal": {
+    "title": "Update Available",
+    "description": "{{title}} has an update available. Playing without it may stop online features from working.",
+    "updateNow": "Update Now",
+    "playAnyway": "Play Anyway"
+  },
   "languageSettings": {
     "title": "LANGUAGE",
     "label": "Display Language",
@@ -762,6 +768,7 @@
     "cancel": "Cancel",
     "removeFromQueue": "Remove",
     "play": "Play",
+    "update": "Update",
     "outcome": {
       "queued": "Queued",
       "downloading": "Downloading",

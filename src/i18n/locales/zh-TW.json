@@ -401,6 +401,12 @@
     "cancel": "取消",
     "uninstall": "解除安裝"
   },
+  "updateModal": {
+    "title": "有可用更新",
+    "description": "{{title}} 有可用更新。未更新可能導致連線功能無法使用。",
+    "updateNow": "立即更新",
+    "playAnyway": "仍要遊玩"
+  },
   "languageSettings": {
     "title": "語言",
     "label": "顯示語言",
@@ -739,6 +745,7 @@
     "cancel": "取消",
     "removeFromQueue": "移出佇列",
     "play": "遊玩",
+    "update": "更新",
     "outcome": {
       "queued": "佇列中",
       "downloading": "下載中",

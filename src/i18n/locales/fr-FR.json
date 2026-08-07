@@ -401,6 +401,12 @@
     "cancel": "Annuler",
     "uninstall": "Désinstaller"
   },
+  "updateModal": {
+    "title": "Mise à jour disponible",
+    "description": "Une mise à jour est disponible pour {{title}}. Sans elle, les fonctionnalités en ligne risquent de ne pas fonctionner.",
+    "updateNow": "Mettre à jour",
+    "playAnyway": "Jouer quand même"
+  },
   "languageSettings": {
     "title": "LANGUE",
     "label": "Langue d'affichage",
@@ -739,6 +745,7 @@
     "cancel": "Annuler",
     "removeFromQueue": "Supprimer",
     "play": "Jouer",
+    "update": "Mettre à jour",
     "outcome": {
       "queued": "En file d'attente",
       "downloading": "Téléchargement",
