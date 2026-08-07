@@ -76,6 +76,9 @@ def test_first_launch_records_marker_no_toast_no_reset(tmp_path, toast_spy):
     pi._handle_proton_change(_plan(root, "GE-Proton10-34"), root, "GE-Proton10-34")
 
     toast_spy.assert_not_called()
+    # The marker is stamped by ``_stamp_proton_marker`` AFTER the rebuild, not
+    # here — see test_marker_only_stamped_after_a_real_rebuild.
+    pi._stamp_proton_marker(root, "GE-Proton10-34")
     assert (root / pi._MARKER_NAME).read_text() == "GE-Proton10-34"
     # Prefix untouched.
     assert (root / "system.reg").is_file()
@@ -93,6 +96,7 @@ def test_minor_change_notifies_but_keeps_prefix(tmp_path, toast_spy):
     # Same family → prefix + setup markers preserved.
     assert (root / "system.reg").is_file()
     assert (root / "unifideck_winetricks_complete.marker").is_file()
+    pi._stamp_proton_marker(root, "GE-Proton10-34")
     assert (root / pi._MARKER_NAME).read_text() == "GE-Proton10-34"
 
 
@@ -108,8 +112,12 @@ def test_major_change_resets_prefix_and_backs_up(tmp_path, toast_spy):
     assert not (root / "drive_c").exists()
     assert not (root / "unifideck_winetricks_complete.marker").exists()
     assert not (root / ".unifideck_prereqs_x.done").exists()
-    # ...the proton marker is updated and the save is backed up.
-    assert (root / pi._MARKER_NAME).read_text() == "GE-Proton10-34"
+    # ...the save is backed up. The marker still names the OLD Proton until
+    # the rebuild actually lands (nothing has recreated system.reg yet), so a
+    # rebuild that fails leaves the next launch a reason to retry.
+    assert (root / pi._MARKER_NAME).read_text() == "proton_experimental"
+    pi._stamp_proton_marker(root, "GE-Proton10-34")
+    assert (root / pi._MARKER_NAME).read_text() == "proton_experimental"
     backup = root / ".save_backup" / "steamuser" / "save.dat"
     assert backup.is_file()
     assert backup.read_text() == "savegame"
@@ -207,142 +215,6 @@ async def test_run_createprefix_with_retry_detects_success_under_pfx(
     )
 
 
-# ── save migration / restore ──────────────────────────────────────
-
-
-def _plan_with_env(prefix_root: Path, gameid: str | None = None):
-    plan = _plan(prefix_root, "GE-Proton10-34")
-    plan.env = {"GAMEID": gameid} if gameid else {}
-    return plan
-
-
-def _users_dir_with(root: Path, *, name: str, content: str) -> Path:
-    """Build ``root/drive_c/users/steamuser/<name>`` and a user.reg."""
-    users = root / "drive_c" / "users" / "steamuser"
-    users.mkdir(parents=True, exist_ok=True)
-    (root / "user.reg").write_text("reg")
-    (users / name).write_text(content)
-    return root / "drive_c" / "users"
-
-
-def test_merge_users_copies_missing(tmp_path):
-    src = tmp_path / "src"
-    dst = tmp_path / "dst"
-    (src / "steamuser").mkdir(parents=True)
-    (src / "steamuser" / "save.dat").write_text("save")
-
-    copied = pi._merge_users(src, dst)
-
-    assert copied == 1
-    assert (dst / "steamuser" / "save.dat").read_text() == "save"
-
-
-def test_merge_users_skips_older_keeps_newer(tmp_path):
-    src = tmp_path / "src"
-    dst = tmp_path / "dst"
-    (src / "steamuser").mkdir(parents=True)
-    (dst / "steamuser").mkdir(parents=True)
-    src_file = src / "steamuser" / "save.dat"
-    dst_file = dst / "steamuser" / "save.dat"
-    src_file.write_text("OLD")
-    dst_file.write_text("NEW")
-    # Destination is strictly newer than the source.
-    import os
-    os.utime(src_file, (1000, 1000))
-    os.utime(dst_file, (2000, 2000))
-
-    copied = pi._merge_users(src, dst)
-
-    assert copied == 0
-    assert dst_file.read_text() == "NEW"  # newer save not clobbered
-
-
-def test_restore_save_backup_merges_into_users(tmp_path):
-    root = tmp_path / "prefix"
-    # Live (recreated) prefix has an empty users tree.
-    _users_dir_with(root, name=".keep", content="")
-    # Backup from a prior reset holds the real save.
-    backup = root / ".save_backup" / "steamuser"
-    backup.mkdir(parents=True)
-    (backup / "save.dat").write_text("savegame")
-
-    pi._restore_save_backup(root)
-
-    restored = root / "drive_c" / "users" / "steamuser" / "save.dat"
-    assert restored.read_text() == "savegame"
-
-
-def test_migrate_legacy_prefix_copies_and_marks(tmp_path, monkeypatch):
-    legacy_base = tmp_path / "Games" / "umu"
-    monkeypatch.setattr(pi, "_LEGACY_UMU_BASE", str(legacy_base))
-    # Legacy shared prefix with a save.
-    _users_dir_with(legacy_base / "umu-0", name="save.dat", content="oldsave")
-    # Fresh per-game prefix (created but empty users).
-    root = tmp_path / "prefix"
-    _users_dir_with(root, name=".keep", content="")
-
-    pi._migrate_legacy_prefix(_plan_with_env(root), root)
-
-    migrated = root / "drive_c" / "users" / "steamuser" / "save.dat"
-    assert migrated.read_text() == "oldsave"
-    assert (root / pi._LEGACY_MIGRATED_MARKER).is_file()
-
-
-def test_migrate_legacy_prefix_is_idempotent(tmp_path, monkeypatch):
-    legacy_base = tmp_path / "Games" / "umu"
-    monkeypatch.setattr(pi, "_LEGACY_UMU_BASE", str(legacy_base))
-    _users_dir_with(legacy_base / "umu-0", name="save.dat", content="oldsave")
-    root = tmp_path / "prefix"
-    _users_dir_with(root, name=".keep", content="")
-    (root / pi._LEGACY_MIGRATED_MARKER).write_text("done")
-
-    # Marker present → no copy attempted.
-    pi._migrate_legacy_prefix(_plan_with_env(root), root)
-
-    assert not (root / "drive_c" / "users" / "steamuser" / "save.dat").exists()
-
-
-def test_migrate_legacy_prefix_marks_done_when_nothing_found(tmp_path, monkeypatch):
-    legacy_base = tmp_path / "Games" / "umu"
-    monkeypatch.setattr(pi, "_LEGACY_UMU_BASE", str(legacy_base))
-    root = tmp_path / "prefix"
-    _users_dir_with(root, name=".keep", content="")
-
-    pi._migrate_legacy_prefix(_plan_with_env(root), root)
-
-    # No legacy data, but the marker is written so we don't rescan.
-    assert (root / pi._LEGACY_MIGRATED_MARKER).is_file()
-
-
-async def test_restore_or_migrate_prefers_save_backup(tmp_path, monkeypatch):
-    root = tmp_path / "prefix"
-    _users_dir_with(root, name=".keep", content="")
-    (root / ".save_backup").mkdir()
-    restore = MagicMock()
-    migrate = MagicMock()
-    monkeypatch.setattr(pi, "_restore_save_backup", restore)
-    monkeypatch.setattr(pi, "_migrate_legacy_prefix", migrate)
-
-    await pi._restore_or_migrate_saves(_plan_with_env(root), root)
-
-    restore.assert_called_once()
-    migrate.assert_not_called()
-
-
-async def test_restore_or_migrate_falls_back_to_legacy(tmp_path, monkeypatch):
-    root = tmp_path / "prefix"
-    _users_dir_with(root, name=".keep", content="")
-    restore = MagicMock()
-    migrate = MagicMock()
-    monkeypatch.setattr(pi, "_restore_save_backup", restore)
-    monkeypatch.setattr(pi, "_migrate_legacy_prefix", migrate)
-
-    await pi._restore_or_migrate_saves(_plan_with_env(root), root)
-
-    migrate.assert_called_once()
-    restore.assert_not_called()
-
-
 # ── _run_umu: bounded + process-group kill on hang ─────────────────
 #
 # Regression: a hung Proton/Wine boot (confirmed live -- a broken
@@ -391,3 +263,82 @@ def test_kill_process_group_swallows_already_dead_process():
     fake_proc = SimpleNamespace(pid=proc.pid)
 
     pi._kill_process_group(fake_proc)  # must not raise
+
+
+# ── marker stamping is conditional on the rebuild succeeding ───────
+
+
+def test_marker_only_stamped_after_a_real_rebuild(tmp_path):
+    """A wiped prefix that never rebuilt must keep the OLD marker.
+
+    Otherwise the next launch compares the new tool against itself, sees
+    "same family, nothing to do", skips the reset, and runs the game against
+    a prefix with no ``system.reg`` — forever.
+    """
+    root = tmp_path / "prefix"
+    root.mkdir()
+    (root / pi._MARKER_NAME).write_text("proton_experimental")
+
+    pi._stamp_proton_marker(root, "GE-Proton11-3")  # no system.reg present
+
+    assert (root / pi._MARKER_NAME).read_text() == "proton_experimental"
+
+    (root / "system.reg").write_text("reg")
+    pi._stamp_proton_marker(root, "GE-Proton11-3")
+
+    assert (root / pi._MARKER_NAME).read_text() == "GE-Proton11-3"
+
+
+def test_reset_keeps_backup_when_there_is_nothing_to_replace_it_with(tmp_path):
+    """A failed rebuild must not cost the user the only copy of their saves.
+
+    First reset backs up ``drive_c/users`` and wipes; the rebuild then fails,
+    so there is no ``users`` tree left. The second reset used to delete the
+    backup before discovering it had nothing to copy — saves gone.
+    """
+    root = tmp_path / "prefix"
+    root.mkdir()
+    backup = root / ".save_backup" / "steamuser"
+    backup.mkdir(parents=True)
+    (backup / "save.dat").write_text("the only copy")
+
+    pi._reset_prefix(root)  # no drive_c/users on disk
+
+    assert (root / ".save_backup" / "steamuser" / "save.dat").read_text() == (
+        "the only copy"
+    )
+
+
+# ── official Protons past 10 must not all read as one family ──────
+
+
+@pytest.mark.parametrize(
+    ("tool", "family"),
+    [
+        ("proton_11", "proton11"),
+        ("Proton 11.0", "proton11"),
+        ("Proton 8.0", "proton8"),
+        ("proton_7", "proton7"),
+        ("proton_hotfix", "hotfix"),
+        ("Proton Hotfix", "hotfix"),
+    ],
+)
+def test_official_protons_past_10_get_their_own_family(tool, family):
+    assert pi._proton_family(tool) == family
+
+
+def test_switching_between_official_protons_resets(tmp_path, toast_spy):
+    """``proton_11`` → ``proton_8`` used to read as "same family: other".
+
+    Both collapsed to ``"other"``, so the prefix was kept and the newly
+    selected Proton inherited one built by different Wine. That is why a user
+    who forced one official Proton and then tried another never got a working
+    prefix out of any of them.
+    """
+    root = tmp_path / "prefix"
+    _make_root_prefix(root, proton_marker="proton_11")
+
+    pi._handle_proton_change(_plan(root, "proton_8"), root, "proton_8")
+
+    assert toast_spy.call_args.args[0] == "toasts.launcher.resettingPrefix"
+    assert not (root / "system.reg").exists()

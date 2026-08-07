@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.launcher.frontend_bridge import launcher_toast
+from unifideck.launcher.proton.infrastructure.container_escape import (
+    spawn_escaped,
+)
 
 from .common import AUTH_CONFIG, REDIST_DIR, run_wine
 
@@ -73,8 +76,8 @@ async def _run_redist_download(gogdl: Path, missing: list[str]) -> None:
         "redist", "--ids", ",".join(missing), "--path", str(REDIST_DIR),
     ]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
+        proc = await spawn_escaped(
+            cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )

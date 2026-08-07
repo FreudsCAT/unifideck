@@ -6,13 +6,13 @@ prefix-init block):
 
 1. **Proton-change reset.** Each prefix records the Proton tool that
    built it (``.unifideck_proton_version``). When the resolved Proton
-   *family* changes — the user switched Force Compatibility, unselected
-   it (falling back to the latest GE-Proton), or moved between
-   Experimental ↔ GE ↔ Proton 9/10 — the old Wine prefix is
-   incompatible, so we back up its user data, wipe it + the setup
-   markers, and toast ``protonUpgrade``/``resettingPrefix``. A
-   same-family bump (e.g. GE-Proton10-10 → 10-34) keeps the prefix
-   (Proton upgrades it in place) and just toasts ``protonSwitchedTo``.
+   *family* changes (see :func:`_proton_family`) — the user switched
+   Force Compatibility, unselected it, or moved between Experimental ↔
+   GE ↔ an official Proton — the old Wine prefix is incompatible, so we
+   back up its user data, wipe it + the setup markers, and toast
+   ``protonUpgrade``/``resettingPrefix``. A same-family bump (e.g.
+   GE-Proton10-10 → 10-34) keeps the prefix (Proton upgrades it in
+   place) and just toasts ``protonSwitchedTo``.
 
 2. **First-time init.** If the prefix has no ``system.reg`` it isn't a
    usable Wine prefix yet, so we run ``umu-run createprefix`` (with
@@ -31,6 +31,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import shutil
 import signal
 from pathlib import Path
@@ -38,6 +39,12 @@ from typing import TYPE_CHECKING
 
 from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.proton.compat.ge_fallback import fallback_to_ge_proton
+from unifideck.launcher.proton.compat.prefix_saves import (
+    _restore_or_migrate_saves,
+)
+from unifideck.launcher.proton.infrastructure.container_escape import (
+    spawn_escaped,
+)
 from unifideck.launcher.proton.infrastructure.prefix_layout import (
     normalize_prefix_root,
     resolve_registry_prefix,
@@ -65,18 +72,18 @@ _CREATEPREFIX_BACKOFF_SECONDS = 5
 # Proton-Experimental build spinning wineserver forever) must be killed
 # rather than orphaned to run indefinitely.
 _UMU_STEP_TIMEOUT_SECONDS = 120.0
-# Written into a per-game prefix once the one-time legacy-save migration
-# has run, so we don't rescan the legacy umu prefixes on every launch.
-_LEGACY_MIGRATED_MARKER = ".unifideck_legacy_migrated"
-# Shared umu prefixes used before 0.6 set a per-game WINEPREFIX. Games
-# launched then wrote their saves into umu's default prefix; we pull
-# those forward on the first per-game prefix init.
-_LEGACY_UMU_BASE = "~/Games/umu"
-_LEGACY_UMU_SHARED = ("umu-0", "umu-default")
 
 
 def _proton_family(tool_id: str) -> str:
-    """Coarse Proton family — a change here means the prefix must reset."""
+    """Coarse Proton family — a change here means the prefix must reset.
+
+    The official-Proton major is derived, not tabulated: the old table
+    stopped at ``proton10``, so ``proton_11``/``_8``/``_7``/``_hotfix`` all
+    collapsed to ``"other"`` and switching between any two of them read as
+    "same family, keep the prefix" — which is why forcing one official Proton
+    and then trying another never produced a working prefix. Brand checks
+    stay first so ``GE-Proton11-3`` is ``ge-proton``, not ``proton11``.
+    """
     t = tool_id.lower()
     if "experimental" in t:
         return "experimental"
@@ -84,10 +91,11 @@ def _proton_family(tool_id: str) -> str:
         return "ge-proton"
     if "umu-proton" in t:
         return "umu-proton"
-    if "proton9" in t or "proton_9" in t or "proton 9" in t or "9.0" in t:
-        return "proton9"
-    if "proton10" in t or "proton_10" in t or "proton 10" in t or "10.0" in t:
-        return "proton10"
+    if "hotfix" in t:
+        return "hotfix"
+    major = re.search(r"proton[ _-]?(\d+)", t)
+    if major:
+        return f"proton{major.group(1)}"
     return "other"
 
 
@@ -98,8 +106,30 @@ async def ensure_prefix_initialized(plan: ProtonLaunchPlan) -> None:
         current = plan.state.proton_tool_id or "default"
         _handle_proton_change(plan, prefix_root, current)
         await _ensure_created(plan, prefix_root)
+        _stamp_proton_marker(prefix_root, current)
     except Exception:
         logger.exception("[prefix_init] prefix init/reset failed (non-fatal)")
+
+
+def _stamp_proton_marker(prefix_root: Path, current: str) -> None:
+    """Record ``current`` as this prefix's Proton — only if it really built it.
+
+    Stamped AFTER ``_ensure_created``, and only when the prefix actually has a
+    ``system.reg``. The write used to happen up front in
+    ``_handle_proton_change``, which meant a reset whose rebuild then failed
+    still claimed the new Proton: the next launch saw "same family, nothing to
+    do", skipped the reset, and ran the game against a hollow prefix forever.
+    Leaving the old marker in place makes the next launch retry the rebuild.
+    """
+    if not (resolve_registry_prefix(prefix_root) / "system.reg").is_file():
+        logger.warning(
+            "[prefix_init] not stamping %s — prefix has no system.reg, so the "
+            "next launch must retry the rebuild", current,
+        )
+        return
+    with contextlib.suppress(OSError):
+        prefix_root.mkdir(parents=True, exist_ok=True)
+        (prefix_root / _MARKER_NAME).write_text(current, encoding="utf-8")
 
 
 def _read_previous_proton(prefix_root: Path) -> str | None:
@@ -150,9 +180,6 @@ def _handle_proton_change(
                 i18n_params={"version": current},
                 game_title=plan.context.game_key,
             )
-    with contextlib.suppress(OSError):
-        prefix_root.mkdir(parents=True, exist_ok=True)
-        (prefix_root / _MARKER_NAME).write_text(current, encoding="utf-8")
 
 
 def _reset_prefix(prefix_root: Path) -> None:
@@ -160,11 +187,18 @@ def _reset_prefix(prefix_root: Path) -> None:
     active = resolve_registry_prefix(prefix_root)
     users = active / "drive_c" / "users"
     backup = prefix_root / ".save_backup"
-    with contextlib.suppress(OSError):
-        if backup.exists():
+    # Refresh the backup ONLY when there is something to replace it with. The
+    # old order deleted it first and then checked ``users``, so a prefix that
+    # was reset and failed to rebuild (no ``drive_c/users`` left) lost the
+    # surviving backup on the very next reset — the one copy of those saves,
+    # gone, with nothing to restore from.
+    if users.is_dir():
+        with contextlib.suppress(OSError):
+            staged = prefix_root / ".save_backup.new"
+            shutil.rmtree(staged, ignore_errors=True)
+            shutil.copytree(users, staged, dirs_exist_ok=True)
             shutil.rmtree(backup, ignore_errors=True)
-        if users.is_dir():
-            shutil.copytree(users, backup, dirs_exist_ok=True)
+            staged.rename(backup)
     # Remove all Wine/Proton state + re-runnable setup markers, leaving
     # only the proton-version marker and the save backup behind.
     for entry in _safe_iterdir(prefix_root):
@@ -207,123 +241,8 @@ def _clear_stale_compat_markers(prefix_root: Path) -> None:
                 logger.info("[prefix_init] cleared stale compat marker %s", marker.name)
 
 
-# ── save migration / restore ──────────────────────────────────────
-
-
-def _merge_users(src_users: Path, dst_users: Path) -> int:
-    """Copy files from ``src_users`` into ``dst_users``, non-destructively.
-
-    A file is copied only when the destination is missing or older than
-    the source (mtime guard), so a save written after a reset is never
-    clobbered by a stale backup, and the merge is safe to re-run. Per-
-    file errors are logged and skipped — best-effort, like the rest of
-    this module. Returns the number of files actually copied.
-    """
-    if not src_users.is_dir():
-        return 0
-    copied = 0
-    for src in src_users.rglob("*"):
-        if not src.is_file():
-            continue
-        try:
-            rel = src.relative_to(src_users)
-            dst = dst_users / rel
-            if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
-                continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            copied += 1
-        except OSError as e:
-            logger.warning("[prefix_init] save merge skipped %s: %s", src, e)
-    return copied
-
-
-def _users_has_files(users_dir: Path) -> bool:
-    """True if ``users_dir`` holds at least one regular file."""
-    if not users_dir.is_dir():
-        return False
-    try:
-        return any(p.is_file() for p in users_dir.rglob("*"))
-    except OSError:
-        return False
-
-
-def _restore_save_backup(prefix_root: Path) -> None:
-    """Merge a prior reset's ``.save_backup`` into the live prefix.
-
-    ``_reset_prefix`` copies ``drive_c/users`` to ``.save_backup`` before
-    wiping the prefix but nothing used to put it back, so a Proton-family
-    change silently lost saves. We restore it after the prefix is
-    recreated. The backup is left in place — the mtime-guarded merge
-    makes a repeat harmless and the next reset refreshes it.
-    """
-    backup = prefix_root / ".save_backup"
-    if not backup.is_dir():
-        return
-    dst_users = resolve_registry_prefix(prefix_root) / "drive_c" / "users"
-    copied = _merge_users(backup, dst_users)
-    if copied:
-        logger.info(
-            "[prefix_init] restored %d save file(s) from .save_backup", copied,
-        )
-
-
-def _legacy_prefix_candidates(plan: ProtonLaunchPlan) -> list[Path]:
-    """Legacy shared-umu prefixes that may hold this game's old saves."""
-    base = Path(_LEGACY_UMU_BASE).expanduser()
-    candidates: list[Path] = []
-    game_gameid = (plan.env or {}).get("GAMEID")
-    if game_gameid:
-        # Old launchers that set a per-game GAMEID but no WINEPREFIX.
-        candidates.append(base / game_gameid)
-    candidates.extend(base / name for name in _LEGACY_UMU_SHARED)
-    return candidates
-
-
-def _migrate_legacy_prefix(plan: ProtonLaunchPlan, prefix_root: Path) -> None:
-    """One-time: pull saves from a legacy shared umu prefix into this one.
-
-    Pre-0.6 launches didn't set ``WINEPREFIX``, so games ran in umu's
-    shared default prefix (``~/Games/umu/umu-0``). After upgrading, the
-    new per-game prefix is empty and saves look lost. Copy the legacy
-    ``drive_c/users`` tree forward (first candidate with real data wins),
-    leaving the legacy prefix untouched so other games can migrate from
-    it too. Idempotent via a per-prefix marker.
-    """
-    marker = prefix_root / _LEGACY_MIGRATED_MARKER
-    if marker.exists():
-        return
-    dst_users = resolve_registry_prefix(prefix_root) / "drive_c" / "users"
-    for candidate in _legacy_prefix_candidates(plan):
-        src_users = resolve_registry_prefix(candidate) / "drive_c" / "users"
-        if not _users_has_files(src_users):
-            continue
-        copied = _merge_users(src_users, dst_users)
-        logger.info(
-            "[prefix_init] migrated %d save file(s) from legacy prefix %s",
-            copied, candidate,
-        )
-        break
-    # Mark done even when nothing matched so we don't rescan every launch;
-    # the merge is mtime-guarded, so a future re-run would be harmless.
-    with contextlib.suppress(OSError):
-        marker.write_text("done", encoding="utf-8")
-
-
-async def _restore_or_migrate_saves(
-    plan: ProtonLaunchPlan, prefix_root: Path,
-) -> None:
-    """After a fresh prefix is created, bring prior saves forward.
-
-    A reset's ``.save_backup`` (this exact prefix's own data) is the most
-    specific source and wins; otherwise fall back to a one-time legacy
-    shared-prefix migration. Runs the blocking copy off the event loop.
-    """
-    if (prefix_root / ".save_backup").is_dir():
-        await asyncio.to_thread(_restore_save_backup, prefix_root)
-    else:
-        await asyncio.to_thread(_migrate_legacy_prefix, plan, prefix_root)
-
+# Save restore/migration lives in ``prefix_saves``; re-exported here so
+# the names stay reachable at their historical import path.
 
 async def _ensure_created(plan: ProtonLaunchPlan, prefix_root: Path) -> None:
     """Run ``createprefix`` when the prefix has no ``system.reg`` yet."""
@@ -511,12 +430,8 @@ async def _run_umu(
     game_log = open_game_log()
     out = game_log if game_log is not None else asyncio.subprocess.DEVNULL
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            env=env,
-            stdout=out,
-            stderr=out,
-            start_new_session=True,
+        proc = await spawn_escaped(
+            argv, env=env, stdout=out, stderr=out, start_new_session=True,
         )
     except OSError as e:
         logger.warning("[prefix_init] umu %s spawn failed: %s", umu_args, e)

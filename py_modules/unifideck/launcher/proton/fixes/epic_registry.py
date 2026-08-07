@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from unifideck.launcher.proton.infrastructure.container_escape import (
+    spawn_escaped,
+)
+
 logger = logging.getLogger(__name__)
 _UPLAY_ID_RE = re.compile(r"-UplayId=\s*(\d+)")
 @dataclass(frozen=True)
@@ -150,8 +154,8 @@ async def _run_reg_commands(
     ok_count = 0
     for cmd in commands:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
+            proc = await spawn_escaped(
+                cmd,
                 env=env,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
@@ -191,8 +195,8 @@ async def _kill_wineserver(
     env["WINEPREFIX"] = str(wineprefix)
     with contextlib.suppress(TimeoutError, OSError,
         subprocess.SubprocessError,):
-        proc = await asyncio.create_subprocess_exec(
-            str(wineserver), "--kill",
+        proc = await spawn_escaped(
+            [str(wineserver), "--kill"],
             env=env,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,

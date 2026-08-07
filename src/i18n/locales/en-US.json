@@ -330,6 +330,7 @@
       "ubisoftLaunchIdMissingMessage": "Couldn't resolve this game's launch ID — opening Ubisoft Connect so you can start it from your library. Re-run a library sync to fix direct launch.",
       "dependenciesTitle": "Installing Dependencies",
       "installingRedistributables": "Installing game redistributables...",
+      "redistributablesSkippedProton": "{{version}} can't install redistributables — clear Force Compatibility in Steam if the game misbehaves",
       "dependenciesReady": "Dependencies Ready",
       "redistributablesInstalled": "Redistributables installed",
       "dependenciesStatus": "Dependencies",

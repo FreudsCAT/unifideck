@@ -25,6 +25,9 @@ import socket
 import time
 from pathlib import Path
 
+from unifideck.launcher.proton.infrastructure.container_escape import (
+    spawn_escaped,
+)
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 
 logger = logging.getLogger(__name__)
@@ -140,8 +143,8 @@ async def _run_legendary(
     if config_path:
         env["LEGENDARY_CONFIG_PATH"] = config_path
     try:
-        proc = await asyncio.create_subprocess_exec(
-            legendary_bin, *args, env=env,
+        proc = await spawn_escaped(
+            [legendary_bin, *args], env=env,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )

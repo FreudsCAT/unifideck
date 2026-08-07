@@ -8,6 +8,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from unifideck.launcher.proton.infrastructure.container_escape import (
+    spawn_escaped,
+)
+
 logger = logging.getLogger(__name__)
 _PROTON_FALLBACK_WINE_PATHS: list[str] = [
     "~/.steam/steam/steamapps/common/Proton - Experimental/files/bin/wine",
@@ -117,11 +121,13 @@ async def _run_registry_inject(
     env = dict(os.environ)
     env["WINEPREFIX"] = str(wineprefix)
     try:
-        proc = await asyncio.create_subprocess_exec(
-            str(wine_bin),
-            "reg", "add",
-            "HKEY_CLASSES_ROOT\\\\com.epicgames.launcher",
-            "/f",
+        proc = await spawn_escaped(
+            [
+                str(wine_bin),
+                "reg", "add",
+                "HKEY_CLASSES_ROOT\\\\com.epicgames.launcher",
+                "/f",
+            ],
             env=env,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
@@ -158,8 +164,8 @@ async def _kill_wineserver(wine_bin: Path, wineprefix: Path) -> None:
     env = dict(os.environ)
     env["WINEPREFIX"] = str(wineprefix)
     with contextlib.suppress(TimeoutError, OSError, subprocess.SubprocessError):
-        proc = await asyncio.create_subprocess_exec(
-            str(wineserver), "--kill",
+        proc = await spawn_escaped(
+            [str(wineserver), "--kill"],
             env=env,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,

@@ -13,7 +13,7 @@ from typing import Any
 
 from unifideck.launcher.frontend_bridge import launcher_toast
 
-from .container_escape import escape_argv
+from .container_escape import spawn_escaped
 
 logger = logging.getLogger(__name__)
 # Short pause before a recoverable umu retry — gives a transient
@@ -439,11 +439,10 @@ async def _run_umu_once(
     # hop back out to the host first: Proton's python3 cannot load libz.so.1
     # inside steamrt and umu would exit 127. No-op when unwrapped.
     # See container_escape for the on-device reproduction.
-    argv = escape_argv(argv, env, cwd)
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
+    proc = await spawn_escaped(
+        argv,
         env=env,
-        cwd=str(cwd) if cwd else None,
+        cwd=cwd,
         stdout=out,
         stderr=out,
         start_new_session=True,

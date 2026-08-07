@@ -15,6 +15,10 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from unifideck.launcher.proton.infrastructure.container_escape import (
+    spawn_escaped,
+)
+
 if TYPE_CHECKING:
     from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 
@@ -130,8 +134,8 @@ async def run_wine(
     cmd = [str(plan.python_bin), str(plan.umu_wrapper), exe, *args]
     logger.info("[gog_setup] run: %s %s", Path(exe).name, " ".join(args[:4]))
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, env=env,
+        proc = await spawn_escaped(
+            cmd, env=env,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )

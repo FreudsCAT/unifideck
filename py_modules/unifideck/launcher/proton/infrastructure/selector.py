@@ -365,6 +365,16 @@ def _resolve_logged(source: str, tool: str, tried: list[str]) -> Path | None:
     tried.append(f"{source}:{tool}")
     path = resolve_proton_path(tool)
     if not path:
+        # Loud, because this is the silent half of "my Force-Compat pick was
+        # ignored": the tier just vanished and the log showed only the GE
+        # fallback that followed, with nothing naming the tool that failed or
+        # where we looked for it.
+        logger.warning(
+            "[launcher.proton] %s tool %s did not resolve to an installed "
+            "Proton (searched compatibilitytools.d roots + every Steam "
+            "library's steamapps/common) — skipping this tier",
+            source, tool,
+        )
         return None
     if not ge_installer.is_proton_install_complete(path):
         logger.warning(

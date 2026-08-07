@@ -63,6 +63,67 @@ def _write_marker(marker: Path, body: str) -> None:
         logger.debug("[compat.winetricks] marker write failed: %s", e)
 
 
+def _skip_incapable_proton(plan: ProtonLaunchPlan, marker: Path) -> bool:
+    """Record + announce that this Proton can't install redistributables.
+
+    The marker body is deliberately NOT one of ``_TERMINAL_MARKERS``, so
+    ``_already_done`` keeps returning False and the redistributables install
+    for real the moment the prefix runs under a capable Proton again. Returns
+    ``False`` — nothing hung, so the caller must not trigger the GE retry
+    ladder.
+    """
+    tool = plan.state.proton_tool_id or "this Proton"
+    logger.warning(
+        "[compat.winetricks] %s ships no protonfixes/ — skipping "
+        "redistributables (umu's winetricks verb needs GE/UMU-Proton). The "
+        "prefix stays on the Proton you selected; clear Steam's Force "
+        "Compatibility if the game misses a redistributable.", tool,
+    )
+    _write_marker(marker, "skipped: proton has no protonfixes")
+    launcher_toast(
+        "toasts.launcher.redistributablesSkippedProton",
+        i18n_title_key="toasts.launcher.dependenciesTitle",
+        i18n_params={"version": tool},
+        game_title=plan.context.game_key,
+        severity="warning",
+    )
+    return False
+
+
+def _proton_can_run_winetricks_verb(proton_path: str | Path | None) -> bool:
+    """Whether ``umu-run winetricks`` can work with this Proton.
+
+    umu passes ``cwd=f"{PROTONPATH}/protonfixes"`` to ``Popen`` for the
+    winetricks verb (umu 1.4.4 ``umu_run.py:720-722``), so a Proton without
+    that **directory** raises FileNotFoundError inside umu — umu's own
+    ``--help`` says the verb "requires UMU-Proton or GE-Proton". Official
+    Valve Protons (Experimental, Proton 9/10/11, Hotfix) ship no
+    ``protonfixes/``, so the step cannot succeed no matter how long it runs.
+
+    This used to live in ``prefix_setup._preempt_incapable_proton``, where it
+    switched the WHOLE prefix setup to managed GE-Proton — and that is what
+    broke launching under a user-selected Proton. A prefix is single-Proton
+    state: GE's ``wineboot`` rewrites ``<compatdata>/version`` in GE's format,
+    which official Proton's ``upgrade_pfx`` cannot parse ("Prefix has an
+    invalid version?!"), and the game then ran under the user's Proton against
+    a prefix GE had built and stamped. The capability of ONE optional step was
+    never evidence about which Proton the user wants, so the gate now skips
+    that step and nothing else.
+
+    Fails open (``True``) when there is no path to judge or the check itself
+    errors: it can only ever skip an attempt that was certain to fail.
+    """
+    if not proton_path:
+        return True
+    try:
+        root = Path(proton_path)
+        if root.is_file():  # the `proton` script itself was passed
+            root = root.parent
+        return (root / "protonfixes").is_dir()
+    except OSError:
+        return True
+
+
 async def apply_winetricks(plan: ProtonLaunchPlan) -> bool:
     """Install required redistributables once per prefix.
 
@@ -83,6 +144,9 @@ async def apply_winetricks(plan: ProtonLaunchPlan) -> bool:
     if not packages:
         _write_marker(marker, "no redistributables")
         return False
+
+    if not _proton_can_run_winetricks_verb(plan.env.get("PROTONPATH")):
+        return _skip_incapable_proton(plan, marker)
 
     logger.info(
         "[compat.winetricks] installing for %s: %s",

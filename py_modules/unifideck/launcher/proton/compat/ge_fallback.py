@@ -58,8 +58,10 @@ async def fallback_to_ge_proton(
     from unifideck.launcher.proton.compat.prefix_init import (
         _MARKER_NAME,
         _proton_family,
-        _restore_or_migrate_saves,
         _run_createprefix_with_retry,
+    )
+    from unifideck.launcher.proton.compat.prefix_saves import (
+        _restore_or_migrate_saves,
     )
 
     current_tool = plan.state.proton_tool_id or ""

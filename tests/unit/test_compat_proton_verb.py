@@ -28,13 +28,20 @@ def _plan(tmp_path):
     plugin_dir = tmp_path / "plugin"
     (plugin_dir / "bin").mkdir(parents=True)
     (plugin_dir / "bin" / "vcruntime_fix.reg").write_text("REGEDIT4\n")
+    ge_root = tmp_path / "GE-Proton11-3"
+    (ge_root / "protonfixes").mkdir(parents=True)
     return SimpleNamespace(
         prefix_path=prefix,
         python_bin=Path("/usr/bin/python3"),
         umu_wrapper=Path("/umu/umu-run"),
         # Inherited env deliberately carries the hang-causing verb.
-        env={"PROTON_VERB": "waitforexitandrun", "PROTONPATH": "/p"},
-        state=SimpleNamespace(proton_tool_id="proton_experimental"),
+        # PROTONPATH points at a GE-shaped dir (with ``protonfixes/``) because
+        # ``apply_winetricks`` now skips the step entirely for a Proton that
+        # cannot run umu's winetricks verb — see
+        # test_winetricks_skips_incapable_proton.py. This test is about the
+        # verb, so it needs the step to actually run.
+        env={"PROTON_VERB": "waitforexitandrun", "PROTONPATH": str(ge_root)},
+        state=SimpleNamespace(proton_tool_id="GE-Proton11-3"),
         context=SimpleNamespace(
             game_id="123", game_key="gog:123", plugin_dir=plugin_dir,
         ),
