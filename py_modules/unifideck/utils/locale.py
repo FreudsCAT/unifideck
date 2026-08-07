@@ -8,10 +8,13 @@ edit to config.json, and this module picks it up automatically
 on the next plugin start.
 
 Resolution priority:
-  1. User preference → ConfigManager key 'ui.language'
-     (only if the saved value is a tag present in
+  1. User preference → ConfigManager keys 'ui.locale' (written
+     by the frontend language selector) and 'ui.language'
+     (legacy key). The value 'auto' is ignored so that the
+     explicit user choice wins over the Steam UI language.
+     Only if the saved value is a tag present in
      i18n.locales; unknown saved tags are silently ignored
-     and we fall through to system detection)
+     and we fall through to system detection.
   2. System POSIX → locale.getlocale() → mapped to the first
      i18n.locales entry whose tag begins with the same 2-
      letter prefix (case-insensitive)
@@ -33,7 +36,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Config keys used by this module.
-_USER_LANGUAGE_KEY = "ui.language"
+_USER_LANGUAGE_KEYS = ("ui.locale", "ui.language")
+# Value "auto" means the frontend hasn't fixed a language yet —
+# the frontend resolves "auto" from the Steam UI language, but the
+# backend resolves it from POSIX locale, causing a mismatch.
+# Ignore it and fall through to system detection.
+_AUTO = "auto"
 
 # The locale_config module lives in scripts/ which is a sibling
 # of py_modules/. It's not on the default Python path so we add
@@ -134,8 +142,15 @@ def get_unifideck_locale(config: ConfigManager | None) -> str:
     """
     lc = get_locale_config(config)
     # ─── 1. Explicit user preference ──────────────────────────
-    saved = get_cfg(config, _USER_LANGUAGE_KEY, None)
-    if isinstance(saved, str) and saved:
+    # Check both 'ui.locale' (written by frontend) and 'ui.language'
+    # (legacy). Skip 'auto' — it causes frontend/backend divergence.
+    saved = None
+    for key in _USER_LANGUAGE_KEYS:
+        val = get_cfg(config, key, None)
+        if isinstance(val, str) and val and val != _AUTO:
+            saved = val
+            break
+    if saved:
         # Normalise: accept both 'fr-FR' and 'fr_FR' for
         # compatibility with POSIX-style values.
         normalised = saved.replace("_", "-")

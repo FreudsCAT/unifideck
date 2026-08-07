@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.proton.compat.epic_cleanup import cleanup_epic_artifacts
@@ -142,6 +143,41 @@ async def _prepare_epic_env(
     return legendary_bin, build_legendary_env(plan, config_path)
 
 
+def _resolve_epic_language(plan: ProtonLaunchPlan) -> str:
+    """Resolve the Epic language code from the Unifideck config.
+
+    Reads the user's language preference via ``get_unifideck_locale``
+    (which checks ``ui.locale`` → system POSIX → fallback) and converts
+    the BCP-47 tag to a 2-letter Epic language code (e.g. ``es-ES`` →
+    ``es``).  Falls back to ``en`` if anything goes wrong.
+    """
+    try:
+        from unifideck.utils.locale import get_unifideck_locale
+        from unifideck.config import resolve_user_config_path, ConfigManager
+
+        defaults_path = (
+            plan.context.plugin_dir / "defaults" / "config.json"
+        )
+        user_path = resolve_user_config_path()
+        kwargs: dict[str, Any] = {"defaults_path": defaults_path}
+        if user_path is not None:
+            kwargs["user_path"] = user_path
+        config = ConfigManager(**kwargs)
+        locale_tag = get_unifideck_locale(config)
+        # BCP-47 → 2-letter prefix for legendary --language
+        lang = locale_tag.split("-")[0].lower()
+        if lang and len(lang) == 2:
+            logger.info(
+                "[launcher.proton.epic] resolved language %s from "
+                "config locale %s", lang, locale_tag,
+            )
+            return lang
+    except Exception:
+        logger.exception("[launcher.proton.epic] language resolution "
+                         "failed, falling back to 'en'")
+    return "en"
+
+
 def _build_legendary_argv(
     plan: ProtonLaunchPlan, legendary_bin: str,
 ) -> list[str]:
@@ -168,7 +204,7 @@ def _build_legendary_argv(
         # libz.so.1). Force-clear both right at the boundary.
         f"env -u LD_LIBRARY_PATH -u LD_PRELOAD {plan.python_bin} {plan.umu_wrapper}",
         "--language",
-        os.environ.get("EPIC_LANG", "en"),
+        _resolve_epic_language(plan),
     ])
     exe_override = _resolve_exe_override(plan)
     if exe_override:
