@@ -160,7 +160,9 @@ export const DownloadItemRow: FC<Props> = ({ item, variant }) => {
                 border: "none",
                 background: "#22c55e",
               }}
-              onClick={() => actions.launch(playAppId)}
+              onClick={() =>
+                void actions.launch(playAppId, `${item.store}:${item.game_id}`)
+              }
             >
               {t("downloads.play")}
             </DialogButton>

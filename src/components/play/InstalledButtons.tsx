@@ -29,7 +29,6 @@ import { useGameActions } from "../../hooks/useGameActions";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { openNativeAppManageMenu } from "../../utils/nativeAppMenu";
-import { captureForceCompatPin } from "../../utils/protonPin";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
 import { CloudSaveButton } from "./CloudSaveButton";
 import {
@@ -104,17 +103,9 @@ export const InstalledButtons: FC<Props> = ({
   const [hasUpdate, setHasUpdate] = useState(false);
 
   // Steam's Force-Compatibility is captured into Unifideck's own per-game
-  // pin and cleared before RunGame — see utils/protonPin.ts for why that is
-  // mandatory rather than cosmetic. Short version: with a Proton forced,
-  // Steam runs bin/unifideck-launcher *through Wine*, which cannot execute
-  // a Linux script, so the launcher never starts at all.
-  //
-  // Reading config.vdf at launch time instead (and leaving Steam's setting
-  // in place) was tried and does not work: container_escape can only help
-  // once the launcher is running, and in this configuration it never is.
-  //
-  // The staleness that sank the original useLaunchPrep is avoided by
-  // capturing here, on the Play press, rather than on page open.
+  // pin and cleared before RunGame — that happens inside actions.launch,
+  // so every launch path shares it. See utils/protonPin.ts for why it is
+  // mandatory rather than cosmetic.
 
   // Running-state poll (2 s).
   useEffect(() => {
@@ -159,21 +150,10 @@ export const InstalledButtons: FC<Props> = ({
     };
   }, [game]);
 
-  const onPlay = useCallback(async () => {
+  const onPlay = useCallback(() => {
     if (!game) return;
-    const outcome = await captureForceCompatPin(
-      `${game.store}:${game.store_game_id}`,
-    );
-    if (outcome.pinned) {
-      // Steam's dialog will now show no forced tool, so say where the
-      // choice went — otherwise it looks like the setting was discarded.
-      toast.info(
-        t("play.protonPinned", { version: outcome.pinned }),
-        t("play.protonPinnedBody"),
-      );
-    }
-    actions.launch(appId);
-  }, [actions, appId, game, t, toast]);
+    void actions.launch(appId, `${game.store}:${game.store_game_id}`);
+  }, [actions, appId, game]);
 
   const onStop = useCallback(() => {
     actions.terminate(appId);
