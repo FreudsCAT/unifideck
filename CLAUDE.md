@@ -2,7 +2,7 @@
 
 ## Antes de compilar en la Steam Deck: comprobar pip
 
-**Recordárselo SIEMPRE a Carles antes de darle instrucciones de compilar.**
+**Recordarlo SIEMPRE antes de dar instrucciones de compilar.**
 
 SteamOS no trae `pip` en `/usr/bin/python3`. Sin él, `build-plugin.sh` no
 vendoriza nada y produce un plugin que arranca pero se queda en «Comprobando
@@ -79,7 +79,7 @@ Trabajo: añadir `language_setup/epic.py` calcado de `amazon.py` (~12 líneas) y
 llamarlo desde `handlers/epic.py::epic_launch`. `es-ES` ya está en
 `LOCALE_MAP` (`00000c0a`, `ESN`, Spain), no hay tabla nueva que mantener.
 
-Dos avisos para Carles antes de empezar: no garantiza español si el juego no
+Dos avisos que hay que dar antes de empezar: no garantiza español si el juego no
 trae los textos, y cambia el prefijo entero (igual que ya se hace con Amazon y
 Ubisoft).
 
@@ -102,7 +102,7 @@ la captura lo ignora a propósito.
   `save_proton_setting` (un `tool_name` vacío borra la entrada). Hace falta una
   RPC nueva que enumere los Protones instalados.
 
-Descartado tras valorarlo con Carles: inyectar el aviso **bajo la casilla de
+Descartado tras valorarlo: inyectar el aviso **bajo la casilla de
 Steam**. El diálogo de propiedades no es una ruta, así que `routerHook.addPatch`
 no sirve y habría que enganchar el modal; es la superficie más frágil de todas
 y sería solo informativa.
