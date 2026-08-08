@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
-from typing import Any
 
 from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.proton.compat.epic_cleanup import cleanup_epic_artifacts
@@ -152,17 +150,22 @@ def _resolve_epic_language(plan: ProtonLaunchPlan) -> str:
     ``es``).  Falls back to ``en`` if anything goes wrong.
     """
     try:
+        # ``resolve_user_config_path`` lives in the submodule, NOT in the
+        # ``unifideck.config`` package namespace (its ``__all__`` only
+        # re-exports ConfigManager / persistence / validator). Importing it
+        # from the package raised ImportError on every single launch, the
+        # ``except`` below swallowed it, and every Epic game got
+        # ``--language en`` no matter what the UI said.
+        from unifideck.config import ConfigManager
+        from unifideck.config.user_config_path import resolve_user_config_path
         from unifideck.utils.locale import get_unifideck_locale
-        from unifideck.config import resolve_user_config_path, ConfigManager
 
-        defaults_path = (
-            plan.context.plugin_dir / "defaults" / "config.json"
+        config = ConfigManager(
+            defaults_path=str(
+                plan.context.plugin_dir / "defaults" / "config.json",
+            ),
+            user_path=resolve_user_config_path(),
         )
-        user_path = resolve_user_config_path()
-        kwargs: dict[str, Any] = {"defaults_path": defaults_path}
-        if user_path is not None:
-            kwargs["user_path"] = user_path
-        config = ConfigManager(**kwargs)
         locale_tag = get_unifideck_locale(config)
         # BCP-47 → 2-letter prefix for legendary --language
         lang = locale_tag.split("-")[0].lower()
