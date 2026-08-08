@@ -106,9 +106,11 @@ def render_sibling_logs() -> tuple[str, list[dict[str, Any]]]:
         "OTHER DECKY PLUGINS' LOGS",
         "=========================",
         "",
-        "The newest log file from each other installed plugin, tail-capped at "
-        f"{CAP_PER_PLUGIN // 1024} KiB. Unifideck's own logs are under "
-        "decky/ in full. Use these to tell OUR bug from a neighbour's.",
+        (
+            "The newest log file from each other installed plugin, tail-capped "
+            f"at {CAP_PER_PLUGIN // 1024} KiB. Unifideck's own logs are under "
+            "decky/ in full. Use these to tell OUR bug from a neighbour's."
+        ),
         "",
     ]
     summary: list[dict[str, Any]] = []
