@@ -76,8 +76,8 @@ def _skip_incapable_proton(plan: ProtonLaunchPlan, marker: Path) -> bool:
     logger.warning(
         "[compat.winetricks] %s ships no protonfixes/ — skipping "
         "redistributables (umu's winetricks verb needs GE/UMU-Proton). The "
-        "prefix stays on the Proton you selected; clear Steam's Force "
-        "Compatibility if the game misses a redistributable.", tool,
+        "prefix stays on the Proton you selected; pick a GE-Proton instead "
+        "if the game misses a redistributable.", tool,
     )
     _write_marker(marker, "skipped: proton has no protonfixes")
     launcher_toast(

@@ -7,7 +7,7 @@
  *  - `install(store, gameId, options?)`
  *  - `uninstall(appId)`
  *  - `cancel(downloadId)`
- *  - `launch(appId, launchOptions)`
+ *  - `launch(appId, storeGameId)`
  *  - `terminate(appId, force?)`
  *
  * The hook tracks an `isWorking` flag while any one of these
@@ -15,9 +15,12 @@
  * spinner without each caller managing its own loading state.
  */
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useDownloads } from "../contexts/DownloadContext";
+import { useToast } from "./useToast";
 import { invalidateGameInfo } from "./useGameInfo";
 import { bumpGameStateVersion } from "../lib/game-state-version";
+import { captureForceCompatPin } from "../utils/protonPin";
 import type { Result, StoreId } from "../types/api";
 
 /** Steam bridge shape. */
@@ -40,9 +43,22 @@ export interface UseGameActionsResult {
   ) => Promise<Result | null>;
   uninstall: (appId: number, deletePrefix?: boolean) => Promise<Result | null>;
   cancel: (downloadId: string) => Promise<Result | null>;
-  launch: (appId: number) => void;
+  /** `storeGameId` is the `"<store>:<game_id>"` key. It is required,
+   *  not optional, so `tsc` fails any new call site that forgets it —
+   *  a launch without the Force-Compat capture silently does nothing
+   *  at all when a Proton is forced (see {@link captureForceCompatPin}),
+   *  which is exactly how the downloads-tab Play button shipped broken. */
+  launch: (appId: number, storeGameId: string) => Promise<void>;
   terminate: (appId: number, force?: boolean) => void;
 }
+
+/** AppIds whose launch is mid-flight, so repeated presses collapse into
+ *  one RunGame. The capture made launching asynchronous — the button no
+ *  longer fires instantly — and on device a single Dying Light press
+ *  produced three captures 90 ms apart. Module-scoped rather than a ref
+ *  because each component builds its own hook instance while Steam is
+ *  global: two different buttons for the same game must still dedupe. */
+const launchesInFlight = new Set<number>();
 
 /**
  * Hook bundling all game-level actions a UI element
@@ -56,6 +72,8 @@ export interface UseGameActionsResult {
  */
 export function useGameActions(bridge: SteamBridgeShape): UseGameActionsResult {
   const downloads = useDownloads();
+  const { t } = useTranslation();
+  const toast = useToast();
   const [isWorking, setWorking] = useState(false);
 
   const install = useCallback(
@@ -103,11 +121,30 @@ export function useGameActions(bridge: SteamBridgeShape): UseGameActionsResult {
     [downloads],
   );
 
+  // The capture lives here rather than in the buttons so every launch
+  // path gets it. Steam wraps the launcher in Wine when a Proton is
+  // forced on the shortcut, so a RunGame without this does nothing —
+  // no log, no toast, no game.
   const launch = useCallback(
-    (appId: number) => {
-      bridge.runGame(appId);
+    async (appId: number, storeGameId: string) => {
+      if (launchesInFlight.has(appId)) return;
+      launchesInFlight.add(appId);
+      try {
+        const outcome = await captureForceCompatPin(storeGameId);
+        if (outcome.pinned) {
+          // Steam's dialog will now show no forced tool, so say where the
+          // choice went — otherwise it looks like the setting was discarded.
+          toast.info(
+            t("play.protonPinned", { version: outcome.pinned }),
+            t("play.protonPinnedBody"),
+          );
+        }
+        bridge.runGame(appId);
+      } finally {
+        launchesInFlight.delete(appId);
+      }
     },
-    [bridge],
+    [bridge, t, toast],
   );
 
   const terminate = useCallback(
