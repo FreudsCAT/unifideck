@@ -29,6 +29,7 @@ import { useGameActions } from "../../hooks/useGameActions";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { openNativeAppManageMenu } from "../../utils/nativeAppMenu";
+import { captureForceCompatPin } from "../../utils/protonPin";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
 import { CloudSaveButton } from "./CloudSaveButton";
 import {
@@ -102,17 +103,18 @@ export const InstalledButtons: FC<Props> = ({
   const [isRunning, setIsRunning] = useState(false);
   const [hasUpdate, setHasUpdate] = useState(false);
 
-  // NOTE: we deliberately do NOT touch Steam's Force-Compatibility here.
-  // This used to capture it into proton_settings.json and clear it so
-  // RunGame wouldn't wrap our launcher in Proton — but clearing it meant
-  // the launcher could never read the user's ACTUAL selection at launch
-  // time (only a copy that went stale whenever the capture/restore dance
-  // was interrupted), so switching Proton in Steam's dialog appeared to do
-  // nothing for some games and work for others purely by timing.
-  // ``config.vdf``'s CompatToolMapping is now the single source of truth,
-  // read by ``selector.select_proton_version``; the double-Proton problem
-  // the clearing existed to avoid is handled properly at the umu spawn
-  // point by ``launcher.proton.infrastructure.container_escape``.
+  // Steam's Force-Compatibility is captured into Unifideck's own per-game
+  // pin and cleared before RunGame — see utils/protonPin.ts for why that is
+  // mandatory rather than cosmetic. Short version: with a Proton forced,
+  // Steam runs bin/unifideck-launcher *through Wine*, which cannot execute
+  // a Linux script, so the launcher never starts at all.
+  //
+  // Reading config.vdf at launch time instead (and leaving Steam's setting
+  // in place) was tried and does not work: container_escape can only help
+  // once the launcher is running, and in this configuration it never is.
+  //
+  // The staleness that sank the original useLaunchPrep is avoided by
+  // capturing here, on the Play press, rather than on page open.
 
   // Running-state poll (2 s).
   useEffect(() => {
@@ -157,10 +159,21 @@ export const InstalledButtons: FC<Props> = ({
     };
   }, [game]);
 
-  const onPlay = useCallback(() => {
+  const onPlay = useCallback(async () => {
     if (!game) return;
+    const outcome = await captureForceCompatPin(
+      `${game.store}:${game.store_game_id}`,
+    );
+    if (outcome.pinned) {
+      // Steam's dialog will now show no forced tool, so say where the
+      // choice went — otherwise it looks like the setting was discarded.
+      toast.info(
+        t("play.protonPinned", { version: outcome.pinned }),
+        t("play.protonPinnedBody"),
+      );
+    }
     actions.launch(appId);
-  }, [actions, appId, game]);
+  }, [actions, appId, game, t, toast]);
 
   const onStop = useCallback(() => {
     actions.terminate(appId);
