@@ -30,6 +30,7 @@ imported lazily inside the function, exactly as ``compat/ge_fallback.py`` does.
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -60,8 +61,16 @@ async def _run_one(
     )
 
     proton_path, proton_tool_id = proton
+    # ``proton_prepare`` mutates the state it is handed. Give it a copy: each
+    # rung of the ladder would otherwise stamp its own tool on the caller's
+    # state, and the LAST one to run — not the one that actually built the
+    # prefix — would be what the game reports and (via the launch plan)
+    # potentially runs under. ``setup_prefix`` publishes the winner explicitly
+    # instead (``_publish_final_tool``). ``copy.copy`` rather than
+    # ``dataclasses.replace`` because callers legitimately pass a
+    # ``SimpleNamespace`` stand-in (see tests/unit/test_warmup_ge_retry.py).
     plan = proton_prepare(
-        ctx, state, python_bin=python_bin,
+        ctx, copy.copy(state), python_bin=python_bin,
         proton_path=proton_path, proton_tool_id=proton_tool_id,
     )
     # Graft any caller-supplied session env (install-time warmup borrows the
@@ -82,6 +91,25 @@ async def _run_one(
         return False
 
 
+def _has_live_force_compat(ctx: LaunchContext) -> bool:
+    """True when Steam's ``config.vdf`` forces a Proton for this shortcut.
+
+    Fails closed (``False``) on any error, so a lookup problem degrades to the
+    historical always-pin behaviour rather than silently dropping the pin.
+    """
+    from unifideck.launcher.proton.infrastructure.selector import (
+        get_steam_compat_tool_override,
+    )
+    app_id = getattr(ctx, "steam_app_id", None)
+    if not app_id:
+        return False
+    try:
+        return bool(get_steam_compat_tool_override(app_id))
+    except Exception:
+        logger.exception("[prefix_setup] force-compat lookup failed")
+        return False
+
+
 def _pin_final_tool(ctx: LaunchContext, tool: str) -> None:
     """Persist ``tool`` as this game's Proton so the next launch reuses it.
 
@@ -96,6 +124,14 @@ def _pin_final_tool(ctx: LaunchContext, tool: str) -> None:
     ``compatibility`` package, so import it lazily to keep this launcher module
     stdlib-safe at import time. Best-effort — a failed pin must never break
     setup (the prefix is already built; worst case is a redo next launch).
+
+    The marker is always re-stamped: it is per-prefix fact ("GE built this"),
+    and it is what stops the wipe-and-rebuild loop. The ``proton_settings.json``
+    write is skipped when the user has a live Steam Force-Compat entry for this
+    game, because ``selector`` tier 1 (``config.vdf``) beats tier 2 (this pin) —
+    so the write can never take effect, and its only observable consequence is
+    that clearing Force Compatibility later silently drops the user onto GE with
+    nothing to explain why.
     """
     from unifideck.launcher.proton.compat.prefix_init import _MARKER_NAME
 
@@ -105,6 +141,13 @@ def _pin_final_tool(ctx: LaunchContext, tool: str) -> None:
     with contextlib.suppress(OSError):
         prefix_root.mkdir(parents=True, exist_ok=True)
         (prefix_root / _MARKER_NAME).write_text(tool, encoding="utf-8")
+    if _has_live_force_compat(ctx):
+        logger.info(
+            "[prefix_setup] not pinning %s for %s — the user's Steam "
+            "Force-Compat choice outranks the pin and must survive",
+            tool, ctx.game_key,
+        )
+        return
     try:
         from unifideck.compatibility.proton_helpers import save_proton_setting
 
@@ -120,80 +163,22 @@ def _pin_final_tool(ctx: LaunchContext, tool: str) -> None:
         )
 
 
-def _can_run_winetricks_verb(proton_path: Path | str | None) -> bool:
-    """Whether ``umu-run winetricks`` can work with this Proton.
 
-    umu execs ``<PROTONPATH>/protonfixes/winetricks``. GE-Proton and
-    UMU-Proton bundle that; official Valve Protons do not ship a
-    ``protonfixes`` directory at all, so the verb dies with a
-    FileNotFoundError from inside umu rather than reporting anything useful.
 
-    Returns True when there is no path to judge (``None``) or the check
-    itself errors, so this gate can only ever skip an attempt that was
-    certain to fail — it never becomes a new way to reject a Proton that
-    might have worked. A path that exists but has no ``protonfixes/``
-    returns False, which includes the "selector handed us something that
-    isn't there" case: routing that to managed GE is the same outcome the
-    timeout ladder would have reached, just sooner.
+def _publish_final_tool(
+    state: RuntimeState, proton: tuple[Path, str],
+) -> None:
+    """Record on the CALLER's state which Proton actually built the prefix.
+
+    ``_run_one`` deliberately works on a copy of ``state`` (each attempt in
+    the ladder would otherwise leave its own tool behind — last write wins,
+    which is how a GE retry used to silently redefine what the game launched
+    under). Publishing here makes the winner an explicit output of
+    ``setup_prefix`` instead of a side effect, and it is what
+    ``helpers.realign_plan_to_prefix_proton`` reads to keep the game on the
+    same Proton as its prefix.
     """
-    if not proton_path:
-        return True
-    try:
-        root = Path(proton_path)
-        if root.is_file():  # the `proton` script itself was passed
-            root = root.parent
-        return (root / "protonfixes").is_dir()
-    except OSError:
-        return True
-
-
-async def _preempt_incapable_proton(
-    ctx: LaunchContext,
-    state: RuntimeState,
-    python_bin: Path | str,
-    default: tuple[Path | str | None, str],
-    session_env: dict[str, str] | None,
-) -> str | None:
-    """Run setup under managed GE when the default can't do compat at all.
-
-    Returns the GE tool id if it took over, else ``None`` (caller proceeds
-    with the default as usual).
-
-    umu's winetricks verb execs ``<PROTONPATH>/protonfixes/winetricks``,
-    which only GE-Proton and UMU-Proton ship — umu's own ``--help`` says
-    "requires UMU-Proton or GE-Proton". Under an official Valve Proton
-    (Experimental, Proton 9, proton-cachyos…) that path does not exist, so
-    the step cannot succeed no matter how long it is given.
-
-    Attempting it anyway is not merely futile, it is expensive: the missing
-    directory surfaces as a FileNotFoundError *inside* umu, the wine child is
-    left holding the prefix, and each step burns its full timeout before
-    being killed — twice per install — after which the caller's ladder
-    switches to GE and RESETS the prefix, discarding everything it just
-    built. The end state was always GE, so checking first costs one ``stat``
-    and saves minutes plus a wasted prefix build on every fresh install.
-    """
-    default_path, default_tool = default
-    if _can_run_winetricks_verb(default_path):
-        return None
-
-    from unifideck.launcher.proton import select_managed_ge_proton
-
-    ge_path, ge_tool = select_managed_ge_proton()
-    if ge_tool == default_tool:
-        # Nothing better to switch to; let the normal path report whatever
-        # actually happens rather than silently doing nothing.
-        return None
-
-    logger.info(
-        "[prefix_setup] proton=%s cannot run umu's winetricks verb (no "
-        "protonfixes/ — official Valve Protons don't ship it); using managed "
-        "GE-Proton %s for %s instead of timing out",
-        default_tool, ge_tool, ctx.game_key,
-    )
-    await _run_one(ctx, state, python_bin, (ge_path, ge_tool), session_env)
-    _pin_final_tool(ctx, ge_tool)
-    return ge_tool
+    state.proton_path, state.proton_tool_id = proton[0], proton[1]
 
 
 async def setup_prefix(
@@ -201,6 +186,7 @@ async def setup_prefix(
     state: RuntimeState,
     *,
     session_env: dict[str, str] | None = None,
+    proton: tuple[Path, str] | None = None,
 ) -> tuple[str, bool]:
     """The canonical prefix setup, reused by install warmup AND first launch.
 
@@ -216,10 +202,24 @@ async def setup_prefix(
       2. On hang → switch to ``select_managed_ge_proton`` and retry; pin the
          result.
 
-    Returns ``(final_tool_id, did_recover)``. All best-effort: if every attempt
-    still hangs, the prefix finishes at first launch (the launch path re-runs
-    these same steps). ``session_env`` is grafted into the umu env for the
-    headless install-time caller; ``None`` at launch (Steam provides a session).
+    A hang is now the ONLY thing that switches Proton. The old static
+    "this Proton can't run umu's winetricks verb" pre-check used to switch too,
+    which meant every official Valve Proton a user selected in Steam's
+    Properties > Compatibility got its prefix built and stamped by GE while the
+    game still launched under their pick — see
+    ``compat.winetricks._proton_can_run_winetricks_verb``, which now skips just
+    that one step and leaves the Proton alone.
+
+    ``proton`` lets a caller that has ALREADY resolved the tool (the launch
+    orchestrator, from its plan) pass it in rather than have it resolved a
+    second time — one ``config.vdf`` read per launch, and no window in which
+    the two resolutions could disagree. Warmup omits it.
+
+    Returns ``(final_tool_id, did_recover)`` and publishes the winning
+    ``(path, tool)`` onto ``state``. All best-effort: if every attempt still
+    hangs, the prefix finishes at first launch (the launch path re-runs these
+    same steps). ``session_env`` is grafted into the umu env for the headless
+    install-time caller; ``None`` at launch (Steam provides a session).
     """
     from unifideck.launcher.proton import (
         find_python_3_10_plus,
@@ -231,15 +231,10 @@ async def setup_prefix(
     # No per-game Force-Compat choice / steam_app_id is meaningful at install
     # time, and at launch ``ctx.steam_app_id`` is honoured — this resolves the
     # same default the first launch would pick.
-    default_path, default_tool = select_proton_version(
+    default_path, default_tool = proton or select_proton_version(
         steam_app_id=ctx.steam_app_id, store_game_id=ctx.game_key,
     )
-
-    preempted = await _preempt_incapable_proton(
-        ctx, state, python_bin, (default_path, default_tool), session_env,
-    )
-    if preempted is not None:
-        return preempted, True
+    _publish_final_tool(state, (default_path, default_tool))
 
     if not await _run_one(
         ctx, state, python_bin, (default_path, default_tool), session_env,
@@ -261,5 +256,6 @@ async def setup_prefix(
         ctx.game_key, default_tool, ge_tool,
     )
     await _run_one(ctx, state, python_bin, (ge_path, ge_tool), session_env)
+    _publish_final_tool(state, (ge_path, ge_tool))
     _pin_final_tool(ctx, ge_tool)
     return ge_tool, True

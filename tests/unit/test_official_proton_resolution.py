@@ -329,3 +329,20 @@ async def test_launch_context_steam_app_id_none_without_games_map_row():
     assert not has_entry and app_id == 0
     ctx = D._game_context("microsoft", "gid", "/x/y.exe", work_dir, "", app_id)
     assert ctx.steam_app_id is None
+
+
+def test_unresolvable_tier_is_logged(monkeypatch, caplog):
+    """A tier that silently vanished is half of "my Force-Compat was ignored".
+
+    ``_resolve_logged`` returned None with no log at all when the tool didn't
+    resolve, so a bundle showed only the GE fallback that followed — nothing
+    named the tool that failed. The user had no way to tell "Unifideck never
+    read my choice" from "it read it and couldn't find that Proton".
+    """
+    monkeypatch.setattr(S, "resolve_proton_path", lambda _t: None)
+
+    with caplog.at_level("WARNING"):
+        assert S._resolve_logged("steam", "proton_9", []) is None
+
+    assert "steam" in caplog.text
+    assert "proton_9" in caplog.text

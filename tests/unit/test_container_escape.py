@@ -107,3 +107,56 @@ def test_detection_reads_lowercase_container_var(monkeypatch):
 
     monkeypatch.setattr(ce.os, "environ", {})
     assert ce.in_pressure_vessel() is False
+
+
+# ── spawn_escaped: the single spawn point ─────────────────────────
+#
+# The escape's correctness depends on being handed the SAME env the spawn
+# will use: ``_forwarded_env`` diffs env against os.environ to decide what
+# crosses the boundary, so escaping with one env and spawning with another
+# silently drops variables. Binding both into one call makes that
+# unrepresentable — and gives the static test in
+# test_umu_spawn_sites_escape.py a single thing to enforce.
+
+
+async def test_spawn_escaped_wraps_argv_and_passes_kwargs_through(
+    _containerised, monkeypatch,
+):
+    seen = {}
+
+    async def _fake_exec(*argv, **kwargs):
+        seen["argv"] = list(argv)
+        seen["kwargs"] = kwargs
+        return "proc"
+
+    monkeypatch.setattr(ce.asyncio, "create_subprocess_exec", _fake_exec)
+
+    env = {"GAMEID": "umu-0"}
+    proc = await ce.spawn_escaped(
+        _ARGV, env=env, cwd=Path("/games/x"), start_new_session=True,
+    )
+
+    assert proc == "proc"
+    assert seen["argv"][0] == "/usr/bin/steam-runtime-launch-client"
+    assert seen["argv"][-len(_ARGV):] == _ARGV
+    assert seen["kwargs"]["env"] is env
+    assert seen["kwargs"]["cwd"] == "/games/x"
+    assert seen["kwargs"]["start_new_session"] is True
+
+
+async def test_spawn_escaped_is_transparent_outside_the_container(monkeypatch):
+    """Unwrapped launches must reach exec byte-identical."""
+    monkeypatch.setattr(ce, "in_pressure_vessel", lambda: False)
+    seen = {}
+
+    async def _fake_exec(*argv, **kwargs):
+        seen["argv"] = list(argv)
+        seen["kwargs"] = kwargs
+        return "proc"
+
+    monkeypatch.setattr(ce.asyncio, "create_subprocess_exec", _fake_exec)
+
+    await ce.spawn_escaped(_ARGV, env={"GAMEID": "umu-0"})
+
+    assert seen["argv"] == _ARGV
+    assert seen["kwargs"]["cwd"] is None

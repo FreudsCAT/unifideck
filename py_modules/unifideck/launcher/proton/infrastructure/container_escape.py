@@ -45,10 +45,12 @@ for a given game — no clearing of their selection required.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shutil
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -139,3 +141,37 @@ def escape_argv(
         "runs on the host", _ESCAPE_CLIENT,
     )
     return escaped
+
+
+async def spawn_escaped(
+    argv: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+    **kwargs: Any,
+) -> asyncio.subprocess.Process:
+    """``create_subprocess_exec`` that escapes the container first.
+
+    THE single spawn point for everything the launcher runs against a Wine
+    prefix — umu, Proton's ``wine``/``wineserver``, and the store CLIs.
+    ``tests/unit/test_umu_spawn_sites_escape.py`` asserts statically that no
+    other module under ``launcher/proton/`` calls
+    ``asyncio.create_subprocess_exec`` directly, because every site that did
+    was a site that broke the moment the user set Force-Compat.
+
+    Binding the escape to the spawn is the point: :func:`escape_argv` decides
+    what crosses the container boundary by diffing ``env`` against
+    ``os.environ`` (see :func:`_forwarded_env`), so a caller that escaped with
+    one env and spawned with another would silently drop variables. Taking
+    both here makes that unrepresentable.
+
+    ``kwargs`` (``stdout``/``stderr``/``start_new_session``/…) pass through
+    untouched. A no-op wrapper when not containerised.
+    """
+    escaped = escape_argv(argv, env, cwd)
+    return await asyncio.create_subprocess_exec(
+        *escaped,
+        env=env,
+        cwd=str(cwd) if cwd is not None else None,
+        **kwargs,
+    )

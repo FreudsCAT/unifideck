@@ -39,6 +39,12 @@ async def launch_windows(
     try:
         # Phase 1: Prepare
         plan, _parsed_options = await svc._prepare_windows_plan(ctx, state)
+        # The Proton this plan was frozen with. ``setup_prefix`` may end up on
+        # a different one (its GE hang-recovery ladder), and the game must
+        # follow the prefix — see ``realign_plan_to_prefix_proton``.
+        plan_tool = getattr(state, "proton_tool_id", None)
+        plan_path = getattr(state, "proton_path", None)
+        plan_proton = (plan_path, plan_tool) if plan_path and plan_tool else None
 
         from unifideck.core.types.events import Events
         store = ctx.store
@@ -57,8 +63,17 @@ async def launch_windows(
         # which only exists after ``createprefix``. Idempotent — a no-op once
         # the prefix is set up and the Proton matches the pin. ``session_env``
         # is None: at launch Steam already provides the user session.
+        # ``proton=`` hands over the tool Phase 1 already resolved so the whole
+        # launch reads ``config.vdf`` once and the two resolutions cannot drift.
         from unifideck.launcher.proton import setup_prefix
-        await setup_prefix(ctx, state)
+        await setup_prefix(ctx, state, proton=plan_proton)
+        # A Wine prefix is single-Proton state: if the ladder moved, the game
+        # has to move with it, or it runs against a prefix another Proton
+        # built and stamped.
+        from .helpers import realign_plan_to_prefix_proton
+        plan = realign_plan_to_prefix_proton(
+            plan, ctx, state, plan_tool=plan_tool or "",
+        )
 
         # Phase 2: Cloud Sync Down
         await svc._cloud_sync_phase(ctx, "down")

@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import Any
 
 from unifideck.launcher.frontend_bridge import launcher_toast
+from unifideck.launcher.proton.infrastructure.container_escape import (
+    spawn_escaped,
+)
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 
 logger = logging.getLogger(__name__)
@@ -218,8 +221,8 @@ async def _spawn_installer(cmd: list[str], env: dict[str, str]) -> bool:
     prereq is genuinely missing — same heuristic as the legacy helper.
     """
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, env=env,
+        proc = await spawn_escaped(
+            cmd, env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )

@@ -18,14 +18,24 @@ inside umu, leaving the wine child holding the prefix until the compat-step
 killpg fires. Two steps, two full timeouts, then the ladder switched to GE
 and RESET the prefix — throwing away everything it had just built.
 
-Because the end state was always GE, checking up front costs one ``stat``
-and saves minutes plus a wasted prefix build on every fresh install.
+Checking up front costs one ``stat`` and saves two full timeouts per install.
+
+The gate has since MOVED (it now lives in ``compat.winetricks``, evaluated on
+``plan.env["PROTONPATH"]``) and been narrowed: it used to route the whole
+prefix setup to managed GE-Proton, which is what broke launching under a
+user-selected Proton — a prefix is single-Proton state, so a GE-built prefix
+plus a Proton-9 launch is the corruption. It now skips the winetricks step
+and leaves the Proton alone. The capability predicate itself is unchanged,
+which is why every case below still holds; see
+``test_winetricks_skips_incapable_proton.py`` for the new behaviour.
 """
 from __future__ import annotations
 
 import stat
 
-from unifideck.launcher.proton.prefix_setup import _can_run_winetricks_verb
+from unifideck.launcher.proton.compat.winetricks import (
+    _proton_can_run_winetricks_verb as _can_run_winetricks_verb,
+)
 
 
 def _proton_dir(root, *, protonfixes: bool):
