@@ -33,6 +33,8 @@ export interface CloudSaveStatus {
   cloud_supported: boolean | null;
   save_path: string | null;
   save_path_resolved: boolean;
+  /** True when `save_path` came from a manual override the user can reset. */
+  save_path_is_override: boolean;
   has_local_saves: boolean;
   local_snapshot: Partial<SaveSnapshot>;
   /** True/false when known, null when undeterminable without a download. */

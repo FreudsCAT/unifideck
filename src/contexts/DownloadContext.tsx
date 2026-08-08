@@ -38,6 +38,8 @@ interface DownloadContextValue {
     deletePrefix?: boolean,
   ) => Promise<Result | null>;
   cancelDownload: (downloadId: string) => Promise<Result | null>;
+  /** Queue an update for an already-installed game. */
+  updateGame: (appId: number) => Promise<Result | null>;
   refresh: () => Promise<void>;
 }
 
@@ -73,6 +75,8 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
     rpcRoutes.cancelDownload,
   );
 
+  const updateMut = useRPCMutation<[number], Result>(rpcRoutes.updateGame);
+
   const refresh = useCallback(async () => {
     await downloadStore.refetch();
   }, []);
@@ -102,12 +106,18 @@ export const DownloadProvider: FC<{ children: ReactNode }> = ({ children }) => {
     [cancelMut],
   );
 
+  const updateGame = useCallback(
+    (appId: number) => updateMut.mutate(appId),
+    [updateMut],
+  );
+
   const value: DownloadContextValue = {
     queue,
     loading,
     installGame,
     uninstallGame,
     cancelDownload,
+    updateGame,
     refresh,
   };
 

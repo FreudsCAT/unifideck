@@ -11,7 +11,6 @@ across stores; best-effort.
 """
 from __future__ import annotations
 
-import contextlib
 import logging
 from pathlib import Path
 
@@ -32,6 +31,21 @@ logger = logging.getLogger(__name__)
 # one), so a good Proton retries it next launch.
 _VCRUNTIME_TIMEOUT_SECONDS = 120.0
 
+# One marker, whose BODY is Proton's own prefix stamp at import time.
+#
+# It used to be one marker per Proton tool id (``.unifideck_vcreg_<tool>.v2``),
+# which could not see the case that actually erases the keys: any Proton other
+# than the one we imported under running ``wineboot -u`` on the prefix
+# ("Upgrading prefix from X to Y") and rewriting ``system.reg``. The old marker
+# for OUR tool was still sitting there, so the import was skipped forever and
+# the prefix stayed permanently without the keys. Comparing against Proton's
+# ``version`` file instead detects every rewrite — a user Proton switch, or a
+# Proton Steam handed the game directly — because Proton restamps it each time.
+#
+# Name keeps the ``.unifideck_vcreg_`` prefix so ``prefix_init``'s
+# ``_clear_stale_compat_markers`` still matches it on a fresh createprefix.
+_MARKER_NAME = ".unifideck_vcreg_v3.done"
+
 
 def _prefix_root(plan: ProtonLaunchPlan) -> Path:
     """Resolve the prefix root (strip a trailing ``pfx`` segment)."""
@@ -39,6 +53,45 @@ def _prefix_root(plan: ProtonLaunchPlan) -> Path:
     while p.name == "pfx":
         p = p.parent
     return p
+
+
+def _prefix_proton_stamp(plan: ProtonLaunchPlan, prefix_root: Path) -> str:
+    """Proton's ``version`` stamp for this prefix, or the tool id if absent.
+
+    This is the value Proton prints in its "Upgrading prefix from X to Y"
+    line. It changes on every prefix create/upgrade, which is exactly when
+    the imported keys are lost.
+    """
+    try:
+        stamp = (prefix_root / "version").read_text(
+            encoding="utf-8", errors="replace",
+        ).strip()
+    except OSError:
+        stamp = ""
+    return stamp or (plan.state.proton_tool_id or "unknown")
+
+
+def _drop_legacy_markers(prefix_root: Path) -> None:
+    """Remove the old per-Proton-tool markers superseded by :data:`_MARKER_NAME`."""
+    for old in prefix_root.glob(".unifideck_vcreg_*.done"):
+        if old.name == _MARKER_NAME:
+            continue
+        try:
+            old.unlink()
+        except OSError as e:
+            logger.debug("[compat.vcruntime] stale marker unlink failed: %s", e)
+
+
+def vcruntime_fix_pending(plan: ProtonLaunchPlan) -> bool:
+    """Whether the VC++ keys still need importing into this prefix."""
+    prefix_root = _prefix_root(plan)
+    try:
+        body = (prefix_root / _MARKER_NAME).read_text(
+            encoding="utf-8", errors="replace",
+        ).strip()
+    except OSError:
+        return True
+    return body != _prefix_proton_stamp(plan, prefix_root)
 
 
 def _wine_z_path(linux_path: Path) -> str:
@@ -65,12 +118,9 @@ async def apply_vcruntime_fix(plan: ProtonLaunchPlan) -> bool:
         return False
     prefix_root = _prefix_root(plan)
     proton_name = plan.state.proton_tool_id or "unknown"
-    # ``.v2`` invalidates markers written by the earlier broken build,
-    # which mistook regedit's "file not found" dialog (rc 0) for a
-    # successful import — the keys were never actually applied.
-    marker = prefix_root / f".unifideck_vcreg_{proton_name}.v2.done"
-    if marker.is_file():
+    if not vcruntime_fix_pending(plan):
         return False
+    marker = prefix_root / _MARKER_NAME
 
     env = dict(plan.env)
     env["GAMEID"] = "umu-0"
@@ -97,14 +147,20 @@ async def apply_vcruntime_fix(plan: ProtonLaunchPlan) -> bool:
         logger.exception("[compat.vcruntime] regedit run failed")
 
     if rc == 0:
-        # Drop stale markers from other Proton versions, write current.
-        for old in prefix_root.glob(".unifideck_vcreg_*.done"):
-            with contextlib.suppress(OSError):
-                old.unlink()
-        with contextlib.suppress(OSError):
-            marker.write_text("done", encoding="utf-8")
+        # Read the stamp AFTER the run, not before: this regedit is itself a
+        # umu-run, so if it was the first invocation under a newly-selected
+        # Proton it has just triggered that Proton's prefix upgrade. Recording
+        # the post-upgrade stamp is what makes the next launch a no-op instead
+        # of re-importing forever.
+        stamp = _prefix_proton_stamp(plan, prefix_root)
+        _drop_legacy_markers(prefix_root)
+        try:
+            marker.write_text(stamp, encoding="utf-8")
+        except OSError as e:
+            logger.debug("[compat.vcruntime] marker write failed: %s", e)
         logger.info(
-            "[compat.vcruntime] imported for proton=%s", proton_name,
+            "[compat.vcruntime] imported for proton=%s (prefix stamp %s)",
+            proton_name, stamp,
         )
         return False
     if rc == UMU_TIMEOUT_RC:

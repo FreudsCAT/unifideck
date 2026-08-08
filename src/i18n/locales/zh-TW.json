@@ -388,7 +388,8 @@
     "cloudPullDone": "已下載雲端存檔",
     "cloudPullFailed": "下載雲端存檔失敗",
     "cloudPushDone": "已上傳本機存檔",
-    "cloudPushFailed": "上傳本機存檔失敗"
+    "cloudPushFailed": "上傳本機存檔失敗",
+    "cloudSavePathReset": "存檔位置已重設為自動"
   },
   "uninstallModal": {
     "title": "確認解除安裝",
@@ -399,6 +400,12 @@
     "warningBody": "這將永久刪除儲存在 Wine 環境下的存檔資料。請確保您有備份。",
     "cancel": "取消",
     "uninstall": "解除安裝"
+  },
+  "updateModal": {
+    "title": "有可用更新",
+    "description": "{{title}} 有可用更新。未更新可能導致連線功能無法使用。",
+    "updateNow": "立即更新",
+    "playAnyway": "仍要遊玩"
   },
   "languageSettings": {
     "title": "語言",
@@ -560,7 +567,7 @@
     "simple": "精簡",
     "detailed": "詳細"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "選擇語言",
     "description": "選擇要為 {{title}} 下載的語言",
     "label": "語言",
@@ -697,7 +704,11 @@
       "statusSyncing": "正在同步雲端存檔…",
       "statusUnresolved": "未找到存檔位置 — 此遊戲可能無法進行同步。",
       "unresolvedHint": "啟動遊戲一次以便我們檢測其存檔資料夾，或手動設定位置。",
-      "upload": "上傳本機存檔"
+      "upload": "上傳本機存檔",
+      "currentLocation": "存檔位置",
+      "changeLocation": "變更位置",
+      "resetLocation": "重設為自動",
+      "statusInSync": "雲端存檔已是最新"
     },
     "exe": {
       "browse": "瀏覽…",
@@ -719,7 +730,11 @@
     "neverPlayed": "從未執行過",
     "hoursShort": "小時",
     "minutesShort": "分鐘",
-    "played": "已玩"
+    "played": "已玩",
+    "cloudSaves": "雲端存檔",
+    "cloudSupported": "支援",
+    "cloudNotSupported": "不支援",
+    "cloudUnknown": "未知"
   },
   "downloads": {
     "title": "下載",
@@ -730,13 +745,20 @@
     "cancel": "取消",
     "removeFromQueue": "移出佇列",
     "play": "遊玩",
+    "update": "更新",
     "outcome": {
       "queued": "佇列中",
       "downloading": "下載中",
       "completed": "已完成",
       "cancelled": "已取消",
       "error": "錯誤"
-    }
+    },
+    "installedCount": "已安裝 ({{count}})",
+    "failed": "失敗",
+    "clearFailed": "清除失敗項目",
+    "uninstall": "解除安裝",
+    "locationInternal": "內部",
+    "locationExternal": "外部"
   },
   "navigation": {
     "loading": "正在載入...",

@@ -24,11 +24,56 @@ import { Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameSize } from "../../hooks/useGameSize";
 import { useGamePlaytime } from "../../hooks/useGamePlaytime";
+import { useGameMetadata } from "../../hooks/useGameMetadata";
+import { getThemeableClasses } from "../../lib/steam-bridge";
 import { PLAY_FOCUS_CSS } from "./play.css";
 
+/**
+ * Class-name builders that make our buttons visible to CSS Loader
+ * themes. See `getThemeableClasses()` for how theme selectors reach
+ * them; the short version is that a theme can only style what wears
+ * Steam's own class, so we wear it and stop hardcoding the properties
+ * themes want to change (radius, idle fill).
+ *
+ * Called during render rather than memoised at module scope: the
+ * `@decky/ui` class exports are only populated once Steam's webpack
+ * chunks have loaded, which is not guaranteed at plugin import time.
+ */
+
+/** Square icon button (cloud / controller / gear / trash / stop). */
+export function iconBtnClass(
+  marker = "unifideck-icon-btn",
+  ...extra: string[]
+): string {
+  return [marker, getThemeableClasses().menuButton, ...extra]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** Controller-config button — Steam gives this one its own variant. */
+export function controllerBtnClass(): string {
+  return iconBtnClass(
+    "unifideck-icon-btn",
+    getThemeableClasses().controllerConfigButton,
+  );
+}
+
+/** Primary action button. Both Steam names must land together — the
+ *  theme rule is a compound selector, not a descendant one. */
+export function actionBtnClass(marker: string): string {
+  const c = getThemeableClasses();
+  return [marker, c.actionButton, c.playButtonContainer]
+    .filter(Boolean)
+    .join(" ");
+}
+
 /** Inline style shared by every primary action button
- *  (Install / Play / Resume / Update / Cancel). Matches
- *  staging's ``actionBtnStyle``. */
+ *  (Install / Play / Resume / Update / Cancel).
+ *
+ *  Deliberately sets no `borderRadius`: Steam's own
+ *  `AppActionButton`+`PlayButtonContainer` classes supply it
+ *  (2px vanilla), and an inline value would beat any CSS Loader
+ *  theme rule. See `iconBtnStyle` below. */
 export const actionBtnStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -42,14 +87,28 @@ export const actionBtnStyle: CSSProperties = {
   color: "#fff",
   fontSize: 16,
   fontWeight: 500,
-  borderRadius: 4,
   border: "none",
   textTransform: "uppercase",
   letterSpacing: "0.05em",
 };
 
-/** Inline style for square icon buttons (controller / settings
- *  / X). Matches staging's icon DialogButton inline style. */
+/** Inline style for square icon buttons (cloud / controller /
+ *  settings / trash / X).
+ *
+ *  Sets NO `borderRadius` and NO `background` on purpose. Steam's
+ *  `MenuButton` class already supplies both (2px radius,
+ *  rgba(172,178,201,0.14) fill — verified identical to what we used
+ *  to hardcode), and an inline value here would outrank any CSS
+ *  Loader theme rule, which is exactly what used to make our row
+ *  stay square while a theme rounded Steam's own buttons.
+ *
+ *  Corollary for anyone measuring vanilla values to hardcode: do it
+ *  with CSS Loader DISABLED. An enabled theme rounds these to ~10px,
+ *  which reads convincingly native. Better still, don't hardcode —
+ *  let the class supply it, as here.
+ *
+ *  Width/height stay pinned so the row cannot collapse if Steam
+ *  renames `MenuButton` and the class resolves to "". */
 export const iconBtnStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -57,9 +116,6 @@ export const iconBtnStyle: CSSProperties = {
   width: 48,
   height: 48,
   minWidth: 48,
-  padding: 0,
-  background: "rgba(255, 255, 255, 0.1)",
-  borderRadius: 4,
 };
 
 /**
@@ -158,9 +214,16 @@ export const PlayLoadingSkeleton: FC = () => (
 );
 
 /** Right-floated icon group. ``marginLeft: auto`` pushes it
- *  to the far right of the row. */
+ *  to the far right of the row.
+ *
+ *  Wears Steam's ``AppButtons`` class because the theme rule for the
+ *  icon buttons is `.AppButtons .MenuButton` — without this ancestor
+ *  the buttons' own class is not enough. Steam's own AppButtons is
+ *  just `display:flex; row; align-items:center`, so it does not fight
+ *  the layout below. */
 export const IconGroup: FC<{ children: ReactNode }> = ({ children }) => (
   <div
+    className={getThemeableClasses().appButtons}
     style={{
       display: "flex",
       gap: 8,
@@ -229,6 +292,23 @@ export function formatPlaytime(
   return `${hours >= 100 ? Math.round(hours) : hours.toFixed(1)} ${hoursShort}`;
 }
 
+/** Stores with cloud-save sync — mirrors `useCloudSaveStatus`. */
+const CLOUD_SAVE_STORES = new Set(["gog", "epic"]);
+
+/**
+ * `cloud_saves` tri-state → i18n key, indexed by `String(value)`.
+ *
+ * "Unknown" is shown rather than hidden: for a store that HAS cloud-save
+ * sync, "we don't know" is itself the honest answer, and silently omitting
+ * the column would read as "no cloud saves".
+ */
+const CLOUD_SAVE_VALUE_KEY: Record<string, string> = {
+  true: "playMeta.cloudSupported",
+  false: "playMeta.cloudNotSupported",
+  null: "playMeta.cloudUnknown",
+  undefined: "playMeta.cloudUnknown",
+};
+
 /** One label/value column inside {@link MetaInline}. */
 const MetaItem: FC<{ label: string; value: string }> = ({ label, value }) => (
   <div>
@@ -283,6 +363,21 @@ export const MetaInline: FC<MetaInlineProps> = ({
 }) => {
   const { t } = useTranslation();
   const [steamLastPlayed, setSteamLastPlayed] = useState<number | null>(null);
+  // Cloud-save availability sits with the other at-a-glance facts rather than
+  // in the info panel below: it is a *decision* input (which storefront's copy
+  // to install), so it belongs next to Space Required / Last Played.
+  //
+  // Free to read here — `useGameMetadata` is appId-keyed with a 60 s TTL and
+  // in-flight de-duplication, and GameInfoPanel already requests the same
+  // appId, so both consumers share one fetch. It resolves to null first and
+  // never blocks this row.
+  const metadata = useGameMetadata(appId ?? null);
+  // Only for a NOT-installed game. Once it is installed the cloud-save icon
+  // button sits right there in the same row and reports the live state
+  // (syncing / in sync / no support / unresolved), so a static
+  // "Supported/Unknown" beside it is redundant at best and contradictory at
+  // worst — an enabled button next to the word "Unknown" reads like a bug.
+  const showCloudSaves = !installed && !!store && CLOUD_SAVE_STORES.has(store);
   // Size is fetched out-of-band (see useGameSize) so a slow store
   // lookup never blocks this row from rendering. Keyed on `installed`
   // so the on-disk size replaces the pre-install download size once
@@ -372,6 +467,12 @@ export const MetaInline: FC<MetaInlineProps> = ({
         <MetaItem
           label={t("playMeta.lastPlayed")}
           value={lastPlayedValue ?? t("playMeta.neverPlayed")}
+        />
+      )}
+      {showCloudSaves && (
+        <MetaItem
+          label={t("playMeta.cloudSaves")}
+          value={t(CLOUD_SAVE_VALUE_KEY[String(metadata.data?.cloud_saves)])}
         />
       )}
     </div>

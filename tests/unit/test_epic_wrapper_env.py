@@ -32,14 +32,16 @@ from unifideck.launcher.proton.handlers.epic import _build_legendary_argv
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 
 
-def _plan() -> ProtonLaunchPlan:
+def _plan(wrappers: list[str] | None = None) -> ProtonLaunchPlan:
     return ProtonLaunchPlan(
         context=types.SimpleNamespace(
             game_id="abc123", store="epic",
             exe_path=Path("/install/abc123.exe"),
             work_dir=Path("/install"),
         ),
-        state=types.SimpleNamespace(wrappers=[], game_args=[], umu_id=None),
+        state=types.SimpleNamespace(
+            wrappers=list(wrappers or []), game_args=[], umu_id=None,
+        ),
         python_bin=Path("/usr/bin/python3"),
         umu_wrapper=Path("/plugin/bin/umu/umu/umu-run"),
         prefix_path=Path("/tmp/prefix"),  # noqa: S108
@@ -58,3 +60,31 @@ def test_wrapper_force_clears_ld_env(monkeypatch):
         "env -u LD_LIBRARY_PATH -u LD_PRELOAD "
         "/usr/bin/python3 /plugin/bin/umu/umu/umu-run"
     )
+
+
+def test_json_mode_asks_for_the_recipe_without_user_wrappers(monkeypatch):
+    """UD-126: the ``--json`` call resolves parameters and exits before
+    legendary can fork the game. A user's launch-option wrapper belongs
+    on the game (re-applied by ``epic_launch_params.build_umu_argv``), not
+    on a metadata query — but the umu ``--wrapper`` must still be there,
+    because it comes back as the JSON's ``launch_command``."""
+    monkeypatch.setattr(compat_epic, "detect_offline", lambda: False)
+
+    argv = _build_legendary_argv(
+        _plan(["gamemoderun"]), "/plugin/bin/legendary", json_mode=True,
+    )
+
+    assert "--json" in argv
+    assert "gamemoderun" not in argv
+    assert argv[0] == "/plugin/bin/legendary"
+    assert "--wrapper" in argv
+
+
+def test_launch_mode_keeps_user_wrappers_in_front(monkeypatch):
+    """The non-json argv is unchanged from before UD-126."""
+    monkeypatch.setattr(compat_epic, "detect_offline", lambda: False)
+
+    argv = _build_legendary_argv(_plan(["gamemoderun"]), "/plugin/bin/legendary")
+
+    assert argv[0] == "gamemoderun"
+    assert "--json" not in argv

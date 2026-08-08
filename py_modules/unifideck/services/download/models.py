@@ -168,9 +168,16 @@ def classify_download_error(exc: Exception) -> str:
     Returns:
         One of ``"permission_denied"`` / ``"disk_full"`` /
         ``"timeout"`` / ``"network_error"`` / ``"not_found"`` /
-        ``"unknown_error"``.
+        ``"cli_prompt_blocked"`` / ``"unknown_error"``.
     """
     msg = str(exc).lower()
+    if "eoferror" in msg or "sdl_prompt" in msg:
+        # A store CLI asked an interactive question we can't answer
+        # (legendary's Selective Downloads prompt is not suppressed by
+        # --yes). Distinct from a generic failure because the fix is
+        # always "pass the answer as a flag", never "retry" — see
+        # stores/epic/sdl.py.
+        return "cli_prompt_blocked"
     if "permission" in msg or "denied" in msg:
         return "permission_denied"
     if "no space" in msg or "disk full" in msg or "disk space" in msg:

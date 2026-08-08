@@ -388,7 +388,8 @@
     "cloudPullDone": "Zapis z chmury pobrany",
     "cloudPullFailed": "Pobieranie zapisu z chmury nie powiodło się",
     "cloudPushDone": "Lokalny zapis przesłany",
-    "cloudPushFailed": "Przesyłanie lokalnego zapisu nie powiodło się"
+    "cloudPushFailed": "Przesyłanie lokalnego zapisu nie powiodło się",
+    "cloudSavePathReset": "Przywrócono automatyczną lokalizację zapisu"
   },
   "uninstallModal": {
     "title": "Potwierdź odinstalowanie",
@@ -399,6 +400,12 @@
     "warningBody": "Spowoduje to trwałe usunięcie zapisów gry z prefiksu Wine. Upewnij się, że masz ich kopię.",
     "cancel": "Anuluj",
     "uninstall": "Odinstaluj"
+  },
+  "updateModal": {
+    "title": "Dostępna aktualizacja",
+    "description": "Dostępna jest aktualizacja gry {{title}}. Bez niej funkcje online mogą nie działać.",
+    "updateNow": "Aktualizuj teraz",
+    "playAnyway": "Zagraj mimo to"
   },
   "languageSettings": {
     "title": "JĘZYK",
@@ -560,7 +567,7 @@
     "simple": "Prosty",
     "detailed": "Szczegółowy"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "Wybierz język",
     "description": "Wybierz język pobierania dla {{title}}",
     "label": "Język",
@@ -697,7 +704,11 @@
       "statusSyncing": "Synchronizowanie zapisów w chmurze…",
       "statusUnresolved": "Nie znaleziono lokalizacji zapisu — synchronizacja może nie działać dla tej gry.",
       "unresolvedHint": "Uruchom grę raz, abyśmy mogli wykryć jej folder zapisu, lub ustaw lokalizację ręcznie.",
-      "upload": "Prześlij lokalny zapis"
+      "upload": "Prześlij lokalny zapis",
+      "currentLocation": "Lokalizacja zapisu",
+      "changeLocation": "Zmień lokalizację",
+      "resetLocation": "Przywróć automatyczną",
+      "statusInSync": "Zapisy w chmurze aktualne"
     },
     "exe": {
       "browse": "Przeglądaj…",
@@ -719,7 +730,11 @@
     "neverPlayed": "Nigdy nie grano",
     "hoursShort": "godz.",
     "minutesShort": "min.",
-    "played": "Rozegrano"
+    "played": "Rozegrano",
+    "cloudSaves": "Zapisy w chmurze",
+    "cloudSupported": "Obsługiwane",
+    "cloudNotSupported": "Nieobsługiwane",
+    "cloudUnknown": "Nieznane"
   },
   "downloads": {
     "title": "Pobieranie",
@@ -730,13 +745,20 @@
     "cancel": "Anuluj",
     "removeFromQueue": "Usuń",
     "play": "Graj",
+    "update": "Aktualizuj",
     "outcome": {
       "queued": "W kolejce",
       "downloading": "Pobieranie",
       "completed": "Ukończono",
       "cancelled": "Anulowano",
       "error": "Nie powiodło się"
-    }
+    },
+    "installedCount": "Zainstalowane ({{count}})",
+    "failed": "Nieudane",
+    "clearFailed": "Wyczyść nieudane",
+    "uninstall": "Odinstaluj",
+    "locationInternal": "Wewnętrzna",
+    "locationExternal": "Zewnętrzna"
   },
   "navigation": {
     "loading": "Ładowanie...",

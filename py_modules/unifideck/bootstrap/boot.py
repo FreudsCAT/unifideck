@@ -36,6 +36,7 @@ Mutates the plugin in place. Never raises.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,11 @@ from unifideck.services.bootstrap import (
 from unifideck.stores import StoreRegistry
 
 logger = logging.getLogger(__name__)
+
+#: Strong references to fire-and-forget boot tasks. Without this the event loop
+#: may garbage-collect a task that is still running; entries remove themselves
+#: on completion via ``add_done_callback``.
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 
 async def boot_plugin(
@@ -100,7 +106,9 @@ async def boot_plugin(
     _boot_layer4_stores(plugin, decky_plugin_dir)
     await _boot_layer5_services(plugin, pipeline, decky_plugin_dir)
     await _boot_updater(plugin, decky_plugin_dir)
+    await _boot_update_sweep(plugin)
     await _start_store_background_tasks(plugin)
+    _wire_prefix_bridge(plugin)
     logger.info("[Unifideck] plugin loaded")
 
 
@@ -257,6 +265,14 @@ async def _boot_layer5_services(
         download.set_prefix_warmup(
             make_prefix_warmup(getattr(plugin.services, "cloudsave", None)),
         )
+    # Resume the download-size warm-up. The walk is a plain asyncio task in
+    # THIS process, and the plugin is restarted independently of both Steam
+    # and plugin_loader — notably right after a sync, when the user restarts
+    # Steam to pick up new shortcuts/artwork. Every resolved size is written
+    # through to disk immediately, so a restart only ever loses the couple of
+    # lookups in flight; kicking it again here means the remainder finishes
+    # instead of waiting for the next sync. No-ops once the cache is full.
+    plugin.sync_service.resume_size_backfill()
     await start_async_services(plugin.services)
 
 
@@ -282,6 +298,96 @@ async def _boot_updater(plugin: Any, decky_plugin_dir: str) -> None:
     except Exception:
         logger.exception("[Updater] failed to wire — update checking disabled")
         plugin._updater_service = None
+
+
+async def _boot_update_sweep(plugin: Any) -> None:
+    """Wire the background game-update sweep.
+
+    Like the self-updater, this only needs the EventBus and the store
+    registry, so it is constructed outside the ServiceContainer and a
+    failure here never blocks boot — it just means update state falls
+    back to being discovered on demand.
+
+    The service is hung off ``plugin`` (not ``plugin.services``) because
+    ``DownloadRPCMixin`` reaches it by ``getattr`` on ``self``, the same
+    contract ``UpdaterRPCMixin`` uses for ``_updater_service``.
+    """
+    try:
+        from unifideck.services.update_sweep import UpdateSweepService
+
+        svc = UpdateSweepService(plugin.bus, plugin.registry)
+        plugin._update_sweep_service = svc
+        await svc.start()
+    except Exception:
+        logger.exception("[UpdateSweep] failed to wire — updates checked on demand")
+        plugin._update_sweep_service = None
+
+
+def _wire_prefix_bridge(plugin: Any) -> None:
+    """Keep ``compatdata`` bridge links in step with the installed games.
+
+    Runs one sweep at boot (repairing prefixes that predate the bridge, and
+    pruning links left by an uninstall that happened while the plugin was
+    down), then re-sweeps after every sync — which is what makes an uninstall
+    disappear from Protontricks without waiting for a restart. Scheduled, not
+    awaited: the sweep touches the filesystem and must never delay boot.
+    """
+    import asyncio
+
+    from unifideck.core.types.events import Events
+    from unifideck.services.prefix_bridge import (
+        reclaim_redundant_compatdata,
+        sync_bridges,
+    )
+    from unifideck.utils.vdf_compat import resolve_live_steam_root
+
+    def _sweep(*_args: Any, **_kwargs: Any) -> None:
+        # Sync handler on purpose — the bus runs these via ``asyncio.to_thread``,
+        # which is where this blocking filesystem work belongs.
+        try:
+            sync_bridges(resolve_live_steam_root())
+        except Exception:
+            logger.exception("[Unifideck] prefix bridge sweep failed")
+
+    async def _reclaim() -> None:
+        """Delete Steam-made prefixes Unifideck initialised and abandoned.
+
+        Boot-only, and deliberately not wired to ``SYNC_COMPLETE``: a game can
+        be running by then, and there is no reason to re-scan on every sync.
+        Boot is also the one moment nothing can hold a prefix lock yet.
+
+        Needs ``shortcuts.vdf`` for the user-owned veto, so it goes through the
+        shortcut service rather than reading the file itself.
+        """
+        try:
+            shortcut_svc = getattr(plugin.services, "shortcut", None)
+            shortcuts: dict[str, Any] = {}
+            if shortcut_svc is not None:
+                await shortcut_svc._load_shortcuts()
+                raw = getattr(shortcut_svc, "_shortcuts", {}) or {}
+                if isinstance(raw, dict):
+                    shortcuts = raw.get("shortcuts", raw)
+            steam_root = await asyncio.to_thread(resolve_live_steam_root)
+            await asyncio.to_thread(
+                reclaim_redundant_compatdata, steam_root, shortcuts,
+            )
+        except Exception:
+            logger.exception("[Unifideck] compatdata reclaim failed")
+
+    try:
+        plugin.bus.on(Events.SYNC_COMPLETE, _sweep)
+        loop = asyncio.get_running_loop()
+        for coro, name in (
+            (asyncio.to_thread(_sweep), "prefix-bridge-sweep"),
+            (_reclaim(), "compatdata-reclaim"),
+        ):
+            # Hold a strong reference until completion, else the loop is free
+            # to garbage-collect a still-running task (ruff RUF006).
+            task = loop.create_task(coro, name=name)
+            _BACKGROUND_TASKS.add(task)
+            task.add_done_callback(_BACKGROUND_TASKS.discard)
+    except Exception:
+        logger.exception("[Unifideck] could not wire the prefix bridge")
 
 
 async def _start_store_background_tasks(plugin: Any) -> None:

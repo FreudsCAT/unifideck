@@ -17,6 +17,11 @@ It is used ONLY to *match* one label against another across formats
 (picker pre-selection, install matching, launch matching). It never
 replaces the language code that is actually sent to gogdl or written
 into the game's files — those stay verbatim.
+
+``smart_match_language(target, choices)`` builds on it to pick which
+label a store actually offers for a requested language. It lives here
+rather than under ``stores.gog`` because Epic needs it too (legendary
+SDL install tags), and a store package must not import another's.
 """
 
 from __future__ import annotations
@@ -95,4 +100,39 @@ def normalize_language(raw: str) -> str | None:
         hit = _lookup_token(token)
         if hit:
             return hit
+    return None
+
+
+def smart_match_language(target: str, choices: list[str]) -> str | None:
+    """Pick the offered label that best matches ``target``.
+
+    Stores label their languages inconsistently across titles, so the
+    match is attempted in widening order:
+
+      1. exact membership;
+      2. 2-letter prefix equality (``en-US`` vs ``en``);
+      3. normalized base-language equality (``Spanish`` vs ``es-ES``
+         vs ``esp``), via :func:`normalize_language`.
+
+    Returns None rather than guessing when nothing lines up, so
+    callers can fall back deliberately.
+    """
+    if not target or not choices:
+        return None
+    # 1. Exact membership.
+    if target in choices:
+        return target
+    # 2. 2-letter prefix equality.
+    target_base = target.split("-", maxsplit=1)[0].lower()
+    for choice in choices:
+        choice_base = choice.split("-")[0].lower()
+        if target_base == choice_base:
+            return choice
+    # 3. Normalized base-language equality (handles names / 3-letter
+    #    / store quirks across differing label formats).
+    target_norm = normalize_language(target)
+    if target_norm:
+        for choice in choices:
+            if normalize_language(choice) == target_norm:
+                return choice
     return None

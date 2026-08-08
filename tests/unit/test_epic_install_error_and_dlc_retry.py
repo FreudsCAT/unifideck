@@ -23,14 +23,30 @@ real legendary.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
 from unifideck.services.download.models import classify_download_error
+from unifideck.stores.epic import sdl
 from unifideck.stores.epic.install import EpicInstaller, _format_exit_error
 from unifideck.stores.shared.cli_install_helpers import TailRingBuffer
+
+
+@pytest.fixture(autouse=True)
+def _isolate_legendary_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any,
+) -> None:
+    """Keep the install path off the developer's real legendary state.
+
+    ``install_game`` now resolves Selective Downloads tags, which reads
+    legendary's cached ``version.json``. Redirecting it keeps these tests
+    hermetic (and off the network) regardless of the host's Epic library.
+    """
+    monkeypatch.setenv("LEGENDARY_CONFIG_DIR", str(tmp_path / "legendary"))
+    monkeypatch.setattr(sdl, "_CACHE_DIR", str(tmp_path / "sdl-cache"))
 
 
 # --------------------------------------------------------------------------
@@ -74,6 +90,22 @@ def _installer() -> EpicInstaller:
     inst._install_timeout = 7200
     inst._uninstall_timeout = 120
     return inst
+
+
+def _record_installed(tmp_path: Any, game_id: str) -> None:
+    """Write the ``installed.json`` row a real install leaves behind.
+
+    ``install_game`` verifies legendary's own bookkeeping before
+    reporting success, because legendary answers a refusal (e.g. its
+    install lock already held) with exit 0 — see
+    ``test_epic_phantom_install.py``. A mocked rc=0 therefore has to
+    leave the same trace a genuine install would.
+    """
+    cfg = tmp_path / "legendary"
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / "installed.json").write_text(
+        json.dumps({game_id: {"install_path": f"/games/{game_id}"}}),
+    )
 
 
 def _emitted(bus: AsyncMock, event_value: str) -> list[dict[str, Any]]:
@@ -173,6 +205,7 @@ async def test_success_runs_single_attempt_no_failure_event(
     inst._finalize_install = AsyncMock(
         return_value=InstallResult(success=True, store="epic", game_id="g"),
     )
+    _record_installed(tmp_path, "g")
     seen = _patch_subprocess(
         monkeypatch, [_FakeProc(["Progress: 100.0%"], returncode=0)],
     )
@@ -194,6 +227,7 @@ async def test_dlc_failure_retries_without_dlc_and_succeeds(
     inst._finalize_install = AsyncMock(
         return_value=InstallResult(success=True, store="epic", game_id="g"),
     )
+    _record_installed(tmp_path, "g")
     seen = _patch_subprocess(
         monkeypatch,
         [

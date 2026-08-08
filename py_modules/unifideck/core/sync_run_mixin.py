@@ -18,6 +18,7 @@ the host provides them at runtime.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from typing import TYPE_CHECKING, Any
@@ -204,6 +205,14 @@ class _SyncRunMixin:
         used as the progress denominator.
         """
         self._cancel_event.clear()
+        # Stand down any background size warm-up for the duration of the
+        # sync. One resumed at plugin boot can still be walking, and it would
+        # contend with the metadata/artwork/compat phases for the same store
+        # APIs. Resolved sizes are already on disk, and the walk re-spawns
+        # once the post-sync phases finish.
+        with contextlib.suppress(Exception):
+            from unifideck.services import size_backfill
+            size_backfill.cancel()
         # Capture every cache's state so a cancel mid-sync can roll
         # back to consistent pre-sync state. Without this, a sync
         # cancelled after the metadata phase wrote a few entries — but

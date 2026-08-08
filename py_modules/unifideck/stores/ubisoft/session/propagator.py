@@ -183,9 +183,22 @@ class _CredentialPropagator:
                 e,
             )
         if not credentials_synced:
-            logger.warning(
-                "[UbisoftSession] inject: nothing synced",
-            )
+            # Zero copies is the NORMAL idempotent outcome: the payload sync
+            # hashes before copying, so a prefix that already holds the current
+            # credential reports 0. Only a target that ends up WITHOUT a
+            # credential is a real problem. Logging both at WARNING read as
+            # "injection failed" on a healthy relaunch and cost real debugging
+            # time chasing a sign-in bug that was elsewhere.
+            if self._reader.has_valid_credentials(prefix_path):
+                logger.debug(
+                    "[UbisoftSession] inject: %s already current", prefix_path,
+                )
+            else:
+                logger.warning(
+                    "[UbisoftSession] inject: nothing synced and %s has no "
+                    "credentials — UPC will ask the user to sign in",
+                    prefix_path,
+                )
         return credentials_synced
 
     def ensure_auth_state_in_prefixes(

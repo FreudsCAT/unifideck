@@ -24,6 +24,12 @@ from pathlib import Path
 from typing import Any
 
 from . import counts as counts_mod
+from .check_kit import View as _View
+from .check_kit import fail as _fail
+from .check_kit import na as _na
+from .check_kit import ok as _ok
+from .check_kit import warn as _warn
+from .checks_protontricks import check_protontricks
 from .probe_storage import RISKY_FSTYPES, is_user_storage
 from .spec import BundleContext, CheckResult, PathRecord
 
@@ -39,48 +45,6 @@ _STORE_TOKEN_KEYS = {
     "epic": "legendary_user",
     "amazon": "nile_user",
 }
-
-
-class _View:
-    """Read-only view over everything the checks need."""
-
-    def __init__(
-        self, ctx: BundleContext, records: list[PathRecord], env: dict[str, Any],
-    ) -> None:
-        """Index the audit by key for constant-time lookups."""
-        self.ctx = ctx
-        self.env = env
-        self.by_key = {record.key: record for record in records}
-
-    def status(self, key: str) -> str:
-        """Audit status for ``key``, or "absent" when not audited."""
-        record = self.by_key.get(key)
-        return record.status if record else "absent"
-
-    def present(self, key: str) -> bool:
-        """True when ``key`` resolved to something on disk."""
-        return self.status(key).startswith(("present", "empty"))
-
-    def block(self, name: str) -> dict[str, Any]:
-        """One environment block, or {} when it failed to build."""
-        value = self.env.get(name)
-        return value if isinstance(value, dict) else {}
-
-
-def _ok(name: str, detail: str = "") -> CheckResult:
-    return CheckResult(name=name, status="pass", detail=detail)
-
-
-def _fail(name: str, detail: str) -> CheckResult:
-    return CheckResult(name=name, status="fail", detail=detail)
-
-
-def _warn(name: str, detail: str) -> CheckResult:
-    return CheckResult(name=name, status="warn", detail=detail)
-
-
-def _na(name: str, detail: str) -> CheckResult:
-    return CheckResult(name=name, status="na", detail=detail)
 
 
 def _check_not_root(view: _View) -> CheckResult:
@@ -472,6 +436,7 @@ _CHECKS: tuple[Callable[[_View], CheckResult], ...] = (
     _check_install_fstype,
     _check_disk_space,
     _check_prefixes,
+    check_protontricks,
     _check_cache_staleness,
     _check_clock_and_ca,
 )

@@ -19,6 +19,7 @@ export type {
 } from "./SteamBridge";
 export { findInReactTree } from "./react-tree";
 export { getAppDetailsClasses } from "./app-details-classes";
+export { getThemeableClasses } from "./app-details-classes";
 export { addRouterPatch } from "./router-patch";
 export type {
   ShortcutLaunchContext,

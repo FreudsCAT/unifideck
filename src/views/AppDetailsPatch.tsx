@@ -43,6 +43,7 @@ import {
 } from "../lib/library-filters";
 import { getGameStateVersion } from "../lib/game-state-version";
 import { injectGameToAppinfo } from "../lib/steam-bridge/app-store-patcher";
+import { shouldPatchShortcut } from "../lib/steam-bridge/shortcut-ownership";
 import { DownloadProvider } from "../contexts/DownloadContext";
 import { PlaySectionWrapper } from "../components/play";
 import { HIDE_NATIVE_PLAY_MARKER } from "../components/play/play.css";
@@ -111,11 +112,26 @@ function injectIntoTree(ret: unknown): void {
   if (!(appId > 2_000_000_000)) return;
 
   // Only override Unifideck-managed games — never the user's own
-  // non-Steam shortcuts (Firefox, etc.). Skip once we KNOW it isn't
-  // ours; stay optimistic before the cache loads so a Unifideck game
-  // opened on cold boot never flashes the native UI. This single gate
+  // non-Steam shortcuts (EmulationStationDE, Firefox, ...). This single gate
   // covers the hide marker, the Play wrapper, and the GameInfo panel.
-  if (isUnifideckCacheLoaded() && !isUnifideckGame(appId)) return;
+  //
+  // Two signals, because neither is enough alone: the cache is authoritative
+  // but says nothing until an RPC lands (and retries with backoff on
+  // failure), while Steam's own shortcut Exe is synchronous but only present
+  // once app details are loaded. Staying optimistic on the cache ALONE meant
+  // that during that window every non-Steam shortcut got its native Play row
+  // and whole tabbed section hidden — a blanked App-Details page for someone
+  // else's shortcut, and worse the more shortcuts a user has (719 on the
+  // device that surfaced it, 27 of them not ours).
+  if (
+    !shouldPatchShortcut(
+      appId,
+      isUnifideckCacheLoaded(),
+      isUnifideckGame(appId),
+    )
+  ) {
+    return;
+  }
 
   // Trigger Steam-Store metadata spoofing for this shortcut so
   // Steam's own UI (capsule image, tile, presence) renders the

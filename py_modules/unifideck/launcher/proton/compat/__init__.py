@@ -33,19 +33,57 @@ from unifideck.launcher.proton.infrastructure.prefix_layout import (
     normalize_prefix_root,
 )
 
-from .vcruntime import apply_vcruntime_fix
-from .winetricks import apply_winetricks
+from .vcruntime import apply_vcruntime_fix, vcruntime_fix_pending
+from .winetricks import apply_winetricks, winetricks_pending
 
 logger = logging.getLogger(__name__)
 
 
-async def apply_prefix_compat(plan: ProtonLaunchPlan) -> bool:
+def compat_work_pending(plan: ProtonLaunchPlan) -> bool:
+    """Whether :func:`apply_prefix_compat` would actually do anything.
+
+    Lets callers answer "is this prefix already set up?" without running (or
+    even selecting a Proton for) the steps. ``prefix_setup`` needs this
+    because its "official Valve Proton can't run umu's winetricks verb"
+    reroute to managed GE-Proton is only worth doing when there IS compat
+    work left: firing it on an already-warmed prefix pulled every launch onto
+    a different Proton than the one the game would otherwise use, and each
+    switch made Proton re-run ``wineboot -u`` and rewrite ``system.reg``
+    ("Upgrading prefix from X to Y" / "Prefix has an invalid version?!"),
+    erasing the very VC++ keys :mod:`compat.vcruntime` had just imported.
+
+    Mirrors the steps' own guards rather than re-deriving them, so this can
+    never disagree with what they'd decide.
+    """
+    if plan.context.store == "ubisoft":
+        return False
+    prefix_root = normalize_prefix_root(plan.prefix_path)
+    if not (prefix_root / "system.reg").is_file():
+        # No prefix yet — createprefix plus both steps are all still to come.
+        return True
+    return winetricks_pending(plan) or vcruntime_fix_pending(plan)
+
+
+async def apply_prefix_compat(
+    plan: ProtonLaunchPlan,
+    *,
+    vcreg_plan: ProtonLaunchPlan | None = None,
+) -> bool:
     """Run generic per-prefix compatibility setup for a Windows game.
 
     winetricks first (installs the redistributables), then the VC++
     registry fix (which assumes those DLLs are present). Each step is
     independently guarded so one failure doesn't skip the other or the
     launch.
+
+    ``vcreg_plan`` runs the registry step under a DIFFERENT Proton from
+    winetricks. Callers pass it when they had to borrow GE-Proton for the
+    winetricks verb but the game will actually run under something else:
+    the registry step must go last and under the *launch* Proton, because
+    that first umu-run is what triggers that Proton's ``wineboot -u``
+    prefix upgrade — and an upgrade AFTER the import would erase the keys
+    the import just wrote. regedit, unlike winetricks, works fine under an
+    official Valve Proton, so this is always possible.
 
     Returns ``True`` if any step was force-killed for exceeding its
     timeout — the signal that the selected Proton hung at runtime (a
@@ -79,12 +117,12 @@ async def apply_prefix_compat(plan: ProtonLaunchPlan) -> bool:
         return False
 
     timed_out = False
-    for label, step in (
-        ("winetricks", apply_winetricks),
-        ("vcruntime", apply_vcruntime_fix),
+    for label, step, step_plan in (
+        ("winetricks", apply_winetricks, plan),
+        ("vcruntime", apply_vcruntime_fix, vcreg_plan or plan),
     ):
         try:
-            if await step(plan):
+            if await step(step_plan):
                 timed_out = True
         except Exception:
             logger.exception(
@@ -93,4 +131,9 @@ async def apply_prefix_compat(plan: ProtonLaunchPlan) -> bool:
     return timed_out
 
 
-__all__ = ["apply_prefix_compat", "apply_vcruntime_fix", "apply_winetricks"]
+__all__ = [
+    "apply_prefix_compat",
+    "apply_vcruntime_fix",
+    "apply_winetricks",
+    "compat_work_pending",
+]

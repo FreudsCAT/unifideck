@@ -133,6 +133,7 @@ class EpicAuthFlow:
             proc = await asyncio.create_subprocess_exec(
                 self._cli_path,
                 "auth",
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=clean_cli_env(),
@@ -172,6 +173,7 @@ class EpicAuthFlow:
                 self._cli_path,
                 "auth",
                 "--delete",
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=clean_cli_env(),
@@ -212,6 +214,7 @@ class EpicAuthFlow:
         return await asyncio.create_subprocess_exec(
             self._cli_path,
             "auth",
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=clean_cli_env(),
@@ -273,6 +276,7 @@ class EpicAuthFlow:
             "auth",
             "--code",
             code,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=clean_cli_env(),

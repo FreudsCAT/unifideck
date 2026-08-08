@@ -72,16 +72,33 @@ _GAME = _game(-1514014196, "epic", "amongus", "Among Us")
 
 @pytest.mark.asyncio
 async def test_standard_enrich_returns_cached_without_fetching() -> None:
+    """A standard enrich serves the cache and never re-fetches Steam.
+
+    The Steam source is the expensive one (an API call per game), and this is
+    the guarantee that keeps a routine sync cheap.
+
+    It may still top up the unifiDB save-location block on an entry written
+    before that block was carried through — see ``_served_from_cache``. That
+    is bucket-cached and bounded to once per entry, so it is mocked out here
+    rather than asserted against; ``test_metadata_savedata_cache_topup.py``
+    covers it directly.
+    """
     cache = _Cache()
     cache.set("metadata", "epic:amongus", {"description": "old"})
     svc = _metadata_service(cache)
     steam = AsyncMock(return_value={"description": "new"})
-    with patch(
-        "unifideck.services.metadata_sources.fetch_steam_store", new=steam,
+    with (
+        patch(
+            "unifideck.services.metadata_sources.fetch_steam_store", new=steam,
+        ),
+        patch(
+            "unifideck.services.metadata_sources.fetch_unifidb",
+            new=AsyncMock(return_value={}),
+        ),
     ):
         result = await svc.enrich(_GAME)
     steam.assert_not_called()
-    assert result == {"description": "old"}
+    assert result["description"] == "old"
 
 
 @pytest.mark.asyncio
