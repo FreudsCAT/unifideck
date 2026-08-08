@@ -495,10 +495,10 @@
     "downloadProgress": "Grafiken heruntergeladen: {{synced}}/{{total}} ({{game}})"
   },
   "deckTabs": {
-    "greatOnDeck": "Hervorragend auf Deck",
+    "greatOnDeck": "Für das Steam Deck optimierte Spiele",
     "allGames": "Alle Spiele",
     "installed": "Installiert",
-    "nonSteam": "Fachfremde",
+    "nonSteam": "Steam-Fremd",
     "steam": "Steam",
     "epic": "Epic",
     "gog": "GOG",
