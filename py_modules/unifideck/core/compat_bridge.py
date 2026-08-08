@@ -224,6 +224,17 @@ def _is_ours(link: Path) -> bool:
     return _PREFIX_SEGMENT in (lexical.parent.name, lexical.parent.parent.name)
 
 
+def is_bridge_link(link: Path) -> bool:
+    """True iff *link* is a ``compatdata`` entry this bridge owns.
+
+    Public face of :func:`_is_ours` for read-only callers (the support-bundle
+    probe). Kept as one implementation deliberately: an ownership rule copied
+    into a second module is a rule that will drift, and the cost of drift here
+    is deleting — or reporting as ours — a prefix that is not.
+    """
+    return link.is_symlink() and _is_ours(link)
+
+
 def prune_dead_bridges(steam_root: Path | str | None) -> int:
     """Delete bridge symlinks whose prefix no longer exists.
 

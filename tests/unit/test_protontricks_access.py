@@ -122,3 +122,126 @@ def test_override_failure_is_reported_not_raised(prefixes, monkeypatch):
 )
 def test_granted_path_parsing(raw, expected):
     assert pa._granted_paths(raw) == expected
+
+
+# --------------------------------------------------------------------------
+# The compat-tool path grant
+#
+# A readable directory Protontricks never LOOKS IN is worth nothing, so this
+# grant is two things at once: --filesystem (read it) and the
+# STEAM_EXTRA_COMPAT_TOOLS_PATHS env entry (search it). Both must be asserted
+# together — that pairing is the whole point of the fix.
+# --------------------------------------------------------------------------
+@pytest.fixture
+def tools(tmp_path):
+    t = tmp_path / "protontricks-tools"
+    t.mkdir()
+    return t
+
+
+def test_tool_grant_adds_both_filesystem_and_search_path(tools, monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(pa, "run_demoted", fake_run(
+        {
+            "info": ok(),
+            "--show": ok("[Context]\nfilesystems=~/.steam;\n"),
+            f"--filesystem={tools}:ro": ok(),
+        },
+        calls,
+    ))
+
+    assert pa.ensure_tool_path_access(tools) == "granted"
+    override = next((c for c in calls if any("--env=" in a for a in c)), None)
+    assert override is not None, "expected an override call carrying --env"
+    assert f"--filesystem={tools}:ro" in override
+    assert f"--env={pa.EXTRA_TOOLS_ENV}={tools}" in override
+
+
+def test_tool_grant_appends_to_an_existing_search_path(tools, monkeypatch):
+    """A value the user (or another tool) set must never be clobbered."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(pa, "run_demoted", fake_run(
+        {
+            "info": ok(),
+            "--show": ok(
+                f"[Context]\nfilesystems={tools};\n\n"
+                f"[Environment]\n{pa.EXTRA_TOOLS_ENV}=/opt/theirs\n",
+            ),
+            f"--filesystem={tools}:ro": ok(),
+        },
+        calls,
+    ))
+
+    assert pa.ensure_tool_path_access(tools) == "granted"
+    override = next(c for c in calls if any("--env=" in a for a in c))
+    env_arg = next(a for a in override if a.startswith("--env="))
+    assert env_arg == f"--env={pa.EXTRA_TOOLS_ENV}=/opt/theirs:{tools}"
+
+
+def test_tool_grant_is_idempotent(tools, monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(pa, "run_demoted", fake_run(
+        {
+            "info": ok(),
+            "--show": ok(
+                f"[Context]\nfilesystems={tools}:ro;\n\n"
+                f"[Environment]\n{pa.EXTRA_TOOLS_ENV}={tools}\n",
+            ),
+        },
+        calls,
+    ))
+
+    assert pa.ensure_tool_path_access(tools) == "already"
+    assert not [c for c in calls if any("--env=" in a for a in c)]
+
+
+def test_tool_grant_repairs_a_half_configured_override(tools, monkeypatch):
+    """Filesystem granted but never searched — the silent-failure shape."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(pa, "run_demoted", fake_run(
+        {
+            "info": ok(),
+            "--show": ok(f"[Context]\nfilesystems={tools}:ro;\n"),
+            f"--filesystem={tools}:ro": ok(),
+        },
+        calls,
+    ))
+
+    assert pa.tool_path_status(tools, tools) == "partial"
+    assert pa.ensure_tool_path_access(tools) == "granted"
+
+
+def test_tool_grant_without_flatpak_is_absent(tools, monkeypatch):
+    monkeypatch.setattr(pa, "run_demoted", fake_run({"info": fail()}, []))
+    assert pa.ensure_tool_path_access(tools) == "absent"
+
+
+def test_tool_grant_skips_when_no_links_exist_yet(tmp_path, monkeypatch):
+    """Nothing is bridged yet, so there is nothing to expose."""
+    monkeypatch.setattr(pa, "run_demoted", fake_run({}, []))
+    assert pa.ensure_tool_path_access(tmp_path / "nope") == "skipped"
+
+
+def test_tool_grant_failure_is_reported_not_raised(tools, monkeypatch):
+    monkeypatch.setattr(pa, "run_demoted", fake_run(
+        {
+            "info": ok(),
+            "--show": ok("[Context]\nfilesystems=~/.steam;\n"),
+            f"--filesystem={tools}:ro": fail(),
+        },
+        [],
+    ))
+    assert pa.ensure_tool_path_access(tools) == "failed"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("[Environment]\nSTEAM_EXTRA_COMPAT_TOOLS_PATHS=/a:/b\n", ["/a", "/b"]),
+        ("[Environment]\nSTEAM_EXTRA_COMPAT_TOOLS_PATHS=\n", []),
+        ("[Environment]\nOTHER=/a\n", []),
+        ("", []),
+    ],
+)
+def test_env_entry_parsing(raw, expected):
+    assert pa._env_entries(raw, pa.EXTRA_TOOLS_ENV) == expected

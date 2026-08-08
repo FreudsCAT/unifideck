@@ -154,6 +154,18 @@ async def fetch_sdl_data(
     """
     key = _sdl_key_for(app_name)
     if key is None:
+        # Logged because its absence reads as a bug: a user who saw the
+        # language picker on Fallout: New Vegas (an SDL title) reports
+        # "no language options for GTA V / RDR2 / BioShock" as broken.
+        # Only ~6 titles in a 700-game Epic library are SDL titles; every
+        # other one is a single package with nothing to choose, and its
+        # language is applied at launch instead (``-epiclocale``, see
+        # launcher/proton/handlers/epic._resolve_epic_language). One INFO
+        # line makes that answerable from a support bundle.
+        logger.info(
+            "[epic_sdl] %s is not a Selective Downloads title — "
+            "single-package install, language applied at launch", app_name,
+        )
         return None
     fetched = await _get_sdl_json(key, timeout=timeout)
     if fetched is not None:

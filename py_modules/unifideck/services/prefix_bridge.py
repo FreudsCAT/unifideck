@@ -179,6 +179,7 @@ def sync_bridges(steam_root: Path | str | None) -> dict[str, Any]:
     """
     result: dict[str, Any] = {
         "linked": 0, "already": 0, "pruned": 0, "failed": 0, "flatpak": "skipped",
+        "tools_pruned": 0, "tools_flatpak": "skipped",
     }
     if not steam_root:
         logger.debug("[prefix_bridge] no steam root, skipping sweep")
@@ -206,9 +207,38 @@ def sync_bridges(steam_root: Path | str | None) -> dict[str, Any]:
         logger.exception("[prefix_bridge] flatpak access check failed")
         result["flatpak"] = "failed"
 
+    _sweep_compat_tool_bridges(result)
+
     logger.info(
-        "[prefix_bridge] linked=%d already=%d pruned=%d failed=%d flatpak=%s",
+        "[prefix_bridge] linked=%d already=%d pruned=%d failed=%d flatpak=%s "
+        "tools_pruned=%d tools_flatpak=%s",
         result["linked"], result["already"], result["pruned"],
         result["failed"], result["flatpak"],
+        result["tools_pruned"], result["tools_flatpak"],
     )
     return result
+
+
+def _sweep_compat_tool_bridges(result: dict[str, Any]) -> None:
+    """Keep the compat-tool bridge tidy and reachable from the sandbox.
+
+    The links themselves are *created* at launch (``prefix_setup``), the only
+    point where the Proton actually in use is known — the same division the
+    prefix bridge uses. This sweep does the two things that must happen
+    without a launch: drop links whose Proton was removed or upgraded in
+    place, and (re)assert the Flatpak grant, which cannot be issued until the
+    bridge directory exists.
+
+    Mutates *result* in place; never raises. Protontricks is optional tooling.
+    """
+    try:
+        from unifideck.core import compat_tool_bridge
+        from unifideck.services.protontricks_access import (
+            ensure_tool_path_access,
+        )
+
+        result["tools_pruned"] = compat_tool_bridge.prune_dead_links()
+        result["tools_flatpak"] = ensure_tool_path_access()
+    except Exception:  # optional tooling — never fatal
+        logger.exception("[prefix_bridge] compat-tool bridge sweep failed")
+        result["tools_flatpak"] = "failed"

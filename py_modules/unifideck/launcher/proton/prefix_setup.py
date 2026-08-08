@@ -244,6 +244,34 @@ def _bridge_now(
             "[prefix_setup] compatdata bridge skipped for %s (non-fatal)",
             ctx.game_key,
         )
+    _bridge_compat_tool(default_path, default_tool)
+
+
+def _bridge_compat_tool(proton_path: Path | str, tool_id: str) -> None:
+    """Expose the Proton we are about to use to Protontricks, best-effort.
+
+    Companion to the compatdata bridge: that one gets Protontricks to the
+    prefix, this one gets it to the Proton. Without it a distro-packaged tool
+    (CachyOS ``proton-cachyos`` under ``/usr/share/steam``) is invisible to the
+    Protontricks Flatpak and it aborts with "Active Proton installation could
+    not be found automatically".
+
+    Done here, at launch, for the same reasons the prefix bridge is: this is
+    the only point where the tool actually in use is known, and it also
+    repairs games that predate the bridge. No-ops for the common case — a
+    GE-Proton under ``~/.steam`` is already visible to the sandbox.
+
+    ``proton_path`` is the ``proton`` *script*; the tool directory is its
+    parent, matching how ``core`` derives ``PROTONPATH``.
+    """
+    try:
+        from unifideck.core.compat_tool_bridge import link_tool
+
+        link_tool(Path(proton_path).parent, tool_id)
+    except Exception:
+        logger.exception(
+            "[prefix_setup] compat-tool bridge failed (non-fatal)",
+        )
 
 
 def _compat_pending(

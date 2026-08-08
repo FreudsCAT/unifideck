@@ -34,6 +34,7 @@ may affect syncing, installing, or launching.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -85,27 +86,43 @@ def flatpak_present(prefixes: Path) -> bool:
     return bool(proc and proc.returncode == 0)
 
 
+def _show_overrides(prefixes: Path) -> str | None:
+    """Raw ``flatpak override --user --show`` output, or ``None`` on failure.
+
+    One subprocess shared by every "is it already granted?" question.
+    """
+    proc = _run_as_owner(
+        ["flatpak", "override", "--user", "--show", FLATPAK_APP_ID], prefixes,
+    )
+    if not proc or proc.returncode != 0:
+        return None
+    return proc.stdout
+
+
+def _path_is_granted(show_output: str, target: Path) -> bool:
+    """True iff *show_output* grants *target* or any ancestor of it."""
+    try:
+        resolved = target.resolve()
+    except (OSError, RuntimeError):
+        return False
+    for raw in _granted_paths(show_output):
+        try:
+            candidate = Path(raw).expanduser().resolve()
+        except (OSError, RuntimeError):
+            continue
+        if candidate == resolved or candidate in resolved.parents:
+            return True
+    return False
+
+
 def has_access(prefixes: Path) -> bool:
     """True iff a user override already exposes *prefixes* to the sandbox.
 
     Matches an exact grant of the prefixes dir *or* any ancestor of it (a
     user who granted their whole home is already covered — do not re-add).
     """
-    proc = _run_as_owner(
-        ["flatpak", "override", "--user", "--show", FLATPAK_APP_ID], prefixes,
-    )
-    if not proc or proc.returncode != 0:
-        return False
-    granted = _granted_paths(proc.stdout)
-    target = prefixes.resolve()
-    for raw in granted:
-        try:
-            candidate = Path(raw).expanduser().resolve()
-        except (OSError, RuntimeError):
-            continue
-        if candidate == target or candidate in target.parents:
-            return True
-    return False
+    shown = _show_overrides(prefixes)
+    return _path_is_granted(shown, prefixes) if shown is not None else False
 
 
 def _filesystem_entries(show_output: str) -> Iterator[str]:
@@ -183,4 +200,97 @@ def ensure_access(prefixes: Path | str | None = None) -> str:
         logger.warning("[protontricks] override failed: %s", detail)
         return "failed"
     logger.info("[protontricks] granted Flatpak access to %s", root)
+    return "granted"
+
+
+#: Protontricks' own env var for extra ``compatibilitytools.d`` roots. This is
+#: the ONLY way to widen its Proton search inside the Flatpak: it also scans
+#: ``/usr/share/steam/compatibilitytools.d``, but Flatpak silently ignores
+#: filesystem grants under ``/usr``, so that path stays invisible in-sandbox
+#: no matter what we override (verified on-device).
+EXTRA_TOOLS_ENV = "STEAM_EXTRA_COMPAT_TOOLS_PATHS"
+
+
+def _env_entries(show_output: str, name: str) -> list[str]:
+    """Path entries of the ``name`` env override, in declaration order.
+
+    Section-blind on purpose, matching :func:`_filesystem_entries`: the key is
+    unique across ``flatpak override --show``'s INI sections, so there is no
+    need to track which one we are inside.
+    """
+    for line in show_output.splitlines():
+        key, sep, value = line.partition("=")
+        if not sep or key.strip() != name:
+            continue
+        return [part for part in value.split(os.pathsep) if part.strip()]
+    return []
+
+
+def tool_path_status(root: Path, tools_dir: Path) -> str:
+    """Report whether *tools_dir* is both readable and searched in-sandbox.
+
+    ``"already"`` both the filesystem grant and the env entry are present;
+    ``"partial"`` one of the two is missing;
+    ``"absent"``  neither is present;
+    ``"unknown"`` the override state could not be read.
+    """
+    shown = _show_overrides(root)
+    if shown is None:
+        return "unknown"
+    granted = _path_is_granted(shown, tools_dir)
+    searched = str(tools_dir) in _env_entries(shown, EXTRA_TOOLS_ENV)
+    if granted and searched:
+        return "already"
+    return "partial" if granted or searched else "absent"
+
+
+def ensure_tool_path_access(tools_dir: Path | str | None = None) -> str:
+    """Make :mod:`unifideck.core.compat_tool_bridge`'s links usable in-sandbox.
+
+    Two overrides are needed, and both are idempotent:
+
+    * ``--filesystem=<tools_dir>:ro`` so the sandbox can read the links;
+    * ``--env=STEAM_EXTRA_COMPAT_TOOLS_PATHS=…<tools_dir>`` so Protontricks
+      actually *searches* them — a readable directory it never looks in is
+      worth nothing.
+
+    Any pre-existing env value is preserved and appended to, never replaced:
+    the user (or another tool) may already point Protontricks somewhere.
+
+    Same return vocabulary as :func:`ensure_access`.
+    """
+    from unifideck.core.compat_tool_bridge import bridge_root
+
+    tools = Path(tools_dir).expanduser() if tools_dir else bridge_root()
+    if not tools.is_dir():
+        return "skipped"
+    if not flatpak_present(tools):
+        return "absent"
+    shown = _show_overrides(tools)
+    if shown is None:
+        return "failed"
+    if _path_is_granted(shown, tools) and str(tools) in _env_entries(
+        shown, EXTRA_TOOLS_ENV,
+    ):
+        return "already"
+
+    existing = [e for e in _env_entries(shown, EXTRA_TOOLS_ENV) if e != str(tools)]
+    joined = os.pathsep.join([*existing, str(tools)])
+    proc = _run_as_owner(
+        [
+            "flatpak", "override", "--user",
+            f"--filesystem={tools}:ro",
+            f"--env={EXTRA_TOOLS_ENV}={joined}",
+            FLATPAK_APP_ID,
+        ],
+        tools,
+    )
+    if not proc or proc.returncode != 0:
+        detail = (proc.stderr or "").strip() if proc else "no subprocess"
+        logger.warning("[protontricks] tool-path override failed: %s", detail)
+        return "failed"
+    logger.info(
+        "[protontricks] granted Flatpak access to %s and added it to %s",
+        tools, EXTRA_TOOLS_ENV,
+    )
     return "granted"

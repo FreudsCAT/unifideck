@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from unifideck.core import compat_bridge
+from unifideck.core import compat_bridge, compat_tool_bridge
 from unifideck.services import prefix_bridge
 
 
@@ -26,11 +26,21 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(prefix_bridge.compat_bridge, "PREFIX_ROOT", prefixes)
     monkeypatch.setattr(prefix_bridge, "_GAMES_MAP", data / "games.map")
     monkeypatch.setattr(prefix_bridge, "_UBISOFT_ID_MAP", data / "ubisoft_id_map.json")
-    # The Flatpak grant is exercised in its own test module; keep this one
+    # The Flatpak grants are exercised in their own test module; keep this one
     # from shelling out.
     monkeypatch.setattr(
         "unifideck.services.protontricks_access.ensure_access",
         lambda *a, **k: "absent",
+    )
+    monkeypatch.setattr(
+        "unifideck.services.protontricks_access.ensure_tool_path_access",
+        lambda *a, **k: "absent",
+    )
+    # The compat-tool bridge root is a real data-dir path; without this a
+    # developer who happens to have one would have the sweep prune THEIR
+    # links (and shell out to flatpak) during a test run.
+    monkeypatch.setattr(
+        compat_tool_bridge, "BRIDGE_ROOT", data / "protontricks-tools",
     )
     return data, prefixes, steam_root
 
@@ -121,3 +131,47 @@ def test_missing_steam_root_is_a_noop(env):
 def test_missing_games_map_is_a_noop(env):
     _, _, steam_root = env
     assert prefix_bridge.sync_bridges(steam_root)["linked"] == 0
+
+
+# --------------------------------------------------------------------------
+# The compat-tool half of the sweep
+# --------------------------------------------------------------------------
+def test_sweep_prunes_dead_compat_tool_links(env):
+    """A Proton removed or upgraded in place must not leave a dangling link.
+
+    Creation happens at launch (``prefix_setup``), where the tool in use is
+    known; pruning is the part that needs no launch, so it lives here.
+    """
+    data, _, steam_root = env
+    bridge_root = data / "protontricks-tools"
+    bridge_root.mkdir(parents=True)
+    dead = bridge_root / f"{compat_tool_bridge.LINK_PREFIX}GE-Proton11-3"
+    dead.symlink_to(data / "removed-proton")
+
+    result = prefix_bridge.sync_bridges(steam_root)
+
+    assert result["tools_pruned"] == 1
+    assert not dead.exists() and not dead.is_symlink()
+
+
+def test_sweep_reports_tool_bridge_state_without_raising(env):
+    """The tool sweep is optional tooling: it reports, it never fails a sync."""
+    _, _, steam_root = env
+    result = prefix_bridge.sync_bridges(steam_root)
+    assert result["tools_pruned"] == 0
+    assert result["tools_flatpak"] == "absent"
+
+
+def test_tool_sweep_failure_never_breaks_the_prefix_sweep(env, monkeypatch):
+    data, prefixes, steam_root = env
+    make_prefix(prefixes, "Sugar")
+    write_games_map(data, [("epic:Sugar", "/g/rl.exe", "/g", -487067706)])
+    monkeypatch.setattr(
+        compat_tool_bridge, "prune_dead_links",
+        lambda: (_ for _ in ()).throw(OSError("boom")),
+    )
+
+    result = prefix_bridge.sync_bridges(steam_root)
+
+    assert result["linked"] == 1          # the prefix bridge still ran
+    assert result["tools_flatpak"] == "failed"

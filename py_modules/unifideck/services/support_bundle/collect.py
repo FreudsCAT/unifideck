@@ -27,7 +27,15 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from . import checks, env_report, inventory, path_audit, resolve, scrub
+from . import (
+    checks,
+    env_report,
+    inventory,
+    path_audit,
+    probe_plugin_logs,
+    resolve,
+    scrub,
+)
 from .deny import deny_patterns, is_denied
 from .sources import COLLECTED
 from .spec import (
@@ -105,7 +113,11 @@ def _read_capped(path: Path, cap: int, tail: bool) -> tuple[bytes, int, bool]:
     about the crash.
 
     The first partial line of a tail is dropped so JSONL stays parseable
-    and text stays readable.
+    and text stays readable — but only when there *is* a line break to
+    align to. A window with no newline at all (one very long line, or a
+    single-line file) used to partition down to zero bytes and collect a
+    banner reading "kept 0" instead of the content. Some game logs are
+    exactly that shape, so the alignment is now best-effort.
     """
     size = path.stat().st_size
     if size <= cap:
@@ -114,7 +126,8 @@ def _read_capped(path: Path, cap: int, tail: bool) -> tuple[bytes, int, bool]:
         if tail:
             handle.seek(size - cap)
             data = handle.read()
-            data = data.partition(b"\n")[2]
+            head, newline, rest = data.partition(b"\n")
+            data = rest if newline else head
         else:
             data = handle.read(cap)
     banner = TRUNCATION_BANNER.format(kept=len(data), total=size).encode("utf-8")
@@ -256,6 +269,26 @@ def _write_generated(
     run.write("diagnostics.txt", diagnostics.encode("utf-8"))
     run.write("environment.json", _dump(report))
     run.write("inventory.txt", _inventory(run.ctx).encode("utf-8"))
+    _write_sibling_plugin_logs(run)
+
+
+def _write_sibling_plugin_logs(run: _Run) -> None:
+    """Add the other plugins' newest logs, scrubbed like any log of ours.
+
+    Guarded and last: these are third-party files, and a plugin that writes
+    something unreadable must cost us the artifact, not the bundle.
+    """
+    try:
+        text, _ = probe_plugin_logs.render_sibling_logs()
+        data, hits, dropped = scrub.apply_profile(text.encode("utf-8"), "text")
+        run.redactions += hits
+        run.lines_dropped += dropped
+        run.write("plugins/other-plugin-logs.txt", data)
+    except Exception as err:
+        logger.debug("[support_bundle] sibling plugin logs failed", exc_info=True)
+        run.errors.append({
+            "key": "sibling_plugin_logs", "error": repr(err),
+        })
 
 
 def _inventory(ctx: BundleContext) -> str:

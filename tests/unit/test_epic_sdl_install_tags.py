@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -398,6 +399,25 @@ async def test_non_sdl_title_never_fetches(
 
     monkeypatch.setattr(sdl, "_get_sdl_json", boom)
     assert await sdl.fetch_sdl_data("PlainGame") is None
+
+
+@pytest.mark.asyncio
+async def test_non_sdl_title_says_so_in_the_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The "no language picker" decision must be visible in a bundle.
+
+    A tester who saw the picker on Fallout: New Vegas reported "GTA V /
+    RDR2 / BioShock give no language options" as a bug. The code was
+    right — none of them is an SDL title — but the support bundle held
+    no evidence either way, because this path returned silently.
+    """
+    _write_version_json(tmp_path, {"Ginger": None})
+    with caplog.at_level(logging.INFO, logger=sdl.logger.name):
+        assert await sdl.fetch_sdl_data("PlainGame") is None
+        assert await sdl.resolve_install_tags("PlainGame", "en-US") == []
+        assert await sdl.resolve_language_options("PlainGame") == {}
+    assert "PlainGame is not a Selective Downloads title" in caplog.text
 
 
 @pytest.mark.asyncio
