@@ -42,6 +42,26 @@ def endpoint_for(api_key: str) -> str:
     return FREE_URL if api_key.endswith(":fx") else PRO_URL
 
 
+def _auth_headers(api_key: str) -> dict[str, str]:
+    """Headers for a translate POST, including DeepL authentication.
+
+    The key MUST travel in the ``Authorization`` header. It used to be sent
+    as an ``auth_key`` form field, which DeepL has since stopped accepting —
+    every request came back::
+
+        403 {"message": "Missing Authorization header, expected
+             'Authorization: DeepL-Auth-Key <API key>'."}
+
+    so the i18n step failed for anyone with a valid key, and the ``build``
+    workflow never reached the packaging stage. The header form is the only
+    one DeepL documents today (developers.deepl.com/docs/getting-started/auth).
+    """
+    return {
+        "Authorization": f"DeepL-Auth-Key {api_key}",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
+
 def translate_batch(
     texts: list[str],
     target_lang: str,
@@ -67,7 +87,6 @@ def _post(
 ) -> str:
     """POST the translate request and return the raw response body."""
     params: list[tuple[str, str]] = [
-        ("auth_key", api_key),
         ("target_lang", target_lang),
         ("source_lang", source_lang),
         # preserve_formatting keeps {placeholders} intact so
@@ -84,7 +103,7 @@ def _post(
     req = urllib.request.Request(
         endpoint_for(api_key),
         data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        headers=_auth_headers(api_key),
     )
     try:
         with urllib.request.urlopen(  # noqa: S310 — trusted host
