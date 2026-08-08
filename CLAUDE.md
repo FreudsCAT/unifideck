@@ -55,3 +55,69 @@ y **falla si hay tests saltados**, así que nada puede quedarse en `skip`.
 `tests/**`, `pyproject.toml` o `requirements*.txt`. Un PR que solo toque
 `src/**` verá 4 checks en vez de 7: los otros no fallaron, no llegaron a
 ejecutarse.
+
+## Pendiente — estado a 2026-08-08
+
+Diagnosticado y verificado en dispositivo, pero **sin implementar**. `staging`
+está en `01ea75a`, con los PR #1–#4 mergeados.
+
+### 1. Idioma de los juegos de Epic que ignoran `-epiclocale`
+
+Síntoma reproducido: Overcooked 2 (`epic:Potoo`) arranca en inglés con
+`ui.locale = es-ES`. **No es una regresión del PR #1** — ese arreglo funciona.
+El log lo prueba: `resolved language es from config locale es-ES`, y
+`--language es` llega a legendary, que lo traduce a `-epiclocale=es`. Dying
+Light lo respeta; Overcooked 2 no, porque es Unity y lee el idioma del sistema
+operativo, no los parámetros de Epic.
+
+El hueco: `launcher/proton/language_setup/` tiene `amazon.py` y `ubisoft.py`,
+que llaman a `registry_io._apply_windows_locale` para escribir
+`[Control Panel\International]` en el `user.reg` del prefijo. **Para Epic no
+existe**, así que Epic tiene una palanca donde los otros tienen dos.
+
+Trabajo: añadir `language_setup/epic.py` calcado de `amazon.py` (~12 líneas) y
+llamarlo desde `handlers/epic.py::epic_launch`. `es-ES` ya está en
+`LOCALE_MAP` (`00000c0a`, `ESN`, Spain), no hay tabla nueva que mantener.
+
+Dos avisos para Carles antes de empezar: no garantiza español si el juego no
+trae los textos, y cambia el prefijo entero (igual que ya se hace con Amazon y
+Ubisoft).
+
+De paso, comprobar `handlers/generic.py::_amazon_launch`: construye
+`ConfigManager` sin `user_path`, que es el mismo patrón que causaba el bug del
+PR #1. Puede que Amazon tampoco lea la elección del usuario.
+
+### 2. Selector de Proton propio en Unifideck
+
+Motivo: el pin de `proton_settings.json` **no se puede cambiar ni quitar desde
+la interfaz**. Una vez fijado, el juego queda anclado a esa versión; para
+soltarlo hay que editar el JSON a mano. Elegir «Steam Linux Runtime» no sirve:
+la captura lo ignora a propósito.
+
+- Paso 1 — mostrar la versión fijada en la fila de metadatos
+  (`components/play/PlayMeta.tsx`, junto a «Espacio requerido · Última vez
+  jugado»). Código propio, sin parchear Steam.
+- Paso 2 — convertirlo en desplegable con «Predeterminado» + los Protones
+  instalados, escribiendo el mismo `proton_settings.json` vía la RPC
+  `save_proton_setting` (un `tool_name` vacío borra la entrada). Hace falta una
+  RPC nueva que enumere los Protones instalados.
+
+Descartado tras valorarlo con Carles: inyectar el aviso **bajo la casilla de
+Steam**. El diálogo de propiedades no es una ruta, así que `routerHook.addPatch`
+no sirve y habría que enganchar el modal; es la superficie más frágil de todas
+y sería solo informativa.
+
+### Ya verificado — no volver a investigarlo
+
+- Steam **sí** guarda la elección en `config.vdf`. Que el desplegable salte a
+  «Steam Linux Runtime» al elegir una versión es cosmética de su interfaz; el
+  fichero guarda `proton_9`, `GE-Proton7-55`, etc.
+- `SpecifyCompatTool` tarda ~700 ms en verse reflejado en `config.vdf`, así que
+  dos capturas seguidas pueden leer el valor viejo. Inocuo: se reescribe el
+  mismo valor.
+- El candado de `useGameActions` solo colapsa pulsaciones que **se solapan**;
+  las secuenciales hacen su propia captura. Inocuo: Steam deduplica `RunGame` y
+  solo corre un launcher.
+- Leer `config.vdf` al lanzar dejando el ajuste puesto en Steam **no funciona**
+  y no hay que reintentarlo: con la casilla marcada, Steam ejecuta el launcher
+  a través de Wine y no llega a arrancar nada capaz de leer nada.
