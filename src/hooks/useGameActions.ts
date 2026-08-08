@@ -52,6 +52,14 @@ export interface UseGameActionsResult {
   terminate: (appId: number, force?: boolean) => void;
 }
 
+/** AppIds whose launch is mid-flight, so repeated presses collapse into
+ *  one RunGame. The capture made launching asynchronous — the button no
+ *  longer fires instantly — and on device a single Dying Light press
+ *  produced three captures 90 ms apart. Module-scoped rather than a ref
+ *  because each component builds its own hook instance while Steam is
+ *  global: two different buttons for the same game must still dedupe. */
+const launchesInFlight = new Set<number>();
+
 /**
  * Hook bundling all game-level actions a UI element
  * may trigger : install, uninstall, launch, cancel
@@ -119,16 +127,22 @@ export function useGameActions(bridge: SteamBridgeShape): UseGameActionsResult {
   // no log, no toast, no game.
   const launch = useCallback(
     async (appId: number, storeGameId: string) => {
-      const outcome = await captureForceCompatPin(storeGameId);
-      if (outcome.pinned) {
-        // Steam's dialog will now show no forced tool, so say where the
-        // choice went — otherwise it looks like the setting was discarded.
-        toast.info(
-          t("play.protonPinned", { version: outcome.pinned }),
-          t("play.protonPinnedBody"),
-        );
+      if (launchesInFlight.has(appId)) return;
+      launchesInFlight.add(appId);
+      try {
+        const outcome = await captureForceCompatPin(storeGameId);
+        if (outcome.pinned) {
+          // Steam's dialog will now show no forced tool, so say where the
+          // choice went — otherwise it looks like the setting was discarded.
+          toast.info(
+            t("play.protonPinned", { version: outcome.pinned }),
+            t("play.protonPinnedBody"),
+          );
+        }
+        bridge.runGame(appId);
+      } finally {
+        launchesInFlight.delete(appId);
       }
-      bridge.runGame(appId);
     },
     [bridge, t, toast],
   );
