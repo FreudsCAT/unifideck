@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from unifideck.rpc.mixins.sync_cleanup import CleanupRPCMixin
+from unifideck.services.installed_disk_info import collect_installed_disk_info
 from unifideck.services.size_cache import get_size_cache
 from unifideck.stores.shared.installed_size import installed_size_bytes
 
@@ -26,8 +27,13 @@ class SyncRPCMixin(CleanupRPCMixin):
     """Library sync, progress, and game queries.
 
     The "Delete all Unifideck data" flow lives in
-    :class:`~unifideck.rpc.mixins.sync_cleanup.CleanupRPCMixin`
-    (mixed in here) to keep this file under the volumetry cap.
+    :class:`~unifideck.rpc.mixins.sync_cleanup.CleanupRPCMixin`, mixed in here
+    to keep this file under the volumetry cap.
+
+    Reclaiming Steam-made ``compatdata`` prefixes used to be an RPC pair here,
+    driven by a Settings button. It now runs unattended at boot from
+    ``services/prefix_bridge.reclaim_redundant_compatdata`` and has no RPC
+    surface, so there is nothing for the frontend to call.
     """
 
     sync_service: Any
@@ -229,6 +235,13 @@ class SyncRPCMixin(CleanupRPCMixin):
         cached = await cache.get(store, game_id)
         if cached is not None:
             return cached
+        # A store that already failed for this game recently is not worth
+        # waiting on again: the caller is a page open, and re-paying a
+        # multi-second lookup to display nothing is the worst outcome. The
+        # stamp expires (UNKNOWN_TTL_S) so a fixed login or a transient
+        # outage recovers on its own.
+        if await cache.is_unknown(store, game_id):
+            return 0
 
         if adapter is None or not hasattr(adapter, "get_game_size"):
             return 0
@@ -242,11 +255,31 @@ class SyncRPCMixin(CleanupRPCMixin):
                 "[sync] get_game_size(%s:%s) failed/timed out",
                 store, game_id, exc_info=True,
             )
+            await cache.mark_unknown(store, game_id)
             return 0
         size_int = int(size or 0)
         if size_int > 0:
             await cache.put(store, game_id, size_int)
+        else:
+            await cache.mark_unknown(store, game_id)
         return size_int
+
+    async def get_installed_disk_info(self) -> Any:
+        """Size + storage location for every installed game, in one call.
+
+        Feeds the Quick-Access "Installed" list's meta line
+        (``<size> · Internal|External``). Bulk on purpose: per-row calls
+        to :meth:`get_game_size_bytes` would mean one uncached directory
+        walk per visible game every time the panel opens — see
+        :mod:`unifideck.services.installed_disk_info`, which bounds and
+        memoises the walks.
+
+        Returns ``{"<store>:<store_game_id>": {"size_bytes", "location"}}``,
+        with games it could not resolve omitted rather than reported as
+        zero-sized.
+        """
+        games = self.sync_service.get_all_games() if self.sync_service else []
+        return await collect_installed_disk_info(games, self.registry)
 
     def _size_cache_path(self) -> str:
         """Path to the persistent download-size cache (in the data dir)."""

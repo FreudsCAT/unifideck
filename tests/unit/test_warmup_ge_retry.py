@@ -41,16 +41,21 @@ def _ctx(tmp_path):
 
 
 @pytest.fixture
-def wired(monkeypatch):
+def wired(monkeypatch, tmp_path):
     """Patch the lazy-imported launcher surface ``setup_prefix`` pulls in.
 
     Returns the spies so each test can assert selection + retry behaviour.
     """
     monkeypatch.setattr(proton_pkg, "find_python_3_10_plus", lambda: "/usr/bin/python3")
+    # ``context``/``prefix_path`` are what ``compat.compat_work_pending`` reads
+    # for the "is any setup still outstanding?" check that now gates the ladder.
+    # The prefix has no ``system.reg``, so it correctly reports pending and the
+    # ladder runs — these tests are about the timeout path, not the skip path.
     monkeypatch.setattr(
         proton_pkg, "proton_prepare",
         lambda ctx, state, **kw: SimpleNamespace(
             tool_id=kw["proton_tool_id"], env={},
+            context=ctx, prefix_path=tmp_path / "prefix",
         ),
     )
     ensure = AsyncMock()
@@ -69,7 +74,7 @@ def _patch_compat(monkeypatch, timed_out_sequence):
     seq = iter(timed_out_sequence)
     calls = []
 
-    async def _compat(plan):
+    async def _compat(plan, *, vcreg_plan=None):
         val = next(seq)
         calls.append(plan.tool_id)
         return val
@@ -120,7 +125,8 @@ async def test_retry_with_ge_on_compat_timeout(tmp_path, wired, monkeypatch):
     assert (tool, recovered) == ("GE-Proton11-1", True)
     # A recovery pins the winning Proton so the next launch reuses it.
     wired.pin.assert_called_once()
-    assert wired.pin.call_args.args[1] == "GE-Proton11-1"
+    # (ctx, state, tool) — state carries the resolved prefix the marker goes in.
+    assert wired.pin.call_args.args[2] == "GE-Proton11-1"
 
 
 async def test_no_retry_when_hung_proton_was_already_ge(tmp_path, wired, monkeypatch):

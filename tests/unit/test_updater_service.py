@@ -1,15 +1,17 @@
 """Unit tests for UpdaterService's cache-bypass (``force``) plumbing.
 
-Regression coverage for the self-updater install-does-nothing bug: a
-mutable prerelease tag's single GitHub asset gets deleted and re-uploaded
-under a new name on every dev build, so the 1-hour in-process cache must
-be bypassable on demand (the explicit "Check for Updates" action) rather
-than only expiring passively. See ``py_modules/unifideck/rpc/mixins/
+Regression coverage for the self-updater install-does-nothing bug: every
+dev build publishes a brand-new prerelease and deletes the previous one,
+so a warm cache can hand out an asset URL whose release no longer exists.
+The 1-hour in-process cache must therefore be bypassable on demand (the
+explicit "Check for Updates" action) rather than only expiring passively.
+See ``py_modules/unifideck/rpc/mixins/
 updater.py``'s ``force_check_plugin_update``/``force_get_available_versions``
 for the RPC-layer half of this fix.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -17,7 +19,11 @@ from unifideck.services.updater.service import (
     ReleaseInfo,
     UpdaterService,
     _parse_version_from_tag,
+    _version_tuple,
 )
+
+# The tag shape build-plugin.sh publishes for every dev build.
+_PER_BUILD_DEV_TAG = "Dev-20260808-171205-47e6d28"
 
 _RELEASE_A = ReleaseInfo(
     tag="Dev",
@@ -167,3 +173,51 @@ def test_parse_version_from_tag_leaves_three_component_tag_unchanged() -> None:
 
 def test_parse_version_from_tag_returns_raw_tag_when_no_semver_found() -> None:
     assert _parse_version_from_tag("Dev") == "Dev"
+
+
+def test_per_build_dev_tag_stays_non_semver() -> None:
+    # Load-bearing. build-plugin.sh publishes a NEW release per dev build,
+    # tagged "Dev-<UTCdate>-<UTCtime>-<shortsha>", so that it sorts to the
+    # top of the GitHub releases page (rotating an asset on a fixed tag
+    # never moves the release). That tag must contain no "X.Y" substring:
+    # a tag carrying the dotted branch name instead (e.g.
+    # "Dev-0.7.3-g47e6d28") would parse to "0.7.3" and collide with the
+    # real Release-0.7.3 in get_release_for_version(), handing a tester the
+    # dev zip when they picked the stable build. Widening _TAG_VERSION_RE
+    # breaks this silently, hence the explicit pin.
+    assert _parse_version_from_tag(_PER_BUILD_DEV_TAG) == _PER_BUILD_DEV_TAG
+    assert _version_tuple(_parse_version_from_tag(_PER_BUILD_DEV_TAG)) == (0,)
+
+
+def test_per_build_dev_tag_sorts_below_every_real_release() -> None:
+    assert _version_tuple(
+        _parse_version_from_tag(_PER_BUILD_DEV_TAG),
+    ) < _version_tuple(_parse_version_from_tag("Release-0.7.2"))
+
+
+async def test_check_for_update_prefers_stable_over_per_build_dev(
+    tmp_path: Path,
+) -> None:
+    # A fresh dev prerelease is published on every build and deliberately
+    # sits at the top of the GitHub list, so it is first in the API
+    # response. It must still never be offered as "the latest version".
+    dev = replace(_RELEASE_A, tag=_PER_BUILD_DEV_TAG, version=_PER_BUILD_DEV_TAG)
+    stable = replace(
+        _RELEASE_A,
+        tag="Release-0.7.2",
+        version="0.7.2",
+        name="UNIFIDECK v0.7.2",
+        asset_name="unifideck.prod.v0.7.2.zip",
+        prerelease=False,
+    )
+    svc = _service(tmp_path)
+    with patch.object(
+        UpdaterService,
+        "_fetch_from_github",
+        new_callable=AsyncMock,
+        return_value=[dev, stable],
+    ):
+        result = await svc.check_for_update()
+
+    assert result["latest"]["tag"] == "Release-0.7.2"
+    assert result["available"] is True

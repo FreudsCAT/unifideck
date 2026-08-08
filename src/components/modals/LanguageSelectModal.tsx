@@ -1,12 +1,19 @@
 /**
- * GOGLanguageSelectModal — language picker for multi-language
- * GOG installs.
+ * LanguageSelectModal — language picker for multi-language
+ * installs.
  *
- * GOG games can ship in multiple languages. When the backend's
- * `get_gog_game_languages` returns more than one option, the
- * install flow defers to this modal so the user picks before
- * the download is queued. With one language available the
- * modal is skipped entirely (queued with the default).
+ * Games can ship their languages as separate downloads. When the
+ * backend's `get_gog_game_languages` (GOG) or
+ * `get_epic_game_languages` (Epic Selective Downloads titles)
+ * returns more than one option, the install flow defers to this
+ * modal so the user picks before the download is queued. With one
+ * language available the modal is skipped entirely (queued with
+ * the default).
+ *
+ * Store-neutral by design: it takes an option list and hands back
+ * the picked value verbatim, so a new store only has to report its
+ * languages. Epic passes `labels` since its SDL configs carry their
+ * own display names.
  *
  * Pure presentational : the actual install RPC is the caller's
  * responsibility — this component only collects the choice.
@@ -15,11 +22,12 @@ import { FC, useState } from "react";
 import { ConfirmModal, Dropdown, DropdownOption } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import i18n from "i18next";
-import { matchGogLanguage } from "../../lib/i18n/gog-language-match";
+import { pickDefaultLanguage } from "../../lib/i18n/pick-default-language";
 
-/** Display labels for GOG language codes. Falls back to the
- *  raw code if a code isn't recognised — the modal still works,
- *  just without the localised name. */
+/** Display labels for bare locale codes, which is what GOG reports.
+ *  Falls back to the raw code if one isn't recognised — the modal
+ *  still works, just without the localised name. Stores that ship
+ *  their own labels pass them via `labels` instead. */
 const LANGUAGE_NAMES: Record<string, string> = {
   "en-US": "English",
   "de-DE": "Deutsch (German)",
@@ -56,33 +64,24 @@ interface Props {
    *  the active UI language (which reflects the "auto" preference
    *  resolved to the system language). */
   preferredTag?: string;
+  /** Per-option display names, consulted ahead of {@link LANGUAGE_NAMES}.
+   *  Epic's SDL configs ship their own labels (e.g. `zh-Hans` →
+   *  "中文 (简体中文）"), which beat guessing from the raw tag. */
+  labels?: Record<string, string>;
 }
 
 /**
- * Pick the option to pre-select: the user's language if the game
- * offers it, else an English option, else the first listed —
- * normalizing the inconsistent label formats gogdl emits. The
- * user still confirms (or changes) before anything installs.
+ * Single-select dropdown of the offered language options. Confirm =
+ * close + invoke `onConfirm(language)` so the parent can call
+ * `install_game(..., { language })`.
  */
-function pickDefaultLanguage(options: string[], preferredTag: string): string {
-  return (
-    matchGogLanguage(options, preferredTag) ??
-    matchGogLanguage(options, "en") ??
-    options[0]
-  );
-}
-
-/**
- * Single-select dropdown of GOG language codes. Confirm =
- * close + invoke `onConfirm(language)` so the parent can
- * call `install_game(..., { language })`.
- */
-export const GOGLanguageSelectModal: FC<Props> = ({
+export const LanguageSelectModal: FC<Props> = ({
   gameTitle,
   languages,
   onConfirm,
   closeModal,
   preferredTag = i18n.language,
+  labels,
 }) => {
   const { t } = useTranslation();
   const safeLanguages = languages.length > 0 ? languages : ["en-US"];
@@ -92,14 +91,16 @@ export const GOGLanguageSelectModal: FC<Props> = ({
 
   const options: DropdownOption[] = safeLanguages.map((lang) => ({
     data: lang,
-    label: LANGUAGE_NAMES[lang] ?? lang,
+    label: labels?.[lang] ?? LANGUAGE_NAMES[lang] ?? lang,
   }));
 
   return (
     <ConfirmModal
-      strTitle={t("gogLanguageModal.title")}
-      strDescription={t("gogLanguageModal.description", { title: gameTitle })}
-      strOKButtonText={t("gogLanguageModal.install")}
+      strTitle={t("installLanguageModal.title")}
+      strDescription={t("installLanguageModal.description", {
+        title: gameTitle,
+      })}
+      strOKButtonText={t("installLanguageModal.install")}
       strCancelButtonText={t("common.cancel")}
       onOK={() => {
         onConfirm(selected);
@@ -123,7 +124,7 @@ export const GOGLanguageSelectModal: FC<Props> = ({
             fontSize: 14,
           }}
         >
-          {t("gogLanguageModal.label")}
+          {t("installLanguageModal.label")}
         </label>
         <Dropdown
           rgOptions={options}

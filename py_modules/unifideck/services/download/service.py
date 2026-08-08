@@ -244,6 +244,31 @@ class DownloadService(_WorkerMixin):
             "state": "running" if running_items else "idle",
         }
 
+    async def clear_history(self, item_id: str | None = None) -> int:
+        """Drop finished-download history entries. Returns how many went.
+
+        The Downloads tab lists *installed games* now rather than a download
+        log, so the only history rows it still surfaces are failures — which
+        the user needs a way to dismiss once they've read them. ``item_id``
+        clears one row; ``None`` clears them all. Purely a UI-history
+        operation: nothing on disk or in Steam is touched.
+        """
+        before = len(self._finished)
+        if item_id is None:
+            self._finished = []
+        else:
+            # ``DownloadItem`` has no ``id`` field — the frontend's ``id`` is
+            # derived in ``to_dict`` as ``"<store>:<game_id>"``, so rebuild it
+            # here to match what the UI sends back.
+            self._finished = [
+                i for i in self._finished
+                if f"{i.store}:{i.game_id}" != item_id
+            ]
+        removed = before - len(self._finished)
+        if removed:
+            await self._save_history()
+        return removed
+
     def set_on_complete_callback(self, callback: Any) -> None:
         """Register a post-install callback invoked by the worker.
 

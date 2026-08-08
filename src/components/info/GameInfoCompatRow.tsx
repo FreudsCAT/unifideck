@@ -137,11 +137,12 @@ export const GameInfoCompatRow: FC<Props> = ({
   const compatColors = COMPAT_COLORS[meta.deck_compatibility];
 
   return (
+    // "grid" rather than "row" — this Focusable lays out as a COLUMN and its
+    // buttons sit in a wrapping inner div, so a single-logical-row hint was
+    // never true here. See GameInfoNavButtons for why the container-level
+    // scrollIntoView is gone.
     <Focusable
-      flow-children="row"
-      onFocus={(e: React.FocusEvent<HTMLDivElement>) => {
-        e.currentTarget.scrollIntoView({ behavior: "smooth", block: "center" });
-      }}
+      flow-children="grid"
       style={{
         display: "flex",
         flexDirection: "column",

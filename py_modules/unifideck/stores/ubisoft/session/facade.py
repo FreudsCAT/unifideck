@@ -187,6 +187,31 @@ class UbisoftSession:
             return _CAPTURE_SENTINEL
         return None
 
+    def stored_credential_was_rejected(self, prefix_path: str) -> bool:
+        """True when UPC signed the user OUT of a prefix we had signed IN.
+
+        We inject the auth prefix's credential into every game prefix before
+        running UPC. If UPC then leaves that prefix holding a logged-out
+        credential, UPC did not accept what we gave it — the stored token is
+        dead server-side (Ubisoft rotates and invalidates; see the uninstall
+        capture-back note). No local copy can revive it, and because
+        ``capture`` correctly refuses to overwrite a "logged-in" credential
+        with a smaller one, nothing else notices: every later install injects
+        the same dead token and the user is asked to sign in forever.
+
+        Deliberately read-only — it reports, it does not purge. Clearing a
+        user's credentials is their call (QAM → Ubisoft → Sign out), not a
+        side effect of a heuristic.
+
+        Confirmed live 2026-08-01: after a prefix reset forced UPC to run
+        credential-less, the Aug-1 04:55 auth credential stopped working;
+        every subsequent install injected it and prompted for sign-in.
+        """
+        auth_dir = self._config.auth_prefix_dir_expanded
+        if not self._reader.has_valid_credentials(auth_dir):
+            return False  # nothing stored → a sign-in prompt is expected
+        return self._source_is_logged_out(prefix_path, auth_dir)
+
     def _source_is_logged_out(self, prefix_path: str, auth_dir: str) -> bool:
         """True if ``prefix_path``'s credential is smaller than auth's.
 

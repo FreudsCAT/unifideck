@@ -88,9 +88,9 @@ interface InstallAction {
 //
 // Dev/prerelease releases are handled separately from stable ones:
 // dev builds are deliberately cut BEFORE package.json's version bumps
-// (see build-plugin.sh), so their parsed `version` is always the
-// literal string "Dev" — running that through the numeric
-// compareVersions() above always parses to 0, which is <= any real
+// (see build-plugin.sh), so their parsed `version` is always the raw
+// non-semver tag ("Dev-<date>-<time>-<sha>") — running that through the
+// numeric compareVersions() above always parses to 0, which is <= any real
 // release and would misreport EVERY dev install as a "downgrade"
 // regardless of how new the underlying code actually is. There is no
 // meaningful downgrade concept for a prerelease: it's a "Reinstall"
@@ -237,9 +237,9 @@ export const PluginUpdater: FC = () => {
       ) {
         setSelectedTag(persistentSelectedTag);
       } else {
-        // A prerelease row's `version` is always the literal string
-        // "Dev" (no semver can be parsed from that tag), so it can
-        // never equal currentVersion — match it via the build id
+        // A prerelease row's `version` is always its raw non-semver tag
+        // ("Dev-<date>-<time>-<sha>" — no semver can be parsed from it),
+        // so it can never equal currentVersion. Match it via the build id
         // baked into its asset filename instead.
         //
         // currentBuildId !== null is also the deciding factor for the
@@ -352,9 +352,9 @@ export const PluginUpdater: FC = () => {
   const versionOptions = useMemo(() => {
     if (!versionsData) return [];
     return versionsData.map((v) => {
-      // The rotating "Dev" release's asset filename carries the real
-      // build identity (branch + short SHA) — its parsed `version` is
-      // always the literal string "Dev".
+      // A dev release's asset filename carries the real build identity
+      // (branch + short SHA) — its parsed `version` is only ever the raw
+      // non-semver tag, which says nothing about which build it is.
       const devBuildId = v.prerelease ? extractDevBuildId(v.asset_name) : null;
       let label = devBuildId ?? `v${v.version}`;
 

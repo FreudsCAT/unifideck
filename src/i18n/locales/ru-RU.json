@@ -388,7 +388,8 @@
     "cloudPullDone": "Облачное сохранение скачано",
     "cloudPullFailed": "Не удалось скачать облачное сохранение",
     "cloudPushDone": "Локальное сохранение загружено",
-    "cloudPushFailed": "Не удалось загрузить локальное сохранение"
+    "cloudPushFailed": "Не удалось загрузить локальное сохранение",
+    "cloudSavePathReset": "Папка сохранений сброшена на автоматическую"
   },
   "uninstallModal": {
     "title": "Подтверждение удаления",
@@ -399,6 +400,12 @@
     "warningBody": "Это навсегда удалит сохранения игры, хранящиеся внутри префикса Wine. Убедитесь, что у вас есть резервная копия.",
     "cancel": "Отмена",
     "uninstall": "Удалить"
+  },
+  "updateModal": {
+    "title": "Доступно обновление",
+    "description": "Для {{title}} доступно обновление. Без него сетевые функции могут не работать.",
+    "updateNow": "Обновить сейчас",
+    "playAnyway": "Всё равно играть"
   },
   "languageSettings": {
     "title": "ЯЗЫК",
@@ -560,7 +567,7 @@
     "simple": "Простой",
     "detailed": "Подробный"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "Выбрать язык",
     "description": "Выберите язык загрузки для игры {{title}}",
     "label": "Язык",
@@ -697,7 +704,11 @@
       "statusSyncing": "Синхронизация облачных сохранений…",
       "statusUnresolved": "Папка сохранений не найдена — синхронизация может не работать для этой игры.",
       "unresolvedHint": "Запустите игру один раз, чтобы мы могли определить ее папку сохранений, или укажите ее вручную.",
-      "upload": "Загрузить локальное сохранение"
+      "upload": "Загрузить локальное сохранение",
+      "currentLocation": "Папка сохранений",
+      "changeLocation": "Изменить папку",
+      "resetLocation": "Сбросить на автоматическую",
+      "statusInSync": "Облачные сохранения актуальны"
     },
     "exe": {
       "browse": "Обзор…",
@@ -719,7 +730,11 @@
     "neverPlayed": "Ни разу не запускалась",
     "hoursShort": "ч.",
     "minutesShort": "мин.",
-    "played": "Сыграно"
+    "played": "Сыграно",
+    "cloudSaves": "Облачные сохранения",
+    "cloudSupported": "Поддерживаются",
+    "cloudNotSupported": "Не поддерживаются",
+    "cloudUnknown": "Неизвестно"
   },
   "downloads": {
     "title": "Загрузки",
@@ -730,13 +745,20 @@
     "cancel": "Отмена",
     "removeFromQueue": "Удалить",
     "play": "Играть",
+    "update": "Обновить",
     "outcome": {
       "queued": "В очереди",
       "downloading": "Загрузка",
       "completed": "Завершено",
       "cancelled": "Отменено",
       "error": "Ошибка"
-    }
+    },
+    "installedCount": "Установлено ({{count}})",
+    "failed": "Ошибки",
+    "clearFailed": "Очистить ошибки",
+    "uninstall": "Удалить",
+    "locationInternal": "Внутренняя",
+    "locationExternal": "Внешняя"
   },
   "navigation": {
     "loading": "Загрузка...",

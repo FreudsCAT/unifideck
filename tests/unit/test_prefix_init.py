@@ -27,12 +27,12 @@ def toast_spy(monkeypatch):
     return spy
 
 
-def _plan(prefix_root: Path, tool: str):
+def _plan(prefix_root: Path, tool: str, store: str = "gog"):
     """Minimal ProtonLaunchPlan stand-in for the pure-logic helpers."""
     return SimpleNamespace(
         prefix_path=prefix_root,
         state=SimpleNamespace(proton_tool_id=tool),
-        context=SimpleNamespace(game_key="gog:123"),
+        context=SimpleNamespace(game_key=f"{store}:123", store=store),
     )
 
 
@@ -123,6 +123,66 @@ def test_major_change_resets_prefix_and_backs_up(tmp_path, toast_spy):
     assert backup.read_text() == "savegame"
 
 
+# ── prefixes that own their game install (Ubisoft) ────────────────
+
+def test_ubisoft_family_change_keeps_the_installed_game(tmp_path, toast_spy):
+    """A family change must NOT wipe a prefix the game is installed inside.
+
+    Ubisoft titles live in ``drive_c/Program Files (x86)/Ubisoft/Ubisoft Game
+    Launcher/games/``, so the reset that is merely expensive for every other
+    store is permanent data loss here. Observed live 2026-08-01: launching
+    Rayman Origins resolved ``proton_experimental``, ``prefix_setup`` borrowed
+    managed GE for umu's winetricks verb, and this deleted the install.
+    """
+    root = tmp_path / "prefix"
+    _make_root_prefix(root, proton_marker="Proton - Experimental")
+    game = (
+        root / "drive_c" / "Program Files (x86)" / "Ubisoft"
+        / "Ubisoft Game Launcher" / "games" / "Rayman Origins"
+    )
+    game.mkdir(parents=True)
+    (game / "Rayman Origins.exe").write_text("game")
+
+    pi._handle_proton_change(
+        _plan(root, "GE-Proton11-3", store="ubisoft"), root, "GE-Proton11-3",
+    )
+
+    # The install survived, and so did the rest of the prefix.
+    assert (game / "Rayman Origins.exe").read_text() == "game"
+    assert (root / "system.reg").is_file()
+    # Reported as a switch, not a reset — Proton upgrades the prefix in place.
+    assert toast_spy.call_args.args[0] == "toasts.launcher.protonSwitchedTo"
+    # The marker still moves forward, so this is announced once, not every launch.
+    assert (root / pi._MARKER_NAME).read_text() == "GE-Proton11-3"
+
+
+def test_non_ubisoft_family_change_still_resets(tmp_path, toast_spy):
+    """The guard is scoped — every other store keeps the reset behaviour."""
+    root = tmp_path / "prefix"
+    _make_root_prefix(root, proton_marker="Proton - Experimental")
+
+    pi._handle_proton_change(
+        _plan(root, "GE-Proton11-3", store="epic"), root, "GE-Proton11-3",
+    )
+
+    assert toast_spy.call_args.args[0] == "toasts.launcher.resettingPrefix"
+    assert not (root / "system.reg").exists()
+
+
+@pytest.mark.parametrize(
+    ("store", "owns"),
+    [("ubisoft", True), ("gog", False), ("epic", False), ("amazon", False)],
+)
+def test_prefix_owns_game_install(tmp_path, store, owns):
+    assert pi._prefix_owns_game_install(_plan(tmp_path, "x", store=store)) is owns
+
+
+def test_prefix_owns_game_install_without_a_store_attribute(tmp_path):
+    """Missing ``store`` must read as 'does not own' — never as Ubisoft."""
+    plan = SimpleNamespace(context=SimpleNamespace(game_key="gog:123"))
+    assert pi._prefix_owns_game_install(plan) is False
+
+
 def test_reset_preserves_marker_and_backup_dirs(tmp_path):
     root = tmp_path / "prefix"
     _make_root_prefix(root, proton_marker="proton_experimental")
@@ -157,7 +217,7 @@ async def test_ensure_created_no_migration_when_already_initialised(
     root.mkdir()
     (root / "system.reg").write_text("reg")
     spy = MagicMock()
-    monkeypatch.setattr(pi, "_restore_or_migrate_saves", spy)
+    monkeypatch.setattr(pi, "restore_or_migrate_saves", spy)
 
     await pi._ensure_created(_plan(root, "GE-Proton10-34"), root)
 

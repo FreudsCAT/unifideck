@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from unifideck.launcher.frontend_bridge import launcher_toast
@@ -11,6 +12,10 @@ from unifideck.launcher.proton.infrastructure.umu_runtime import run_umu_with_re
 from unifideck.launcher.types.errors import GameFailedError, UmuRuntimeError
 
 logger = logging.getLogger(__name__)
+
+# Last resort for ``-epiclocale`` when the user's language can't be read.
+# Matches legendary's own default (``language_code, country_code = 'en','US'``).
+_FALLBACK_EPIC_LANG = "en"
 
 
 def _rockstar_play_exe_rel(plan: ProtonLaunchPlan) -> str | None:
@@ -109,11 +114,53 @@ async def epic_launch(plan: ProtonLaunchPlan) -> int:
     )
     apply_rockstar_egs_setup(plan)
     legendary_bin, env = await _prepare_epic_env(plan)
-    argv = _build_legendary_argv(plan, legendary_bin)
-    rc = await run_umu_with_retry(
-        argv, env=env, on_start=plan.on_process_start,
-    )
+    rc = await _run_epic_game(plan, legendary_bin, env)
     return _finish_epic_launch(plan, rc)
+
+
+async def _run_epic_game(
+    plan: ProtonLaunchPlan, legendary_bin: str, env: dict[str, str],
+) -> int:
+    """Resolve legendary's launch recipe, then run umu-run ourselves.
+
+    UD-126: ``legendary launch`` fire-and-forgets the ``--wrapper``
+    command (``subprocess.Popen`` with no ``wait()``), so awaiting
+    legendary returned ~2s after the game was forked and this process
+    exited while the game was still starting. Steam ended the session
+    there — and in Gaming Mode gamescope will not raise a window whose
+    app Steam no longer considers running, which is why a slow-starting
+    title came up as audio with no window while Desktop Mode looked fine.
+
+    ``--json`` hands us the same parameters legendary was about to spawn,
+    so we spawn them ourselves and await the real umu-run: Epic now
+    behaves exactly like ``handlers/generic.py`` does for every other
+    store, and ``rc`` is the game's own exit code.
+
+    One consequence worth knowing: ``run_umu_with_retry`` may retry the
+    same argv, and ``egl_parameters`` carries a single-use Epic exchange
+    code. That is fine for the failure this retry exists for — a umu
+    bootstrap failure (rc 2/74/127) means the game never reached EGS, so
+    the code is still unused — and the long-session guard in
+    ``umu_runtime._is_recoverable`` keeps the window small for the rest.
+    """
+    from unifideck.launcher.proton.compat.epic_launch_params import (
+        build_umu_argv,
+        maybe_run_pre_launch,
+        merge_environment,
+        resolve_cwd,
+        resolve_launch_params,
+    )
+    params = await resolve_launch_params(
+        _build_legendary_argv(plan, legendary_bin, json_mode=True), env,
+    )
+    game_env = merge_environment(env, params)
+    await maybe_run_pre_launch(params, game_env)
+    return await run_umu_with_retry(
+        build_umu_argv(plan, params),
+        env=game_env,
+        cwd=resolve_cwd(params),
+        on_start=plan.on_process_start,
+    )
 
 
 async def _prepare_epic_env(
@@ -142,51 +189,77 @@ async def _prepare_epic_env(
 
 
 def _resolve_epic_language(plan: ProtonLaunchPlan) -> str:
-    """Resolve the Epic language code from the Unifideck config.
+    """Two-letter code for legendary's ``--language`` → ``-epiclocale=``.
 
-    Reads the user's language preference via ``get_unifideck_locale``
-    (which checks ``ui.locale`` → system POSIX → fallback) and converts
-    the BCP-47 tag to a 2-letter Epic language code (e.g. ``es-ES`` →
-    ``es``).  Falls back to ``en`` if anything goes wrong.
+    ``-epiclocale`` is how the Epic Games Launcher itself tells a game
+    which language to run in, and legendary reproduces it in the
+    ``egl_parameters`` we forward. This used to be hardcoded ``"en"``
+    (behind an ``EPIC_LANG`` env var nothing ever set), so **every** Epic
+    game launched in English no matter what the user had chosen — the
+    UD-101 / UD-041 reports, and why a title installed with an Italian
+    audio pack still came up in English.
+
+    legendary resolves the final value as
+    ``config.get(app_name, 'language', fallback=<this>)``, so a per-game
+    choice recorded at install time (``legendary.write_app_language``)
+    deliberately outranks the value returned here — this is the default
+    for games with no recorded preference, i.e. the user's Unifideck
+    language. ``EPIC_LANG`` is kept as an explicit escape hatch.
     """
+    override = os.environ.get("EPIC_LANG")
+    if override:
+        logger.info(
+            "[launcher.proton.epic] EPIC_LANG override: %s", override,
+        )
+        return override
     try:
-        # ``resolve_user_config_path`` lives in the submodule, NOT in the
-        # ``unifideck.config`` package namespace (its ``__all__`` only
-        # re-exports ConfigManager / persistence / validator). Importing it
-        # from the package raised ImportError on every single launch, the
-        # ``except`` below swallowed it, and every Epic game got
-        # ``--language en`` no matter what the UI said.
-        from unifideck.config import ConfigManager
+        from unifideck.config.config_manager import ConfigManager
         from unifideck.config.user_config_path import resolve_user_config_path
-        from unifideck.utils.locale import get_unifideck_locale
-
+        from unifideck.launcher.proton.language_setup import (
+            get_unifideck_language,
+        )
+        # ``user_path`` is what makes this read the language the user PICKED.
+        # Without it ``ConfigManager`` sees only ``defaults/config.json``,
+        # whose ``ui.locale`` is ``"auto"`` — no locale matches, so
+        # ``get_unifideck_locale`` falls through to the system POSIX locale and
+        # the Unifideck language dropdown has no effect on Epic games at all.
+        # It looks right on a machine whose OS language already matches, which
+        # is exactly why it survives testing.
         config = ConfigManager(
-            defaults_path=str(
-                plan.context.plugin_dir / "defaults" / "config.json",
-            ),
+            str(plan.context.plugin_dir / "defaults" / "config.json"),
             user_path=resolve_user_config_path(),
         )
-        locale_tag = get_unifideck_locale(config)
-        # BCP-47 → 2-letter prefix for legendary --language
-        lang = locale_tag.split("-")[0].lower()
-        if lang and len(lang) == 2:
-            logger.info(
-                "[launcher.proton.epic] resolved language %s from "
-                "config locale %s", lang, locale_tag,
-            )
-            return lang
-    except Exception:
-        logger.exception("[launcher.proton.epic] language resolution "
-                         "failed, falling back to 'en'")
-    return "en"
+        locale_tag = get_unifideck_language(config)
+    except Exception as err:
+        logger.warning(
+            "[launcher.proton.epic] language resolution failed (%s); "
+            "falling back to %s", err, _FALLBACK_EPIC_LANG,
+        )
+        return _FALLBACK_EPIC_LANG
+    # legendary documents --language as a two-letter code and its own
+    # default is the pre-dash half of the locale, so match that.
+    code = locale_tag.split("-", maxsplit=1)[0].strip().lower()
+    logger.info(
+        "[launcher.proton.epic] language %s → -epiclocale=%s",
+        locale_tag, code or _FALLBACK_EPIC_LANG,
+    )
+    return code or _FALLBACK_EPIC_LANG
 
 
 def _build_legendary_argv(
-    plan: ProtonLaunchPlan, legendary_bin: str,
+    plan: ProtonLaunchPlan, legendary_bin: str, *, json_mode: bool = False,
 ) -> list[str]:
-    """Assemble the ``legendary launch`` argv (offline, language, overrides)."""
+    """Assemble the ``legendary launch`` argv (offline, language, overrides).
+
+    ``json_mode`` appends ``--json``, which makes legendary print the
+    resolved launch parameters and exit instead of forking the game (see
+    :func:`_run_epic_game`). User wrappers are dropped for that call —
+    a Steam launch-option wrapper (gamemoderun, mangohud…) belongs on the
+    game, not on a metadata query — and are re-applied by
+    ``epic_launch_params.build_umu_argv``.
+    """
     from unifideck.launcher.proton.compat.epic import detect_offline
-    argv: list[str] = list(plan.state.wrappers)
+    argv: list[str] = [] if json_mode else list(plan.state.wrappers)
     argv.extend([
         legendary_bin,
         "launch",
@@ -194,17 +267,25 @@ def _build_legendary_argv(
         "--no-wine",
         "--skip-version-check",
     ])
+    if json_mode:
+        argv.append("--json")
     if detect_offline():
         argv.append("--offline")
         logger.info("[launcher.proton.epic] offline mode — passing --offline")
     argv.extend([
         "--wrapper",
-        # legendary is a PyInstaller onefile binary; it may hand its own
-        # bundled LD_LIBRARY_PATH/LD_PRELOAD down to this wrapper child
-        # instead of restoring the clean env it was launched with. That
-        # pollution then rides umu-run straight into the pressure-vessel
-        # container, breaking the container's own python3 (missing
-        # libz.so.1). Force-clear both right at the boundary.
+        # This string comes back verbatim as the JSON's ``launch_command``
+        # and becomes the head of the argv we spawn ourselves.
+        #
+        # The ``env -u`` prefix predates that: legendary used to fork this
+        # wrapper itself and could hand down its own bundled
+        # LD_LIBRARY_PATH/LD_PRELOAD instead of the clean env it was
+        # launched with, and that pollution rode umu-run into the
+        # pressure-vessel container, breaking the container's own python3
+        # ("libz.so.1", umu rc=127). We now own the spawn and
+        # ``umu_runtime._strip_loader_env`` pops both there, so this is
+        # belt-and-suspenders — kept because it costs nothing and keeps
+        # the exec line byte-identical to the pre-UD-126 one.
         f"env -u LD_LIBRARY_PATH -u LD_PRELOAD {plan.python_bin} {plan.umu_wrapper}",
         "--language",
         _resolve_epic_language(plan),
@@ -224,12 +305,17 @@ def _build_legendary_argv(
 def _finish_epic_launch(plan: ProtonLaunchPlan, rc: int) -> int:
     """Record the exit code; raise on unrecoverable failures.
 
-    legendary returns the instant it spawns umu (Popen, no wait), so
-    ``rc`` reflects legendary, not the game — the game runs in an
-    orphaned umu/Proton tree and survives this process exiting. We
-    deliberately do NOT block on a wait-for-container loop: a broad
-    process match snags Steam's own ``steam-runtime-launch-client`` in
-    Gaming Mode and hangs the launcher forever.
+    Since UD-126 ``rc`` is the **game's** exit code, not legendary's:
+    :func:`_run_epic_game` awaits the umu-run it spawned itself, so this
+    process lives exactly as long as the game and Steam tracks the
+    session (window focus in Gaming Mode, Stop, playtime, cloud sync-up).
+    Identical handling to ``generic_launch`` — Epic is no longer special.
+
+    Historical note for anyone tempted to reintroduce a wait loop: an
+    early 0.7 build "waited" by polling ``pgrep -f
+    steam-runtime-launch-client``, which matches Steam's OWN container
+    manager in Gaming Mode and hung the launcher forever. No process
+    matching is involved here; we hold the pid.
     """
     plan.state.game_exit_code = rc
     if rc == 0:

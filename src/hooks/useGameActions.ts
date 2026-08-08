@@ -21,6 +21,7 @@ import { useToast } from "./useToast";
 import { invalidateGameInfo } from "./useGameInfo";
 import { bumpGameStateVersion } from "../lib/game-state-version";
 import { captureForceCompatPin } from "../utils/protonPin";
+import { UpdateStore } from "../stores/update-store";
 import type { Result, StoreId } from "../types/api";
 
 /** Steam bridge shape. */
@@ -50,6 +51,13 @@ export interface UseGameActionsResult {
    *  which is exactly how the downloads-tab Play button shipped broken. */
   launch: (appId: number, storeGameId: string) => Promise<void>;
   terminate: (appId: number, force?: boolean) => void;
+  /** Queue an update. Pass `store`/`gameId` so the Update affordance can
+   *  clear immediately instead of waiting for the next backend sweep. */
+  update: (
+    appId: number,
+    store?: string,
+    gameId?: string,
+  ) => Promise<Result | null>;
 }
 
 /** AppIds whose launch is mid-flight, so repeated presses collapse into
@@ -154,5 +162,25 @@ export function useGameActions(bridge: SteamBridgeShape): UseGameActionsResult {
     [bridge],
   );
 
-  return { isWorking, install, uninstall, cancel, launch, terminate };
+  const update = useCallback(
+    async (appId: number, store?: string, gameId?: string) => {
+      setWorking(true);
+      try {
+        const result = await downloads.updateGame(appId);
+        if (result?.success && store && gameId) {
+          // Drop it locally straight away. The backend invalidates its
+          // own scan cache, but the re-scan is asynchronous — without
+          // this the button would keep saying Update until the next
+          // sweep landed, several hours later.
+          UpdateStore.clearGame(store, gameId);
+        }
+        return result;
+      } finally {
+        setWorking(false);
+      }
+    },
+    [downloads],
+  );
+
+  return { isWorking, install, uninstall, cancel, launch, terminate, update };
 }

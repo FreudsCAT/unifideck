@@ -15,6 +15,12 @@ vi.mock("./tab-container", () => ({
 vi.mock("../library-filters", () => ({
   runFilters: () => true,
 }));
+// `call` is the only @decky/api binding reachable from here (via
+// event-bus-client, which the manager subscribes to for install/uninstall).
+// @decky/manifest is a build-time virtual module and unresolvable under vitest.
+vi.mock("@decky/api", () => ({
+  call: vi.fn(),
+}));
 
 import {
   deleteAllUnifideckCollections,

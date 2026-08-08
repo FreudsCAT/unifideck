@@ -256,10 +256,11 @@ class _WorkerMixin:
                 install_path=item.install_path or None,
                 on_ready=self._make_ubisoft_launch_signal(item),
             )
-        # GOG honours a user-picked install language; other stores
-        # don't accept the kwarg, so only pass it for GOG.
+        # GOG and Epic honour a user-picked install language (GOG via
+        # gogdl's --lang, Epic via a legendary SDL install tag); the
+        # other stores don't accept the kwarg, so only pass it to those.
         extra: dict[str, Any] = {}
-        if item.store == "gog" and item.language:
+        if item.store in ("gog", "epic") and item.language:
             extra["language"] = item.language
             logger.info(
                 "[DownloadWorker] %s install language=%s", key, item.language,

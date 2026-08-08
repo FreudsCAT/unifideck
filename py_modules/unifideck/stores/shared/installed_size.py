@@ -59,13 +59,12 @@ def _entry_size(entry: os.DirEntry[str], subdirs: list[str]) -> int:
     return 0
 
 
-async def installed_size_bytes(
+async def resolve_installed_dir(
     adapter: Any, cache_path: Any, game_id: Any,
-) -> int:
-    """Exact on-disk size (bytes) of an installed game's directory.
+) -> str | None:
+    """Locate an installed game's directory, or ``None`` if it's gone.
 
-    Resolves the directory in this order, then walks it off the event
-    loop:
+    Resolution order:
 
     1. the sync cache's ``install_path`` (when its dir still exists);
     2. the store's own install records via
@@ -73,21 +72,39 @@ async def installed_size_bytes(
        (e.g. sync-detected Epic installs land with ``install_path =
        None``, and a moved/removed game leaves a stale path).
 
+    Shared with the QAM "Installed" list
+    (:mod:`unifideck.services.installed_disk_info`), which labels each
+    game internal/external: it must classify the SAME directory this
+    function sizes, or a game whose cached path is stale would be sized
+    from its real install dir and labelled from the dead one.
+    """
+    path = cache_path if isinstance(cache_path, str) and cache_path else None
+    if path is not None and await asyncio.to_thread(os.path.isdir, path):
+        return path
+    if adapter is not None and game_id:
+        with contextlib.suppress(Exception):
+            resolved = await adapter.get_installed_path(game_id)
+            if (
+                isinstance(resolved, str) and resolved
+                and await asyncio.to_thread(os.path.isdir, resolved)
+            ):
+                return resolved
+    return None
+
+
+async def installed_size_bytes(
+    adapter: Any, cache_path: Any, game_id: Any,
+) -> int:
+    """Exact on-disk size (bytes) of an installed game's directory.
+
+    Resolves the directory via :func:`resolve_installed_dir`, then walks
+    it off the event loop.
+
     Returns ``0`` ("—") rather than ever falling back to a download
     size: an installed game must never display its (smaller) download
     size as the installed size.
     """
-    path = cache_path if isinstance(cache_path, str) and cache_path else None
-    if path is None or not await asyncio.to_thread(os.path.isdir, path):
-        path = None
-        if adapter is not None and game_id:
-            with contextlib.suppress(Exception):
-                resolved = await adapter.get_installed_path(game_id)
-                if (
-                    isinstance(resolved, str) and resolved
-                    and await asyncio.to_thread(os.path.isdir, resolved)
-                ):
-                    path = resolved
+    path = await resolve_installed_dir(adapter, cache_path, game_id)
     if path is None:
         return 0
     try:
