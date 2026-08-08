@@ -4,25 +4,31 @@
  * Replaces the legacy `<Content>` component (1305 LOC)
  * which mixed sync state, account switch logic, downloads,
  * settings, language selection, and a custom tab switcher.
- * The new panel reads `useSync()` to know whether to show
- * the downloads progress badge, then maps each section to
- * its dedicated component (StoreConnections, LibrarySync,
- * StorageSettings, LanguageSelector, DownloadsTab).
+ * Maps each section to its dedicated component
+ * (StoreConnections, LibrarySync, StorageSettings,
+ * LanguageSelector, DownloadsTab).
  *
  * Tab state is held in a module-level `persistentActiveTab`
  * so the last-viewed tab survives Quick-Access dismount /
- * remount (legacy behaviour from staging index.tsx).
+ * remount (legacy behaviour from staging index.tsx). Steam's
+ * automatic focus pass on mount used to defeat that — see
+ * `autoFocusConsumed` in the component.
  *
- * Tab buttons are bare `DialogButton`s in a flex row (no
- * `PanelSection` wrapper, no extra `Focusable`). This is what
- * Steam's gamepad focus needs to land on them — wrapping
- * `DialogButton` in another `Focusable` swallows the focus
- * target on this build of Decky.
+ * Tab buttons are `Focusable`s carrying Steam's own `Tab` /
+ * `Selected` classes, inside a `flow-children="row"` row.
+ * They are NOT `DialogButton`s: Steam's tab styling assumes a
+ * bare element, and DialogButton's own chrome fights it.
+ *
+ * Each tab needs its own `onActivate` — a `Focusable` with no
+ * interactive children is not a focus target without one. The
+ * older warning here (that wrapping in an extra `Focusable`
+ * swallows focus) applied to wrapping a *DialogButton*; a
+ * Focusable-as-tab with `onActivate` is a different construct
+ * and does take focus. Verified on-device.
  */
-import { CSSProperties, FC, useState } from "react";
-import { DialogButton } from "@decky/ui";
+import { CSSProperties, FC, useEffect, useRef, useState } from "react";
+import { Focusable, findClassModule } from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { useSync } from "../contexts/SyncContext";
 import {
   StoreConnections,
   LibrarySync,
@@ -41,27 +47,79 @@ type ActiveTab = "settings" | "downloads";
 let persistentActiveTab: ActiveTab = "settings";
 
 /**
- * Shared style for the two tab buttons.
+ * Steam's own tab-row CSS module (`TabRow` / `Tab` / `Selected`), looked up at
+ * runtime the same way `@decky/ui` resolves Steam internals. Using Steam's
+ * real classes means the active tab is highlighted with Steam's styling rather
+ * than something we invented, and it tracks Valve's changes for free.
+ */
+const steamTabClasses = findClassModule(
+  (m) => m.TabRowTabs && m.Tab && m.Selected,
+) as { Tab?: string; Selected?: string } | undefined;
+
+/**
+ * Literal fallback if Steam ever renames that module — these are the values
+ * Steam's own `.Tab` / `.Tab.Selected` rules compute to, so the look is
+ * identical either way.
+ */
+const FALLBACK_TAB: CSSProperties = {
+  fontSize: 12,
+  fontWeight: "bold",
+  letterSpacing: "0.5px",
+  textTransform: "uppercase",
+  background: "transparent",
+  color: "#dcdedf",
+  borderRadius: 3,
+};
+const FALLBACK_TAB_SELECTED: CSSProperties = {
+  background: "rgba(255, 255, 255, 0.15)",
+  color: "#ffffff",
+};
+
+/**
+ * Geometry for the two tab buttons.
  *
  * The QAM panel is narrow and each button is a fixed 50% (`flex: 1`), so the
- * longest labels — French "Téléchargements" (15 chars), and longer still with
- * the live "(NN%)" sync suffix — overran the button's rounded boundary. Tight
+ * longest labels — French "Téléchargements" (15 chars) — overran the button's
+ * rounded boundary. Tight
  * horizontal padding plus a slightly smaller, *zoom-relative* font (`em`, so it
  * scales with Steam's global UI scale at every resolution) gives the text room
  * to fit; `nowrap` + `overflow: hidden` + `ellipsis` is the safety net so text
  * is clipped *inside* the button (never spills past it) in the extreme case.
+ *
+ * Previously the active tab was signalled by `fontWeight` + `opacity` alone,
+ * which read as "slightly brighter text" rather than "you are on this tab".
  */
 const tabButtonStyle = (active: boolean): CSSProperties => ({
   flex: 1,
   minWidth: 0,
   padding: "10px 6px",
-  fontSize: "0.9em",
+  // Steam's `Tab` class is `display: flex` with `text-align: start`, so
+  // `textAlign: center` alone does nothing — a flex container positions its
+  // children with justify-content (which computes to `normal`, i.e. start),
+  // leaving the label hard against the left edge of the pill. Centre it the
+  // way the box model actually works, and keep textAlign for the fallback
+  // path where the element is not a flex container.
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "center",
+  textAlign: "center",
+  cursor: "pointer",
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "ellipsis",
-  fontWeight: active ? 600 : 400,
-  opacity: active ? 1 : 0.7,
+  ...(steamTabClasses?.Tab
+    ? { fontSize: "0.9em" }
+    : {
+        ...FALLBACK_TAB,
+        ...(active ? FALLBACK_TAB_SELECTED : {}),
+      }),
 });
+
+/** Steam's `Tab` (+ `Selected`) class pair for the active state. */
+const tabClassName = (active: boolean): string =>
+  [steamTabClasses?.Tab, active ? steamTabClasses?.Selected : null]
+    .filter(Boolean)
+    .join(" ");
 
 /**
  * Root component of the Decky Loader Quick Access menu.
@@ -70,7 +128,6 @@ const tabButtonStyle = (active: boolean): CSSProperties => ({
  */
 export const QuickAccessPanel: FC = () => {
   const { t } = useTranslation();
-  const sync = useSync();
   const [tab, setTabState] = useState<ActiveTab>(persistentActiveTab);
 
   const setTab = (next: ActiveTab): void => {
@@ -78,26 +135,106 @@ export const QuickAccessPanel: FC = () => {
     setTabState(next);
   };
 
-  const downloadsLabel = sync.isSyncing
-    ? `${t("tabs.downloads")} (${sync.progress?.progress_percent ?? 0}%)`
-    : t("tabs.downloads");
+  // ── Surviving a remount on the tab you were actually on ──────────
+  //
+  // Steam fires a focus event at whichever nav node it picks when the panel
+  // mounts, and for this layout that is the FIRST tab pill. Since focus
+  // switches tabs (see the comment on the pills below), that automatic pass
+  // dragged the panel back to Settings on every remount — and because
+  // `setTab` also writes `persistentActiveTab`, it overwrote the remembered
+  // tab, so the next open started on Settings too.
+  //
+  // The visible trigger was confirming an uninstall: in Gaming Mode the QAM
+  // renders into its own popup window, so opening a modal tears that window
+  // down and closing it mounts this panel afresh — landing the user on
+  // Settings mid-task, right after acting on a row in Downloads.
+  //
+  // Two halves, both needed: swallow that first focus event (it is Steam's,
+  // not the user's), and put focus on the pill for the tab we are actually
+  // showing so the highlight matches the content.
+  const autoFocusConsumed = useRef(false);
+  const settingsPill = useRef<HTMLDivElement>(null);
+  const downloadsPill = useRef<HTMLDivElement>(null);
+
+  /** Tab switch driven by focus movement — see `autoFocusConsumed` above. */
+  const focusTab = (next: ActiveTab): void => {
+    if (!autoFocusConsumed.current) {
+      autoFocusConsumed.current = true;
+      // Steam's own pass, aimed at a tab we are not on: ignore it rather
+      // than let it redefine where the user was.
+      if (next !== persistentActiveTab) return;
+    }
+    setTab(next);
+  };
+
+  // Claim focus for the active pill on mount. Mirrors `PlayShell`'s recipe
+  // (rAF plus one delayed retry) because a single synchronous focus call
+  // loses the race against Steam's own focus pass. Bails once focus has
+  // landed, so it can never yank focus the user has since moved.
+  useEffect(() => {
+    const target =
+      persistentActiveTab === "downloads"
+        ? downloadsPill.current
+        : settingsPill.current;
+    if (!target) return;
+    let raf = 0;
+    let timer = 0;
+    let retried = false;
+    const grab = (): void => {
+      if (target.ownerDocument.activeElement === target) return;
+      target.focus?.();
+      if (target.ownerDocument.activeElement !== target && !retried) {
+        retried = true;
+        timer = window.setTimeout(grab, 140);
+      }
+    };
+    raf = requestAnimationFrame(grab);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  // The tab label carries NO percentage. It used to show the library-SYNC
+  // progress, which is a different operation from downloading a game — a tab
+  // reading "Downloads (90%)" while nothing is downloading is just wrong, and
+  // it also overran the pill. Sync progress belongs to the Library Sync
+  // section on the Settings tab, which already reports it.
+  const downloadsLabel = t("tabs.downloads");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ display: "flex", gap: 6, padding: "4px 8px 0" }}>
-        <DialogButton
-          onClick={() => setTab("settings")}
+      {/* Focusable (not DialogButton) so Steam's `Tab` class styles a bare tab
+          rather than fighting DialogButton's own button chrome. The row is a
+          `flow-children="row"` Focusable so the pair navigates left/right. */}
+      <Focusable
+        flow-children="row"
+        style={{ display: "flex", gap: 6, padding: "4px 8px 0" }}
+      >
+        {/* Switching on FOCUS, not just on activate: moving the stick onto a
+            tab shows that tab immediately, the way Steam's own tab rows
+            behave. Requiring an extra A press made navigation feel like it
+            had stalled. `onActivate` stays so a click/A press still works
+            (and so each Focusable remains a focus target at all). */}
+        <Focusable
+          ref={settingsPill}
+          onFocus={() => focusTab("settings")}
+          onActivate={() => setTab("settings")}
+          className={tabClassName(tab === "settings")}
           style={tabButtonStyle(tab === "settings")}
         >
           {t("tabs.settings")}
-        </DialogButton>
-        <DialogButton
-          onClick={() => setTab("downloads")}
+        </Focusable>
+        <Focusable
+          ref={downloadsPill}
+          onFocus={() => focusTab("downloads")}
+          onActivate={() => setTab("downloads")}
+          className={tabClassName(tab === "downloads")}
           style={tabButtonStyle(tab === "downloads")}
         >
           {downloadsLabel}
-        </DialogButton>
-      </div>
+        </Focusable>
+      </Focusable>
       {/* Spacer wrapper: Steam's PanelSection title carries a negative top
           margin (it assumes it is the first child of the scroll container),
           which otherwise pulls the first section header up into the tab

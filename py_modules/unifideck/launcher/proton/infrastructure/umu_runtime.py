@@ -54,6 +54,18 @@ _UMU_INSTALL_MARKER = ".installed.ok"
 # come back — see :func:`repair_incomplete_umu_runtime`.
 _REPAIR_MARKER_TTL_SECONDS = 120
 _RECOVERABLE_CODES = {2, 74, 127}
+# A recoverable code only means "the runtime/launch failed to come up" when
+# it arrives quickly. Past this many seconds the process demonstrably RAN,
+# so the code is the game's own exit status and retrying would relaunch a
+# game the user just quit — and, for 2/74, wipe the shared umu runtime that
+# every other game depends on.
+#
+# This became load-bearing with UD-126: Epic used to report legendary's exit
+# code (always 0, retries dead), and now reports the game's, like every other
+# store. Chosen generously — nothing legitimately spends two minutes failing
+# to bootstrap a runtime, and a game quit inside two minutes with exactly
+# rc 2/74/127 costs one harmless relaunch attempt.
+_RECOVERABLE_MAX_RUNTIME_SECONDS = 120
 # Recoverable codes whose likely cause is a corrupt/incomplete steamrt
 # runtime bootstrap — the only ones that justify wiping the *shared*
 # runtime cache (hundreds of MB, re-downloaded on the next launch of
@@ -69,6 +81,17 @@ _RUNTIME_CORRUPTION_CODES = {2, 74}
 # build spinning wineserver forever) will just hang again on retry, so
 # the caller should fail the step rather than loop.
 UMU_TIMEOUT_RC = 124
+
+
+def _now() -> float:
+    """Monotonic clock, indirected so tests can script attempt durations.
+
+    ``run_umu_with_retry`` times each attempt to tell a runtime that
+    failed to bootstrap from a game that ran and then exited with the
+    same code (see :data:`_RECOVERABLE_MAX_RUNTIME_SECONDS`). Patching
+    ``time.monotonic`` itself would also move the event loop's clock.
+    """
+    return time.monotonic()
 
 
 def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
@@ -303,6 +326,46 @@ def ensure_umu_runtime_ready() -> None:
     config_dir = Path("~/.config/umu").expanduser()
     config_dir.mkdir(parents=True, exist_ok=True)
 
+def _is_recoverable(rc: int, ran_for: float) -> bool:
+    """Whether ``rc`` means "the launch failed to come up", not "the game exited".
+
+    A recoverable code (2 / 74 / 127) only carries that meaning when it
+    arrives quickly. Past :data:`_RECOVERABLE_MAX_RUNTIME_SECONDS` the
+    process demonstrably ran, so the code is the game's own exit status:
+    retrying would relaunch a game the user just quit, and for 2/74 it
+    would also wipe the shared umu runtime every other game depends on.
+
+    Only reachable since UD-126 for Epic, which used to report
+    *legendary's* exit code (always 0 — it fire-and-forgot the game)
+    rather than the game's.
+    """
+    return (
+        rc in _RECOVERABLE_CODES
+        and ran_for < _RECOVERABLE_MAX_RUNTIME_SECONDS
+    )
+
+
+async def _prepare_retry(rc: int, attempt: int, max_attempts: int) -> None:
+    """Toast, optionally wipe the runtime cache, then back off."""
+    wipe = rc in _RUNTIME_CORRUPTION_CODES
+    logger.warning(
+        "[launcher.umu] recoverable rc=%d, retry (wipe_cache=%s)", rc, wipe,
+    )
+    launcher_toast(
+        "toasts.launcher.retryingUmu",
+        i18n_title_key="toasts.launcher.launchRetry",
+        i18n_params={
+            "seconds": _RETRY_BACKOFF_SECONDS,
+            "attempt": attempt + 1,
+            "max": max_attempts,
+        },
+        severity="warning",
+    )
+    if wipe:
+        cleanup_umu_runtime_cache()
+    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+
+
 async def run_umu_with_retry(
     argv: list[str],
     *,
@@ -333,30 +396,20 @@ async def run_umu_with_retry(
                 attempt, max_attempts, argv[:3],
                 "game.log" if out is not None else "inherited",
             )
+            started_at = _now()
             rc = await _run_umu_once(argv, env, cwd, out, on_start, timeout)
+            ran_for = _now() - started_at
             last_rc = rc
-            logger.info("[launcher.umu] attempt %d exit code: %d", attempt, rc)
+            logger.info(
+                "[launcher.umu] attempt %d exit code: %d (ran %.1fs)",
+                attempt, rc, ran_for,
+            )
             if rc == 0:
                 return 0
-            if rc in _RECOVERABLE_CODES and attempt < max_attempts:
-                wipe = rc in _RUNTIME_CORRUPTION_CODES
-                logger.warning(
-                    "[launcher.umu] recoverable rc=%d, retry (wipe_cache=%s)",
-                    rc, wipe,
-                )
-                launcher_toast(
-                    "toasts.launcher.retryingUmu",
-                    i18n_title_key="toasts.launcher.launchRetry",
-                    i18n_params={
-                        "seconds": _RETRY_BACKOFF_SECONDS,
-                        "attempt": attempt + 1,
-                        "max": max_attempts,
-                    },
-                    severity="warning",
-                )
-                if wipe:
-                    cleanup_umu_runtime_cache()
-                await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+            if not _is_recoverable(rc, ran_for):
+                return rc
+            if attempt < max_attempts:
+                await _prepare_retry(rc, attempt, max_attempts)
                 continue
             return rc
         return last_rc

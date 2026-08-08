@@ -62,11 +62,19 @@ export const GameInfoNavButtons: FC<Props> = ({ meta }) => {
   const storePageUrl = hasSteam ? `steam://store/${steamId}` : meta.store_url;
 
   return (
+    // "grid", not "row": these buttons `flex-wrap` onto several visual lines,
+    // and a container that claims to be ONE logical row leaves vertical
+    // movement between those lines undefined — focus entering the panel
+    // jumped straight to the last button and then trapped, with neither up
+    // nor down escaping. "grid" resolves geometrically in 2-D (same as
+    // GameGrid), so each button is reachable from the one above it.
+    //
+    // No onFocus/scrollIntoView here either: React focus events bubble, so a
+    // handler on the CONTAINER re-centred the whole row whenever any child
+    // took focus, fighting Steam's own scroll-to-focused-element (which
+    // already works). That was the scroll snapping back to the top.
     <Focusable
-      flow-children="row"
-      onFocus={(e: React.FocusEvent<HTMLDivElement>) => {
-        e.currentTarget.scrollIntoView({ behavior: "smooth", block: "center" });
-      }}
+      flow-children="grid"
       style={{
         display: "flex",
         flexWrap: "wrap",

@@ -6,6 +6,10 @@
  * cell is hidden when its value is empty / null, so a non-Steam
  * shortcut with no enrichment data collapses to just the store
  * icon and title.
+ *
+ * Cloud-save availability used to live here but moved up to the
+ * Play row's `MetaInline` (next to Last Played) — it is an
+ * at-a-glance decision input, not reference data.
  */
 import { FC } from "react";
 import { Focusable } from "@decky/ui";
@@ -75,7 +79,10 @@ export const GameInfoInfoRow: FC<Props> = ({ appId, game, meta }) => {
         padding: "12px 16px",
       }}
       onFocus={(e: React.FocusEvent<HTMLDivElement>) => {
-        e.currentTarget.scrollIntoView({ behavior: "smooth", block: "center" });
+        e.currentTarget.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+        });
       }}
     >
       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>

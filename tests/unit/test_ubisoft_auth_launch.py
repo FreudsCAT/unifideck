@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from unifideck.launcher.proton.handlers import ubisoft as h
+from unifideck.launcher.proton.handlers import ubisoft_recovery as rec
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 from unifideck.launcher.types.errors import GameFailedError
 
@@ -195,8 +196,8 @@ async def test_install_launch_missing_upc_raises(
     # prefix elsewhere / clone the .template) must come up empty so the
     # handler raises. Without these patches the test is non-hermetic — on a
     # dev machine with real Ubisoft prefix data it would recover instead.
-    monkeypatch.setattr(h, "_find_recovered_prefix", lambda _gid: None)
-    monkeypatch.setattr(h, "_clone_template_into", lambda _dir: False)
+    monkeypatch.setattr(h, "find_recovered_prefix", lambda _gid: None)
+    monkeypatch.setattr(h, "clone_template_into", lambda _dir: False)
     with pytest.raises(GameFailedError, match=r"upc\.exe"):
         await h.ubisoft_install_launch(_plan(tmp_path))
 
@@ -246,7 +247,7 @@ def test_find_upc_in_prefers_modern_pfx_layout(tmp_path):
     nested.parent.mkdir(parents=True, exist_ok=True)
     nested.write_text("stub")
 
-    assert h._find_upc_in(tmp_path) == nested
+    assert rec.find_upc_in(tmp_path) == nested
 
 
 def test_find_upc_in_falls_back_to_legacy_layout(tmp_path):
@@ -254,11 +255,11 @@ def test_find_upc_in_falls_back_to_legacy_layout(tmp_path):
     flat.parent.mkdir(parents=True, exist_ok=True)
     flat.write_text("stub")
 
-    assert h._find_upc_in(tmp_path) == flat
+    assert rec.find_upc_in(tmp_path) == flat
 
 
 def test_find_upc_in_none_when_absent(tmp_path):
-    assert h._find_upc_in(tmp_path) is None
+    assert rec.find_upc_in(tmp_path) is None
 
 
 def test_clone_template_into_finds_pfx_nested_template(tmp_path, monkeypatch):
@@ -266,13 +267,13 @@ def test_clone_template_into_finds_pfx_nested_template(tmp_path, monkeypatch):
     template_upc = template_dir / _UPC_REL_NESTED
     template_upc.parent.mkdir(parents=True, exist_ok=True)
     template_upc.write_text("stub")
-    monkeypatch.setattr(h, "_TEMPLATE_DIR", template_dir)
+    monkeypatch.setattr(rec, "_TEMPLATE_DIR", template_dir)
 
     dest = tmp_path / "dest"
-    ok = h._clone_template_into(dest)
+    ok = rec.clone_template_into(dest)
 
     assert ok is True
-    assert h._find_upc_in(dest) is not None
+    assert rec.find_upc_in(dest) is not None
 
 
 async def test_resolve_or_recover_finds_pfx_nested_recovered_prefix(
@@ -282,7 +283,7 @@ async def test_resolve_or_recover_finds_pfx_nested_recovered_prefix(
     recovered_upc = recovered_dir / _UPC_REL_NESTED
     recovered_upc.parent.mkdir(parents=True, exist_ok=True)
     recovered_upc.write_text("stub")
-    monkeypatch.setattr(h, "_find_recovered_prefix", lambda _gid: recovered_dir)
+    monkeypatch.setattr(h, "find_recovered_prefix", lambda _gid: recovered_dir)
 
     plan = _plan(tmp_path / "empty")
     result = await h._resolve_or_recover_upc_exe(plan)

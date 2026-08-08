@@ -388,7 +388,8 @@
     "cloudPullDone": "Salvamento na nuvem baixado",
     "cloudPullFailed": "Falha ao baixar salvamento na nuvem",
     "cloudPushDone": "Salvamento local enviado",
-    "cloudPushFailed": "Falha ao enviar salvamento local"
+    "cloudPushFailed": "Falha ao enviar salvamento local",
+    "cloudSavePathReset": "Local de salvamento redefinido para automático"
   },
   "uninstallModal": {
     "title": "Confirmar Desinstalação",
@@ -399,6 +400,12 @@
     "warningBody": "Isso excluirá permanentemente os dados de salvamento armazenados no prefixo do Wine. Certifique-se de que eles estão salvos.",
     "cancel": "Cancelar",
     "uninstall": "Desinstalar"
+  },
+  "updateModal": {
+    "title": "Atualização disponível",
+    "description": "{{title}} tem uma atualização disponível. Sem ela, os recursos on-line podem não funcionar.",
+    "updateNow": "Atualizar agora",
+    "playAnyway": "Jogar mesmo assim"
   },
   "languageSettings": {
     "title": "IDIOMA",
@@ -560,7 +567,7 @@
     "simple": "Simples",
     "detailed": "Detalhado"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "Selecionar Idioma",
     "description": "Escolha qual idioma baixar para {{title}}",
     "label": "Idioma",
@@ -697,7 +704,11 @@
       "statusSyncing": "Sincronizando salvamentos na nuvem…",
       "statusUnresolved": "Local de salvamento não encontrado — a sincronização pode não funcionar para este jogo.",
       "unresolvedHint": "Inicie o jogo uma vez para que possamos detectar sua pasta de salvamento ou defina o local manualmente.",
-      "upload": "Enviar salvamento local"
+      "upload": "Enviar salvamento local",
+      "currentLocation": "Local de salvamento",
+      "changeLocation": "Alterar local",
+      "resetLocation": "Redefinir para automático",
+      "statusInSync": "Saves na nuvem atualizados"
     },
     "exe": {
       "browse": "Procurar…",
@@ -719,7 +730,11 @@
     "neverPlayed": "Nunca jogado",
     "hoursShort": "h",
     "minutesShort": "m",
-    "played": "Jogados"
+    "played": "Jogados",
+    "cloudSaves": "Saves na nuvem",
+    "cloudSupported": "Compatível",
+    "cloudNotSupported": "Não compatível",
+    "cloudUnknown": "Desconhecido"
   },
   "downloads": {
     "title": "Downloads",
@@ -730,13 +745,20 @@
     "cancel": "Cancelar",
     "removeFromQueue": "Remover",
     "play": "Jogar",
+    "update": "Atualizar",
     "outcome": {
       "queued": "Na fila",
       "downloading": "Baixando",
       "completed": "Concluído",
       "cancelled": "Cancelado",
       "error": "Falhou"
-    }
+    },
+    "installedCount": "Instalados ({{count}})",
+    "failed": "Falharam",
+    "clearFailed": "Limpar falhas",
+    "uninstall": "Desinstalar",
+    "locationInternal": "Interno",
+    "locationExternal": "Externo"
   },
   "navigation": {
     "loading": "Carregando...",

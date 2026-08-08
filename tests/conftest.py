@@ -58,14 +58,31 @@ _HOME_REDIRECTING_ENV = (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_home_redirecting_env(monkeypatch):
-    """Unset env vars that would override a test's patched ``HOME``.
+def _isolate_home_redirecting_env(monkeypatch, tmp_path_factory):
+    """Point ``HOME`` at a tmp dir and unset the vars that would override it.
 
-    A test that wants one of these set can still ``setenv`` it in its own
-    body: this fixture runs first, so the test's value wins.
+    Unsetting alone only helped tests that remembered to patch ``HOME``
+    themselves. One that forgot reached the developer's real home: a unit
+    test for the nile credential self-heal ran the genuine quarantine helper
+    and renamed the live ``~/.config/nile/user.json``, signing the machine
+    out of Amazon. Test runs must never be able to touch real user state, so
+    the redirect is applied to every test rather than opted into.
+
+    A test that genuinely wants a different ``HOME`` (or one of these vars)
+    can still ``setenv`` it in its own body: this fixture runs first, so the
+    test's value wins.
     """
     for name in _HOME_REDIRECTING_ENV:
         monkeypatch.delenv(name, raising=False)
+    # A dir of its own, NOT under the test's ``tmp_path``: several tests
+    # assert on the exact contents of ``tmp_path`` and a stray home sandbox
+    # inside it makes them fail.
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    # ``Path.home()`` consults these before ``HOME`` on some platforms, and
+    # ``os.path.expanduser`` falls back to the password database when HOME is
+    # absent — keep both pointing at the sandbox.
+    monkeypatch.setenv("USERPROFILE", str(home))
 
 
 @pytest.fixture(autouse=True)

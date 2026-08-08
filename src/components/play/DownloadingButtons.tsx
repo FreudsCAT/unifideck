@@ -22,7 +22,7 @@ import { useGameActions } from "../../hooks/useGameActions";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import type { DownloadItem } from "../../types/downloads";
-import { PlayShell, actionBtnStyle } from "./PlayMeta";
+import { PlayShell, actionBtnStyle, actionBtnClass } from "./PlayMeta";
 import { DownloadProgressRow } from "../downloads/DownloadProgressRow";
 
 interface Props {
@@ -73,7 +73,7 @@ export const DownloadingButtons: FC<Props> = ({
     // eslint-disable-next-line jsx-a11y/no-autofocus
     <PlayShell autoFocus>
       <DialogButton
-        className="unifideck-cancel-btn"
+        className={actionBtnClass("unifideck-cancel-btn")}
         disabled={cancelled || actions.isWorking}
         onClick={onCancelClick}
         style={actionBtnStyle}

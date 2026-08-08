@@ -28,21 +28,31 @@ def _gogdl_bin(plan: ProtonLaunchPlan) -> Path:
     return plan.context.plugin_dir / "bin" / "gogdl"
 
 
-async def ensure_redist_downloaded(
-    plan: ProtonLaunchPlan, deps: list[str],
-) -> None:
-    """Download missing redistributables (and ISI) via gogdl."""
-    all_deps = ["ISI"] + [d for d in deps if d != "ISI"]
-    REDIST_DIR.mkdir(parents=True, exist_ok=True)
+def _missing_deps(all_deps: list[str]) -> list[str]:
+    """Requested deps with no populated directory under ``__redist``."""
     redist_base = REDIST_DIR / "__redist"
-    missing = [
+    return [
         d for d in all_deps
         if not (redist_base / d).is_dir()
         or not any((redist_base / d).iterdir())
     ]
+
+
+async def ensure_redist_downloaded(
+    plan: ProtonLaunchPlan, deps: list[str],
+) -> bool:
+    """Download missing redistributables (and ISI) via gogdl.
+
+    Returns ``True`` only when every requested dep is actually on disk
+    afterwards, so the caller can decline to write its "done" marker and
+    retry next launch instead of latching a failure forever.
+    """
+    all_deps = ["ISI"] + [d for d in deps if d != "ISI"]
+    REDIST_DIR.mkdir(parents=True, exist_ok=True)
+    missing = _missing_deps(all_deps)
     if not missing:
         logger.info("[gog_setup] all redistributables already present")
-        return
+        return True
 
     launcher_toast(
         "toasts.launcher.installingRedistMessage",
@@ -52,10 +62,10 @@ async def ensure_redist_downloaded(
     gogdl = _gogdl_bin(plan)
     if not gogdl.is_file() or not AUTH_CONFIG.is_file():
         logger.warning(
-            "[gog_setup] cannot download redist (gogdl=%s auth=%s)",
-            gogdl.is_file(), AUTH_CONFIG.is_file(),
+            "[gog_setup] cannot download redist (gogdl=%s auth=%s at %s)",
+            gogdl.is_file(), AUTH_CONFIG.is_file(), AUTH_CONFIG,
         )
-        return
+        return False
 
     # Serialise downloads across concurrent launches with a file lock.
     lock_path = REDIST_DIR / ".download.lock"
@@ -63,6 +73,17 @@ async def ensure_redist_downloaded(
         with contextlib.suppress(OSError):
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         await _run_redist_download(gogdl, missing)
+
+    # gogdl's exit code alone is not proof it wrote anything — re-check the
+    # tree it was supposed to fill before declaring the deps satisfied.
+    still_missing = _missing_deps(all_deps)
+    if still_missing:
+        logger.warning(
+            "[gog_setup] redist still missing after download: %s",
+            ", ".join(still_missing),
+        )
+        return False
+    return True
 
 
 async def _run_redist_download(gogdl: Path, missing: list[str]) -> None:

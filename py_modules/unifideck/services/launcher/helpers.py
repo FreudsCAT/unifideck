@@ -244,10 +244,41 @@ async def _emit_cloud_unavailable_toast(
         logger.debug("[Helpers] cloud-unavailable toast failed: %s", e)
 
 
+def _resolve_launch_proton(
+    ctx: LaunchContext,
+    tool_id: str | None,
+    select_proton_version: Any,
+) -> tuple[Any, str]:
+    """The ``(path, tool_id)`` to build the launch plan with.
+
+    ``tool_id`` pins an explicit Proton — used to rebuild the plan after
+    ``setup_prefix`` concluded a different one is the working Proton, so the
+    game runs under whatever actually built its prefix. Falls back to normal
+    resolution if that id no longer resolves to a path.
+    """
+    from unifideck.launcher.proton import resolve_proton_path
+
+    if tool_id:
+        path = resolve_proton_path(tool_id)
+        if path is not None:
+            return path, tool_id
+        logger.warning(
+            "[Helpers] proton=%s did not resolve to a path — falling back to "
+            "normal selection for %s", tool_id, ctx.game_key,
+        )
+    resolved: tuple[Any, str] = select_proton_version(
+        steam_app_id=ctx.steam_app_id,
+        store_game_id=ctx.game_key,
+    )
+    return resolved
+
+
 async def prepare_windows_plan(
     svc: LauncherService,
     ctx: LaunchContext,
     state: RuntimeState,
+    *,
+    tool_id: str | None = None,
 ) -> tuple[Any, Any]:
     """Prepare the Proton launch plan for a Windows game.
 
@@ -272,9 +303,8 @@ async def prepare_windows_plan(
 
     try:
         python_bin = find_python_3_10_plus()
-        proton_path, proton_tool_id = select_proton_version(
-            steam_app_id=ctx.steam_app_id,
-            store_game_id=ctx.game_key,
+        proton_path, proton_tool_id = _resolve_launch_proton(
+            ctx, tool_id, select_proton_version,
         )
         def _on_process_start(proc: object) -> None:
             svc._active_subprocess = proc
@@ -362,9 +392,15 @@ async def run_game_subprocess(
     """
     from unifideck.launcher.proton import dispatch
 
+    # Report PROTONPATH, not ``state.proton_tool_id``: the state object is
+    # shared and ``setup_prefix`` mutates it while borrowing another Proton for
+    # the winetricks verb, so the tool id could name a Proton this launch never
+    # uses. PROTONPATH is what umu actually reads, so this line cannot drift
+    # from reality again (it previously logged "GE-Proton11-3" for launches umu
+    # ran under Proton-Experimental).
     logger.info(
         "[Helpers] Dispatching Proton launch: store=%s game_id=%s proton=%s",
-        ctx.store, ctx.game_id, state.proton_tool_id,
+        ctx.store, ctx.game_id, Path(plan.env["PROTONPATH"]).name,
     )
     try:
         rc = await dispatch(plan)

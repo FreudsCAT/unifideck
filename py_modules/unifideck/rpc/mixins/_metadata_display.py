@@ -350,9 +350,7 @@ def build_payload(
     return {
         "steam_app_id": steam_app_id,
         "has_steam_store_page": has_steam_store_page(steam_meta, steam_app_id),
-        "store": game.store,
-        "store_url": store_search_url(game.store, game.title),
-        "title": game.title,
+        **storefront_fields(game, enriched),
         "developer": pick_developer(steam_meta, enriched),
         "publisher": pick_publisher(steam_meta, enriched),
         "release_date": pick_release_date(steam_meta, enriched),
@@ -363,6 +361,41 @@ def build_payload(
         "genres": pick_genres(steam_meta, enriched),
         "homepage_url": homepage,
     }
+
+
+def storefront_fields(game: Any, enriched: dict[str, Any]) -> dict[str, Any]:
+    """The which-storefront-is-this block of the payload.
+
+    Grouped into one helper so ``build_payload`` stays inside the fan-out cap
+    (adding ``cloud_saves`` as a separate call pushed it to 11). Everything
+    here answers "which store's copy is this, and what does that copy offer".
+    """
+    return {
+        "store": game.store,
+        "store_url": store_search_url(game.store, game.title),
+        "title": game.title,
+        "cloud_saves": pick_cloud_saves(
+            enriched, game.store, getattr(game, "store_game_id", "") or "",
+        ),
+    }
+
+
+def pick_cloud_saves(
+    enriched: dict[str, Any], store: str, game_id: str = "",
+) -> bool | None:
+    """Whether ``store``'s copy of this game has native cloud saves.
+
+    Delegates to the shared resolver so this and the cloud-save button's
+    ``cloud_supported`` can never disagree — Epic answers from its own cached
+    metadata, everything else from the unifiDB catalog. No install, no prefix
+    and no store CLI, which is what lets the panel answer for a game the user
+    has not downloaded yet.
+
+    ``None`` means "unknown", and the UI says so rather than claiming an
+    absence it cannot back up.
+    """
+    from unifideck.services.cloud_save.support import resolve_cloud_support
+    return resolve_cloud_support(store, game_id, enriched)
 
 
 def store_search_url(store: str, title: str) -> str:

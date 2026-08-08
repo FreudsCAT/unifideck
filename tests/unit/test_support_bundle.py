@@ -279,6 +279,22 @@ def test_read_capped_returns_whole_file_under_the_cap() -> None:
     assert truncated is False
 
 
+def test_read_capped_keeps_content_when_the_window_has_no_newline() -> None:
+    """Newline alignment must not be able to eat the whole payload.
+
+    The partial-first-line drop used to run unconditionally, so a tail window
+    containing no line break at all — one very long line, or a single-line
+    file, both of which real game logs produce — partitioned down to zero
+    bytes and collected a banner reading "kept 0" instead of the content.
+    """
+    path = Path(tempfile.mkdtemp()) / "one-long-line.log"
+    path.write_bytes(b"x" * 4096 + b"NEEDLE")
+    data, size, truncated = collect._read_capped(path, 512, tail=True)
+    assert truncated is True
+    assert size == 4102
+    assert b"NEEDLE" in data
+
+
 def test_a_realistic_device_is_captured_whole(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:

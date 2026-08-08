@@ -24,7 +24,15 @@ _CFG = Path("~/.config/unifideck").expanduser()
 MANIFESTS_DIR = _CFG / "heroic_gogdl" / "manifests"
 REDIST_DIR = _CFG / "gogdl" / "redist"
 SUPPORT_DIR = _CFG / "gogdl" / "gog-support"
-AUTH_CONFIG = _CFG / "gogdl" / "auth.json"
+# MUST match the path the plugin actually writes and every other gogdl call
+# passes as ``--auth-config-path`` (``GOGConfig.auth_config_path``): a FLAT
+# ``gogdl_auth.json``, NOT a ``gogdl/auth.json`` subdir. The subdir path never
+# existed, so ``ensure_redist_downloaded`` bailed with "cannot download redist
+# (gogdl=True auth=False)" on every launch and NO GOG game ever got its
+# manifest-declared redistributables (MSVC*, UE4REDIST, …) — ``gogdl/redist/``
+# stayed empty on every device. Same bug, same file, as the one fixed for Comet
+# in ``compat/gog.py``; this is now the single definition both import.
+AUTH_CONFIG = _CFG / "gogdl_auth.json"
 
 _LANG_MAP = {
     "en": "english", "de": "german", "fr": "french", "es": "spanish",

@@ -30,6 +30,10 @@ from unifideck.core.binaries import clean_cli_env
 from unifideck.core.types import AuthResult, Events, Result, StoreAuthError
 from unifideck.event_bus.event_bus import EventBus
 from unifideck.security import audit_auth_flow
+from unifideck.stores.amazon.nile_lock import (
+    nile_cli_lock,
+    quarantine_corrupt_user_file,
+)
 
 logger = logging.getLogger(__name__)
 _AMAZON_REDIRECT_URIS: list[str] = [
@@ -44,6 +48,16 @@ _NILE_ALREADY_AUTHED_MARKERS = (
     "You are already logged in",
     "already authenticated",
 )
+
+
+class _NileProbeRefusedError(StoreAuthError):
+    """``nile auth --login`` exited non-zero on the login probe.
+
+    Distinguished from the other probe failures (CLI missing, timeout, bad
+    JSON) because it is the one that stale on-disk credentials cause — and
+    therefore the only one a logout can repair. See
+    :meth:`AmazonAuthFlow._fetch_login_url`.
+    """
 
 
 class AmazonAuthFlow:
@@ -106,19 +120,20 @@ class AmazonAuthFlow:
         """
         assert self._cli_path is not None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                self._cli_path,
-                "auth",
-                "--login",
-                "--non-interactive",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=clean_cli_env(),
-            )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=min(self._cli_timeout, 5),
-            )
+            async with nile_cli_lock():
+                proc = await asyncio.create_subprocess_exec(
+                    self._cli_path,
+                    "auth",
+                    "--login",
+                    "--non-interactive",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=clean_cli_env(),
+                )
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=min(self._cli_timeout, 5),
+                )
         except (TimeoutError, OSError) as e:
             logger.warning("[amazon_auth] auth-check failed: %s", e)
             return False
@@ -132,29 +147,57 @@ class AmazonAuthFlow:
             for marker in _NILE_ALREADY_AUTHED_MARKERS
         )
 
-    async def logout(self) -> Result:
-        """Logout."""
+    async def _run_nile_logout(self) -> bool:
+        """Drop nile's stored credentials. No bus event, no state changes.
+
+        The bare CLI half of :meth:`logout`, reused by the stale-credential
+        self-heal in :meth:`_fetch_login_url` — which must NOT announce a
+        logout, since it is mid-sign-in and about to authenticate again.
+
+        Returns True when the command ran (so a retry is worth attempting).
+        """
         if not self._cli_path:
-            await self._bus.emit(
-                Events.STORE_LOGOUT,
-                store="amazon",
-            )
-            return Result(success=True)
+            return False
         try:
-            proc = await asyncio.create_subprocess_exec(
-                self._cli_path,
-                "auth",
-                "--logout",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=clean_cli_env(),
-            )
-            await asyncio.wait_for(
-                proc.communicate(),
-                timeout=self._cli_timeout,
-            )
+            async with nile_cli_lock():
+                proc = await asyncio.create_subprocess_exec(
+                    self._cli_path,
+                    "auth",
+                    "--logout",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=clean_cli_env(),
+                )
+                await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=self._cli_timeout,
+                )
         except (TimeoutError, OSError) as e:
             logger.warning("[amazon_auth] logout: %s", e)
+            return False
+        return True
+
+    async def _clear_nile_credentials(self) -> bool:
+        """Get nile back to a signable-in state. True if anything changed.
+
+        Two distinct broken states, and only one of them is nile's to fix:
+
+        * **Stale but parseable** creds — ``nile auth --logout`` clears them.
+        * **Corrupt** ``user.json`` — nile cannot help. Every subcommand
+          parses that file first, so ``--logout`` dies with the same
+          ``JSONDecodeError`` (verified: rc=1, file untouched). We move it
+          aside ourselves before nile ever runs.
+
+        Quarantine is attempted first: if the file is unparseable the logout
+        would only burn a subprocess to fail.
+        """
+        if await asyncio.to_thread(quarantine_corrupt_user_file):
+            return True
+        return await self._run_nile_logout()
+
+    async def logout(self) -> Result:
+        """Logout."""
+        await self._run_nile_logout()
         self._pending_login = None
         await self._bus.emit(
             Events.STORE_LOGOUT,
@@ -163,8 +206,35 @@ class AmazonAuthFlow:
         return Result(success=True)
 
     async def _fetch_login_url(self) -> str:
-        """Fetch login URL."""
-        payload = await self._run_nile_login_probe()
+        """Fetch the OAuth URL from nile, clearing stale creds if it refuses.
+
+        The wedge this repairs: ``_is_already_authed`` only reports "logged
+        in" when nile prints one of ``_NILE_ALREADY_AUTHED_MARKERS``. When
+        nile's stored credentials are present but stale it exits non-zero
+        WITHOUT those markers, so we fall through to the real flow — which
+        runs the very same command and fails again, surfacing
+        ``get_url_failed``. Nothing ever cleared nile's state, leaving the
+        user stuck until they wiped every store's cache and signed in again.
+
+        So on a refusal we log nile out once (dropping only its local token,
+        no bus event — we are mid-auth and about to sign in again) and retry.
+        Only ``_NileProbeRefusedError`` triggers this: a missing CLI, a timeout or
+        malformed JSON are not credential problems, and throwing away a
+        working token over a transient timeout would cause the very bug we
+        are fixing.
+        """
+        try:
+            payload = await self._run_nile_login_probe()
+        except _NileProbeRefusedError as refused:
+            logger.warning(
+                "[amazon_auth] nile refused the login probe (%s) — clearing "
+                "its stored credentials and retrying once", refused,
+            )
+            if not await self._clear_nile_credentials():
+                raise
+            # A second refusal is the real answer; let it propagate with its
+            # nile stderr tail intact.
+            payload = await self._run_nile_login_probe()
         url = payload.get("url", "")
         if not url:
             raise StoreAuthError(
@@ -183,20 +253,21 @@ class AmazonAuthFlow:
                 "nile CLI not resolved",
                 store="amazon",
             )
-        proc = await asyncio.create_subprocess_exec(
-            self._cli_path,
-            "auth",
-            "--login",
-            "--non-interactive",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=clean_cli_env(),
-        )
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=self._cli_timeout,
-            )
+            async with nile_cli_lock():
+                proc = await asyncio.create_subprocess_exec(
+                    self._cli_path,
+                    "auth",
+                    "--login",
+                    "--non-interactive",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=clean_cli_env(),
+                )
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=self._cli_timeout,
+                )
         except TimeoutError as e:
             raise StoreAuthError(
                 f"nile auth timed out after {self._cli_timeout}s",
@@ -204,7 +275,7 @@ class AmazonAuthFlow:
             ) from e
         if proc.returncode != 0:
             err = stderr.decode(errors="ignore") or stdout.decode(errors="ignore")
-            raise StoreAuthError(
+            raise _NileProbeRefusedError(
                 f"nile auth failed (rc={proc.returncode}): {err[:200]}",
                 store="amazon",
             )

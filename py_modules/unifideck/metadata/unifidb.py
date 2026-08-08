@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from unifideck.utils.config_helpers import get_cfg
-from unifideck.utils.title_match import titles_match
+from unifideck.utils.title_match import (
+    normalize_for_match,
+    strip_edition_suffix,
+    titles_match,
+)
 
 if TYPE_CHECKING:
     from unifideck.config import ConfigManager
@@ -64,23 +68,44 @@ def normalize_title_for_matching(title: str) -> str:
     title = re.sub(r"\s+", " ", title)
     return title.strip()
 
-def get_first_char_for_bucket(title: str) -> str:
-    """Get first char for bucket."""
+def get_first_char_for_bucket(title: str, *, strip_article: bool = False) -> str:
+    """Two-char shard name for ``title`` (``"the witcher 3"`` → ``"th"``).
+
+    unifiDB buckets by the RAW title, articles included: ``games/t/th.json``
+    holds 18k entries of which 16k begin with "The ". This used to strip
+    ``the/a/an`` unconditionally, so every article-prefixed game was looked up
+    in the wrong shard and never found — The Witcher 3 was searched for in
+    ``w/wi.json`` while its record sat in ``t/th.json``. That silently cost
+    those titles ALL unifiDB enrichment: cloud-save support, save locations,
+    descriptions.
+
+    ``strip_article=True`` reproduces the old behaviour so :func:`lookup` can
+    try it as a second shard — cheap, since buckets are cached, and it keeps
+    us working if part of the catalog is ever bucketed the other way.
+    """
     normalized = normalize_title_for_matching(title)
     if not normalized:
         return "0_9"
-    for article in ("the ", "a ", "an "):
-        if normalized.startswith(article):
-            normalized = normalized[len(article):]
-            break
-    first = normalized[0]
-    if not first.isalpha():
+    if strip_article:
+        for article in ("the ", "a ", "an "):
+            if normalized.startswith(article):
+                normalized = normalized[len(article):]
+                break
+    # First two ALPHANUMERIC characters, spaces and punctuation skipped —
+    # that is how the catalog shards. Taking ``normalized[1]`` literally and
+    # doubling the first letter when it was a space put every "single-letter
+    # first word" title in the wrong shard too: "A Plague Tale: Innocence"
+    # went to ``a/aa.json`` when the catalog files it under ``a/ap.json``
+    # (verified against the live shards).
+    alnum = [c for c in normalized if c.isalnum()]
+    if not alnum:
         return "0_9"
-    second = (
-        normalized[1]
-        if len(normalized) > 1 and normalized[1].isalnum()
-        else first
-    )
+    # Digits shard exactly like letters: "2064: Read Only Memories" lives in
+    # ``games/2/20.json``. The old code special-cased a digit-leading title to
+    # a ``0_9`` bucket, whose URL (``games/0/0_9.json``) 404s — the catalog has
+    # no such file — so every numeric title fetched nothing.
+    first = alnum[0]
+    second = alnum[1] if len(alnum) > 1 else first
     return f"{first}{second}"
 
 def score_title_match(search: str, candidate: str) -> float:
@@ -103,6 +128,28 @@ def score_title_match(search: str, candidate: str) -> float:
     intersect = tokens_a & tokens_b
     union = tokens_a | tokens_b
     return 0.8 * (len(intersect) / len(union))
+
+def title_variants(title: str) -> list[str]:
+    """Ordered, de-duplicated query forms to try against the catalog.
+
+    Storefront titles carry decoration the catalog's canonical name does not:
+    trademark symbols, parenthetical qualifiers, and edition/season suffixes
+    (``Thief™ 3: Deadly Shadows``, ``Quake II (Original)``,
+    ``XCOM: Enemy Unknown Complete Pack``). Matching only the raw string
+    missed those games entirely — and a miss costs the game ALL unifiDB
+    enrichment, not just its cloud-save flag.
+
+    So we reuse the shared title-matching primitives (the same 58-entry
+    edition table and symbol normalisation behind SGDB artwork lookup and
+    Steam-owned filtering) to derive a cleaned second form. The raw title is
+    always tried first, so nothing that already matched can regress.
+    """
+    variants = [title]
+    stripped = strip_edition_suffix(normalize_for_match(title))
+    if stripped and stripped not in variants:
+        variants.append(stripped)
+    return variants
+
 
 def extract_store_id(game: dict[str, Any], store: str) -> str | None:
 
@@ -198,21 +245,69 @@ async def lookup(
     timeout = get_cfg(
         config, "metadata.unifidb.fetch_timeout_seconds", 15,
     )
-    bucket = get_first_char_for_bucket(title)
-    games = await _fetch_bucket(bucket, cdn_base, timeout)
-    if not games:
-        return None
-    for game in games:
-        if extract_store_id(game, store) == game_id:
+    variants = title_variants(title)
+    # Raw-title shard first (how the catalog actually buckets), then a shard
+    # for each cleaned variant, then the article-stripped one. De-duplicated,
+    # and buckets are memoised, so the common case is still one fetch.
+    buckets = dict.fromkeys(
+        [get_first_char_for_bucket(v) for v in variants]
+        + [get_first_char_for_bucket(title, strip_article=True)],
+    )
+    for bucket in buckets:
+        games = await _fetch_bucket(bucket, cdn_base, timeout)
+        if not games:
+            continue
+        for game in games:
+            if extract_store_id(game, store) == game_id:
+                logger.debug(
+                    "[unifidb] id match: %s:%s (bucket %s)",
+                    store, game_id, bucket,
+                )
+                return game_to_cache_format(game)
+        best = pick_match(variants, games)
+        if best:
             logger.debug(
-                "[unifidb] id match: %s:%s", store, game_id,
+                "[unifidb] title match: %r → %r (bucket %s)",
+                title, best.get("name") or best.get("title"), bucket,
             )
-            return game_to_cache_format(game)
-    best = get_best_match(title, games)
-    if best:
-        logger.debug("[unifidb] title match: %r", title)
-        return game_to_cache_format(best)
+            return game_to_cache_format(best)
     return None
+
+
+def pick_match(
+    variants: list[str], games: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Choose between the raw-title match and the edition-stripped one.
+
+    Order matters, because "best match for the raw title" is not always the
+    right answer for an edition-suffixed storefront title:
+
+    * ``DOOM Eternal Standard Edition`` matched *Doom: Eternal - Collector's
+      Edition* on the raw string — a DIFFERENT edition, whose save paths and
+      cloud flags need not be the game's.
+    * ``Hades Standard Edition`` likewise matched *Hades: Limited Edition*.
+
+    Yet the raw form is right when the catalog actually carries that edition
+    (``The Witcher 3: Wild Hunt - Game of the Year Edition`` is its own
+    record, and is a better answer than the base game).
+
+    So: an exact normalised match wins outright, whichever variant produced
+    it; failing that the edition-stripped base title is preferred over a
+    fuzzy raw match; the fuzzy raw match is the last resort.
+    """
+    fuzzy: dict[int, dict[str, Any]] = {}
+    for index, variant in enumerate(variants):
+        candidate = get_best_match(variant, games)
+        if candidate is None:
+            continue
+        name = candidate.get("title") or candidate.get("name") or ""
+        if normalize_for_match(variant) == normalize_for_match(name):
+            return candidate
+        fuzzy.setdefault(index, candidate)
+    if not fuzzy:
+        return None
+    # Highest variant index = most-cleaned form (the base title).
+    return fuzzy[max(fuzzy)]
 
 async def _fetch_bucket(
     bucket: str, cdn_base: str, timeout: int,  # noqa: ASYNC109 — timeout is API value passed to underlying lib (urllib/aiohttp/subprocess), not an asyncio.timeout() wrapper

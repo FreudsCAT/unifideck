@@ -71,7 +71,11 @@ def _parse_version_from_tag(tag: str) -> str:
     older/two-component release tags (e.g. ``"Release-0.7"``) would
     otherwise never match the installed version and the UI's
     "(installed)" tag would never appear for them. Returns the raw tag
-    if no semver pattern is found at all (e.g. ``"Dev"``).
+    if no semver pattern is found at all — which is exactly what dev
+    release tags rely on (``"Dev"``, or the per-build
+    ``"Dev-20260808-171205-47e6d28"`` that build-plugin.sh now creates).
+    Dev tags are deliberately kept free of any ``X.Y`` substring so they
+    land here rather than colliding with a real ``Release-X.Y.Z``.
     """
     m = _TAG_VERSION_RE.search(tag)
     if not m:
@@ -85,8 +89,9 @@ def _parse_version_from_tag(tag: str) -> str:
 def _version_tuple(version: str) -> tuple[int, ...]:
     """Convert ``"0.6.1"`` to ``(0, 6, 1)`` for comparison.
 
-    Non-numeric versions (e.g. ``"Dev"``) return ``(0,)`` so they
-    sort below any real release.
+    Non-numeric versions (any dev tag, e.g. ``"Dev"`` or
+    ``"Dev-20260808-171205-47e6d28"``) return ``(0,)`` so they sort
+    below any real release.
     """
     try:
         return tuple(int(p) for p in version.split("."))
@@ -201,8 +206,9 @@ class UpdaterService:
         Args:
             force: bypass ``CACHE_TTL_SECONDS`` and re-fetch from
                 GitHub. Used by the explicit "Check for Updates"
-                action so a mutable prerelease tag's rotated asset
-                is never missed by the 1-hour cache.
+                action: every dev build publishes a new prerelease and
+                deletes the previous one, so a warm cache can otherwise
+                hand back a release that no longer exists.
         """
         current = self.get_current_version()
         current_build_id = self.get_current_build_id()

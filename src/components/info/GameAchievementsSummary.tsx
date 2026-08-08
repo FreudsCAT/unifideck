@@ -50,7 +50,7 @@ export const GameAchievementsSummary: FC<Props> = ({
       className="unifideck-nav-button"
       onActivate={open}
       onFocus={(e: React.FocusEvent<HTMLDivElement>) =>
-        e.currentTarget.scrollIntoView({ behavior: "smooth", block: "center" })
+        e.currentTarget.scrollIntoView({ behavior: "smooth", block: "nearest" })
       }
       style={{
         display: "flex",

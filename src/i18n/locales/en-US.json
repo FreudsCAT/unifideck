@@ -254,6 +254,7 @@
     "cloudPushDone": "Local save uploaded",
     "cloudPushFailed": "Local save upload failed",
     "cloudSavePathSet": "Save location updated",
+    "cloudSavePathReset": "Save location reset to automatic",
     "cloudSavePathFailed": "Couldn't set save location",
     "ubisoftLauncherOpening": "Opening Ubisoft Connect",
     "ubisoftLauncherOpeningMessage": "Ubisoft Connect is opening for {{title}}. Install the game there, then return to play.",
@@ -399,6 +400,12 @@
     "warningBody": "This will permanently delete save data stored in the Wine prefix. Make sure they are backed up.",
     "cancel": "Cancel",
     "uninstall": "Uninstall"
+  },
+  "updateModal": {
+    "title": "Update Available",
+    "description": "{{title}} has an update available. Playing without it may stop online features from working.",
+    "updateNow": "Update Now",
+    "playAnyway": "Play Anyway"
   },
   "languageSettings": {
     "title": "LANGUAGE",
@@ -583,7 +590,7 @@
     "enabled": "Collections enabled",
     "disabled": "Collections disabled"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "Select Language",
     "description": "Choose which language to download for {{title}}",
     "label": "Language",
@@ -720,7 +727,11 @@
       "setLocationHint": "Pick the folder where this game stores its saves.",
       "noCloudSupport": "No cloud-save support",
       "noCloudData": "Unknown",
-      "autoPullOn": "Cloud saves download automatically on launch."
+      "autoPullOn": "Cloud saves download automatically on launch.",
+      "currentLocation": "Save location",
+      "changeLocation": "Change location",
+      "resetLocation": "Reset to automatic",
+      "statusInSync": "Cloud saves up to date"
     },
     "exe": {
       "menuItem": "Change executable…",
@@ -742,24 +753,35 @@
     "neverPlayed": "Never played",
     "played": "Played",
     "hoursShort": "h",
-    "minutesShort": "min"
+    "minutesShort": "min",
+    "cloudSaves": "Cloud saves",
+    "cloudSupported": "Supported",
+    "cloudNotSupported": "Not supported",
+    "cloudUnknown": "Unknown"
   },
   "downloads": {
     "title": "Downloads",
-    "empty": "No downloads. Install games from your library to see them here.",
+    "empty": "No downloads or installed games yet. Install games from your library to see them here.",
     "current": "Now downloading",
     "queued": "Queued",
     "finished": "Recently finished",
     "cancel": "Cancel",
     "removeFromQueue": "Remove",
     "play": "Play",
+    "update": "Update",
     "outcome": {
       "queued": "Queued",
       "downloading": "Downloading",
       "completed": "Complete",
       "cancelled": "Cancelled",
       "error": "Failed"
-    }
+    },
+    "installedCount": "Installed ({{count}})",
+    "failed": "Failed",
+    "clearFailed": "Clear failed",
+    "uninstall": "Uninstall",
+    "locationInternal": "Internal",
+    "locationExternal": "External"
   },
   "navigation": {
     "loading": "Loading...",

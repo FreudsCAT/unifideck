@@ -111,10 +111,33 @@ export const PLAY_FOCUS_CSS = `
 .unifideck-cancel-btn,
 .unifideck-update-btn,
 .unifideck-icon-btn {
-  background: rgba(255, 255, 255, 0.10) !important;
   transition: background 0.15s ease, filter 0.15s ease, transform 0.1s ease !important;
 }
 
+.unifideck-install-btn,
+.unifideck-play-btn,
+.unifideck-resume-btn,
+.unifideck-cancel-btn,
+.unifideck-update-btn {
+  background: rgba(255, 255, 255, 0.10) !important;
+}
+
+/* Square icon buttons declare no background and no border-radius here, so
+ * Steam's MenuButton class (applied via iconBtnClass in PlayMeta) supplies
+ * them and a CSS Loader theme can restyle them — an !important of ours, or
+ * an inline style, outranks every theme rule and was why our row stayed
+ * square while themes rounded Steam's own buttons.
+ *
+ * padding IS pinned, and must stay pinned. Once we started wearing
+ * MenuButton, DialogButton's own "10px 24px" padding won the cascade,
+ * which on a 48px border-box leaves ZERO content width — the flex glyph
+ * shrank to 0 and every icon rendered invisible. Steam's native buttons
+ * carry 4-7px padding, but their glyph is a fixed 24px just like ours, so
+ * padding 0 renders pixel-identically to native. No theme we have seen
+ * touches padding on these.
+ *
+ * (Backticks are forbidden in this file's comments — they would close the
+ * PLAY_FOCUS_CSS template literal.) */
 .unifideck-install-btn { min-width: 200px; height: 48px; }
 .unifideck-play-btn,
 .unifideck-resume-btn,
@@ -122,6 +145,34 @@ export const PLAY_FOCUS_CSS = `
 .unifideck-stop-btn,
 .unifideck-icon-btn { width: 48px; height: 48px; padding: 0 !important; }
 .unifideck-cancel-btn { min-width: 160px; height: 44px; }
+
+/* Icon sizing/colour to match vanilla Steam. Measured off the live client's
+ * own app-details icon buttons: a 24px glyph in pure white inside a 48x48
+ * button (50% fill). Left alone, react-icons default to 1em — 16px in our
+ * 48px button (~33% fill) — and inherit DialogButton Secondary's dim
+ * rgb(220,222,223), so ours read small and greyed next to Steam's.
+ * Done in CSS rather than per-call-site size= props so every icon in the
+ * row stays consistent (and new ones inherit it); CSS width/height beats
+ * both react-icons' width/height ATTRIBUTES and any on our own inline
+ * SVGs in components/shared/SteamIcons.tsx.
+ *
+ * flex-shrink:0 is load-bearing insurance, not decoration: the button is
+ * a flex container, so ANY padding that squeezes its content box to under
+ * 24px silently shrinks the glyph instead of overflowing it. That is
+ * exactly how every icon went invisible once DialogButton's padding won
+ * the cascade. With this, a padding regression can never blank the row. */
+.unifideck-stop-btn > svg,
+.unifideck-icon-btn svg {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  color: #ffffff;
+}
+/* The composed cloud-in-sync check badge keeps its own small size. */
+.unifideck-icon-btn svg.unifideck-cloud-badge {
+  width: 11px;
+  height: 11px;
+}
 
 /* Focus accent matches Steam: Install / Resume blue, Play green,
  * Cancel red, Update amber. We match three focus signals so the
@@ -297,12 +348,49 @@ export const PLAY_FOCUS_CSS = `
   background: #22c55e !important;
   transition: filter 0.15s ease, box-shadow 0.15s ease !important;
 }
+/* Focus must be obvious at arm's length on a handheld. The previous
+ * treatment (brightness 1.15 + a 2px 80%-opacity white ring) was nearly
+ * invisible: a slightly brighter green is hard to judge without the unfocused
+ * button beside it for reference, and a translucent thin ring disappears
+ * against the panel. So: a solid white ring with a dark outer ring behind it
+ * (guarantees contrast whatever is underneath), plus a small scale-up, which
+ * reads instantly even in peripheral vision. */
 .unifideck-download-play-btn:hover,
 .unifideck-download-play-btn:focus,
 .unifideck-download-play-btn:focus-within,
 .unifideck-download-play-btn.gpfocus {
-  filter: brightness(1.15) !important;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8) !important;
+  filter: brightness(1.25) !important;
+  box-shadow:
+    0 0 0 3px #ffffff,
+    0 0 0 6px rgba(0, 0, 0, 0.7) !important;
+  transform: scale(1.05);
+  /* position needed for z-index to apply, so the ring paints over the
+     neighbouring button instead of being clipped by it. */
+  position: relative;
+  z-index: 1;
+}
+
+/* Uninstall sits in the same nav grid, so it needs an equally clear focus
+ * state — it had none at all, being a bare Secondary DialogButton. Steam's
+ * own convention for a focused neutral button is an inverted fill, which
+ * also keeps it visually distinct from the green Play beside it. */
+.unifideck-download-uninstall-btn {
+  transition: background 0.15s ease, box-shadow 0.15s ease !important;
+}
+.unifideck-download-uninstall-btn:hover,
+.unifideck-download-uninstall-btn:focus,
+.unifideck-download-uninstall-btn:focus-within,
+.unifideck-download-uninstall-btn.gpfocus {
+  background: #ffffff !important;
+  color: #23262e !important;
+  box-shadow:
+    0 0 0 3px #ffffff,
+    0 0 0 6px rgba(0, 0, 0, 0.7) !important;
+  transform: scale(1.05);
+  /* position needed for z-index to apply, so the ring paints over the
+     neighbouring button instead of being clipped by it. */
+  position: relative;
+  z-index: 1;
 }
 
 /* Spinning cloud icon while a save sync is in flight. */
