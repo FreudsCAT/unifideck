@@ -37,6 +37,7 @@ export const rpcRoutes = {
   getSyncProgress: "get_sync_progress",
   getAllUnifideckGames: "get_all_unifideck_games",
   getGameSizeBytes: "get_game_size_bytes",
+  getInstalledDiskInfo: "get_installed_disk_info",
   updateSteamOwnedTitles: "update_steam_owned_titles",
   setActiveSteamUser: "set_active_steam_user",
   // Orphaned-shortcut sweep — boot-time cleanup (CleanupRPCMixin)
@@ -46,13 +47,17 @@ export const rpcRoutes = {
   uninstallGame: "uninstall_game",
   cancelDownload: "cancel_download",
   getDownloadQueue: "get_download_queue",
+  clearDownloadHistory: "clear_download_history",
   checkGameUpdate: "check_game_update",
+  getAvailableUpdates: "get_available_updates",
+  updateGame: "update_game",
   // Game info / metadata (StoreRPCMixin)
   getGameInfo: "get_game_info",
   getGameMetadata: "get_game_metadata",
   getGameMetadataDisplay: "get_game_metadata_display",
   getStorageLocations: "get_storage_locations",
   getGogGameLanguages: "get_gog_game_languages",
+  getEpicGameLanguages: "get_epic_game_languages",
   getProtondbCache: "get_protondb_cache",
   // Library facets — per-shortcut enrichment for native Sort/Filters
   // + shortcut-keyed Great-on-Deck compat (LibraryFacetsRPCMixin)

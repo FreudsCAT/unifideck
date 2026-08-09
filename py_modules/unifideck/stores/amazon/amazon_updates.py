@@ -26,6 +26,7 @@ from pathlib import Path
 
 from unifideck.core.binaries import clean_cli_env
 from unifideck.event_bus.event_bus import EventBus
+from unifideck.stores.amazon.nile_lock import nile_cli_lock
 
 from .amazon_library import AmazonLibraryReader
 
@@ -89,9 +90,24 @@ class AmazonUpdateChecker:
         return [x for x in data if isinstance(x, str)]
 
     async def get_game_size(self, game_id: str) -> int | None:
-        """Get game size."""
+        """Download size in bytes for ``game_id``, or ``None``.
+
+        Serialised behind :func:`nile_cli_lock`: nile refreshes its token
+        opportunistically and rewrites ``user.json`` non-atomically, so two
+        of these running together can corrupt that file and log the user out
+        of Amazon entirely.
+        """
         if not self._cli_path:
             return None
+        async with nile_cli_lock():
+            stdout = await self._run_size_probe(game_id)
+        if stdout is None:
+            return None
+        return self._parse_size(stdout)
+
+    async def _run_size_probe(self, game_id: str) -> bytes | None:
+        """Run ``nile install <id> --info --json``; stdout or ``None``."""
+        assert self._cli_path is not None
         try:
             proc = await asyncio.create_subprocess_exec(
                 self._cli_path,
@@ -111,9 +127,12 @@ class AmazonUpdateChecker:
             return None
         if proc.returncode != 0:
             return None
-        for raw_line in stdout.decode(
-            errors="ignore",
-        ).splitlines():
+        return stdout
+
+    @staticmethod
+    def _parse_size(stdout: bytes) -> int | None:
+        """Pull ``download_size`` out of nile's JSON lines."""
+        for raw_line in stdout.decode(errors="ignore").splitlines():
             line = raw_line.strip()
             if not line.startswith("{"):
                 continue

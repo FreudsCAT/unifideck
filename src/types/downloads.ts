@@ -116,6 +116,25 @@ export interface StorageLocationsResponse extends Result {
 }
 
 /**
+ * On-disk facts about one installed game, for the Downloads tab's
+ * meta line. `location` is `null` when the install directory could
+ * not be stat'd (moved / unmounted drive) — the UI then shows the
+ * size alone rather than guessing a location.
+ */
+export interface InstalledDiskInfo {
+  size_bytes: number;
+  location: "internal" | "external" | null;
+}
+
+/**
+ * Response of `get_installed_disk_info` : one entry per installed
+ * game, keyed `"<store>:<store_game_id>"` — the same key the
+ * shortcut cache uses (`resolveAppIdFromStoreGame`), NOT `Game.id`.
+ * Games whose size and location both failed to resolve are absent.
+ */
+export type InstalledDiskInfoMap = Record<string, InstalledDiskInfo>;
+
+/**
  * Compact flag returned by `is_downloading` to tell the UI
  * whether a download is in progress without paying for the
  * full queue snapshot.

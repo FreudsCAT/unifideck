@@ -42,9 +42,22 @@ def _fake_service():
     return svc
 
 
+def _setup_returning(order: list[str], tool: str = "proton_experimental"):
+    """A ``setup_prefix`` double recording its call and reporting ``tool``.
+
+    It MUST return the ``(final_tool_id, did_recover)`` pair: the orchestrator
+    rebuilds the launch plan from that tool, so a double returning ``None``
+    would not exercise the real contract.
+    """
+    def _run(*_a, **_k):
+        order.append("setup_prefix")
+        return tool, False
+    return AsyncMock(side_effect=_run)
+
+
 async def test_launch_windows_calls_setup_prefix_before_sync_down(monkeypatch):
     order: list[str] = []
-    setup = AsyncMock(side_effect=lambda *a, **k: order.append("setup_prefix"))
+    setup = _setup_returning(order)
     monkeypatch.setattr(proton_pkg, "setup_prefix", setup)
 
     svc = _fake_service()
@@ -53,7 +66,7 @@ async def test_launch_windows_calls_setup_prefix_before_sync_down(monkeypatch):
     )
 
     ctx = _ctx()
-    await orch.launch_windows(svc, ctx, SimpleNamespace(rc=0))
+    await orch.launch_windows(svc, ctx, SimpleNamespace(rc=0, proton_tool_id=None))
 
     setup.assert_awaited_once()
     # setup_prefix runs with the launch ctx/state and NO session_env
@@ -64,6 +77,33 @@ async def test_launch_windows_calls_setup_prefix_before_sync_down(monkeypatch):
     assert order[0] == "setup_prefix"
     assert "sync_down" in order
     assert order.index("setup_prefix") < order.index("sync_down")
+
+
+async def test_launch_plan_is_rebuilt_from_the_tool_setup_settled_on(monkeypatch):
+    """The game must launch under the Proton that actually built its prefix.
+
+    ``setup_prefix`` mutates the shared ``state`` and its recovery ladder can
+    settle on a different Proton than Phase 1 resolved. Launching the Phase-1
+    plan regardless is what made umu run Proton-Experimental while the launcher
+    logged (and had prepared the prefix with) GE-Proton11-3 — every launch then
+    re-stamped the prefix and erased the imported VC++ keys.
+    """
+    monkeypatch.setattr(
+        proton_pkg, "setup_prefix", _setup_returning([], tool="GE-Proton11-3"),
+    )
+
+    svc = _fake_service()
+    launch_plan = SimpleNamespace(name="rebuilt")
+    svc._prepare_windows_plan = AsyncMock(
+        side_effect=[(SimpleNamespace(name="phase1"), None), (launch_plan, None)],
+    )
+
+    await orch.launch_windows(svc, _ctx(), SimpleNamespace(rc=0, proton_tool_id="proton_11"))
+
+    # Rebuilt with the tool setup_prefix reported, not the one Phase 1 picked.
+    assert svc._prepare_windows_plan.await_args.kwargs["tool_id"] == "GE-Proton11-3"
+    # ...and that rebuilt plan is what actually gets run.
+    assert svc._run_game_subprocess.await_args.args[0] is launch_plan
 
 
 async def test_dispatch_does_not_run_compat(monkeypatch):

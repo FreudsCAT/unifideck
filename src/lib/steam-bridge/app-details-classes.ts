@@ -13,6 +13,7 @@ import {
   playSectionClasses,
   appDetailsHeaderClasses,
   basicAppDetailsSectionStylerClasses,
+  findClassModule,
 } from "@decky/ui";
 
 /**
@@ -74,9 +75,91 @@ function pickFirstClass(classObj: Record<string, string>): string {
   return "";
 }
 
+/**
+ * The specific Steam class names that CSS Loader themes hook.
+ *
+ * Themes are authored against Steam's readable CSS-module names
+ * (`appdetailsplaysection_MenuButton_3qDWQ`) and CSS Loader expands
+ * each one, via its `css_translations.json`, into every historical
+ * alias plus the current minified class. So a theme rule reaches any
+ * element wearing the *live* class — including ours, if we put it
+ * there. Wearing these is what makes our play row themeable at all;
+ * without them no theme selector can ever match our buttons.
+ *
+ * Two gotchas, both verified live against the "Round" theme:
+ *  - The icon-button rule is a DESCENDANT selector
+ *    (`.AppButtons .MenuButton`), so `appButtons` must be on an
+ *    ancestor or the button rule silently does not apply.
+ *  - The primary-button rule is a COMPOUND selector
+ *    (`.AppActionButton.PlayButtonContainer`) — both names have to
+ *    land on the same element.
+ */
+export interface ThemeableClassNames {
+  /** Required ancestor for the icon-button rule to match. */
+  appButtons: string;
+  /** Steam's square 48x48 icon button. */
+  menuButton: string;
+  /** Controller-config variant of `menuButton` (tighter padding). */
+  controllerConfigButton: string;
+  /** Primary action button, half of a compound selector. */
+  actionButton: string;
+  /** Primary action button, other half of the compound selector. */
+  playButtonContainer: string;
+}
+
+let themeable: ThemeableClassNames | null = null;
+
+/**
+ * Resolve the themeable class names for the current Steam build.
+ *
+ * Prefers the `@decky/ui` static exports; if one of them drifts (they
+ * are snapshots of a Steam build and do rotate), falls back to finding
+ * the class module by SHAPE rather than by position or hardcoded
+ * string. A name we cannot resolve degrades to `""`, which just means
+ * that one button stops being themeable — never a crash or a missing
+ * button.
+ */
+export function getThemeableClasses(): ThemeableClassNames {
+  if (themeable) return themeable;
+
+  let play = asClassMap(playSectionClasses);
+  let styler = asClassMap(basicAppDetailsSectionStylerClasses);
+  let action = asClassMap(appActionButtonClasses);
+
+  if (!play.MenuButton) {
+    play = asClassMap(
+      findClassModule((m) => !!m.MenuButton && !!m.ControllerConfigButton),
+    );
+  }
+  if (!styler.AppButtons) {
+    styler = asClassMap(
+      findClassModule((m) => !!m.AppButtons && !!m.AppActionButton),
+    );
+  }
+  if (!action.PlayButtonContainer) {
+    action = asClassMap(findClassModule((m) => !!m.PlayButtonContainer));
+  }
+
+  themeable = {
+    appButtons: styler.AppButtons ?? "",
+    menuButton: play.MenuButton ?? "",
+    controllerConfigButton: play.ControllerConfigButton ?? "",
+    actionButton: styler.AppActionButton ?? "",
+    playButtonContainer: action.PlayButtonContainer ?? "",
+  };
+
+  return themeable;
+}
+
+/** Narrow an unknown `@decky/ui` class export to a lookup map. */
+function asClassMap(obj: unknown): Record<string, string | undefined> {
+  return (obj ?? {}) as Record<string, string | undefined>;
+}
+
 /** Force-refresh the cache. Called from a dev menu when
  *  diagnosing a Steam update break. Not exposed in
  *  production UI. */
 export function _resetClassCache(): void {
   cached = null;
+  themeable = null;
 }

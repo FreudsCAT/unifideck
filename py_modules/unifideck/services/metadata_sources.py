@@ -48,7 +48,26 @@ async def fetch_unifidb(
     game: Game,
     config: ConfigManager | None = None,
 ) -> dict[str, Any]:
-    """Query UnifiDB for canonical game info."""
+    """Query UnifiDB for canonical game info.
+
+    Passes through the save-location block as well as the display fields.
+    This projection used to keep only the five display keys, silently dropping
+    ``save_locations`` / ``cloud`` / ``save_source`` — the Ludusavi+PCGamingWiki
+    data that ``unifidb.game_to_cache_format`` deliberately preserves for
+    downstream consumers. Because the drop happened one layer ABOVE the cache
+    write, those fields never reached the metadata cache at all, which meant:
+
+    * ``save_location_resolver`` lost its primary source and fell back to the
+      wine-prefix title guesser (which is how a game's save path can resolve
+      to the whole install folder);
+    * ``_StatusMixin._cloud_supported`` always answered "unknown", so the
+      cloud-save button could never dim for a game with no cloud support;
+    * the App-Details panel could not report cloud-save availability before
+      install.
+
+    Kept to the consumed keys — ``platforms``/``external_ids`` are not read
+    anywhere and would just inflate a cache with an entry per owned game.
+    """
     from unifideck.metadata import unifidb
     try:
         result = await unifidb.lookup(
@@ -57,13 +76,20 @@ async def fetch_unifidb(
         if not result:
             return {}
 
-        return {
+        out: dict[str, Any] = {
             "description": result.get("description"),
             "genres": result.get("genres", []),
             "developer": ", ".join(result.get("developers", [])) or None,
             "publisher": result.get("publisher"),
             "release_date": result.get("release_date"),
         }
+        # Only when present: most catalog entries have no save data, and a
+        # null key per game across a full library is pure cache weight.
+        for field in ("save_locations", "cloud", "save_source"):
+            value = result.get(field)
+            if value:
+                out[field] = value
+        return out
     except Exception as e:
         logger.debug("[Metadata] UnifiDB fetch failed: %s", e)
         return {}

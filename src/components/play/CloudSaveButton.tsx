@@ -16,8 +16,13 @@
 import { FC, CSSProperties } from "react";
 import { DialogButton, showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { FaCloud, FaCloudDownloadAlt, FaSyncAlt } from "react-icons/fa";
-import { iconBtnStyle } from "./PlayMeta";
+import {
+  FaCheck,
+  FaCloud,
+  FaCloudDownloadAlt,
+  FaSyncAlt,
+} from "react-icons/fa";
+import { iconBtnStyle, iconBtnClass } from "./PlayMeta";
 import { useCloudSaveStatus } from "../../hooks/useCloudSaveStatus";
 import { useEventBus } from "../../api/event-bus-client";
 import { consumeCloudOpPending } from "../../api/cloud-save-pending";
@@ -35,6 +40,37 @@ interface Props {
  *  gogdl truncating the stored cloud mtime to whole seconds vs the local
  *  file's sub-second st_mtime; a real new save is always far larger. */
 const TS_SYNC_TOLERANCE_S = 2;
+
+/**
+ * Cloud glyph with a small check badge — the "local and cloud agree" state.
+ *
+ * react-icons has no cloud-check in the Fa set, so the badge is composed.
+ * Both glyphs are plain `svg`s, so the existing `.unifideck-icon-btn svg`
+ * focus rules recolour them together.
+ */
+const CloudInSyncIcon: FC = () => (
+  <span
+    style={{
+      position: "relative",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+    }}
+  >
+    <FaCloud />
+    <FaCheck
+      className="unifideck-cloud-badge"
+      style={{
+        position: "absolute",
+        right: -4,
+        bottom: -3,
+        // Punch the badge out of the button fill so it stays legible against
+        // the cloud behind it, in both the resting and focused palettes.
+        filter: "drop-shadow(0 0 2px rgba(0,0,0,0.9))",
+      }}
+    />
+  </span>
+);
 
 export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
   const { t } = useTranslation();
@@ -114,6 +150,17 @@ export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
   const shouldBreathe =
     !noCloudSupport && !syncing && (case1 || case2and3 || case4);
 
+  // Local and cloud both exist and their timestamps agree — nothing to do.
+  // Worth its own signal: a plain cloud reads as "unknown", which is exactly
+  // the ambiguity that made users click through to an empty window.
+  const inSync =
+    !noCloudSupport &&
+    !syncing &&
+    !unresolved &&
+    hasCloud &&
+    hasLocal &&
+    !shouldBreathe;
+
   let icon = <FaCloud />;
   let label = t("play.cloudSave.label");
   let tintBg: string | undefined;
@@ -133,6 +180,10 @@ export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
     label = cloudAvailable
       ? t("play.cloudSave.statusCloudAvailable")
       : t("play.cloudSave.label");
+  } else if (inSync) {
+    icon = <CloudInSyncIcon />;
+    label = t("play.cloudSave.statusInSync");
+    tintRing = "rgba(34, 197, 94, 0.55)";
   }
 
   const style: CSSProperties = {
@@ -157,9 +208,10 @@ export const CloudSaveButton: FC<Props> = ({ store, gameId, gameTitle }) => {
 
   return (
     <DialogButton
-      className={`unifideck-icon-btn${
-        shouldBreathe ? " unifideck-breathe" : ""
-      }`}
+      className={iconBtnClass(
+        "unifideck-icon-btn",
+        shouldBreathe ? "unifideck-breathe" : "",
+      )}
       style={style}
       disabled={loading || syncing || noCloudSupport}
       onClick={open}

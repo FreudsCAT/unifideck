@@ -1,28 +1,29 @@
-"""Epic Games update checker — periodic polling via legendary.
+"""Epic Games update checker — on-demand scan via legendary.
 
 OP-48e | py_modules/unifideck/stores/epic/updates.py
 
-``EpicUpdateChecker`` periodically queries ``legendary`` for the
-latest version manifest of each installed game and compares it
-against the locally-recorded version (stored in the ``.unifideck-id``
-marker).
+``EpicUpdateChecker`` asks ``legendary`` which installed games have a
+newer build than the one on disk, and applies an update when asked.
 
 Public methods :
 
-* ``check_for_updates()``         — return a list of available updates;
-* ``has_update(game_id)``         — single-game query;
-* ``run_check_now()``             — manual check on demand;
-* ``schedule_check(interval)``    — periodic polling task;
-* ``cancel_scheduled()``          — stop the periodic task;
-* ``apply_update(game_id, ...)``  — delegate to installer in update mode;
-* ``stop()``                      — graceful shutdown.
+* ``check_for_updates()``   — bulk scan; returns the app names with a
+  newer build available. Shells ``legendary list-installed
+  --check-updates``, which logs in to Epic and refreshes the asset
+  manifest for every installed platform, then reads the
+  ``-> Update available!`` lines out of its human-readable output;
+* ``update_game(game_id, installer, progress_cb)`` — apply an update;
+* ``get_game_size(game_id)`` — cached download size from ``legendary
+  info``.
 
-Update application itself is delegated to the installer pipeline
-(``install.py``, OP-48d) which re-runs legendary with the right flag
-to perform an in-place update rather than a fresh install.
+There is no scheduler here: nothing polls. The scan runs when the
+frontend asks (``check_game_update``), and
+``services/update_check_cache`` keeps that from costing a fresh Epic
+login on every App-Details page open.
 
-Rate-limiting protects against hammering Epic's API on initial
-library boot.
+Update application is delegated to the installer pipeline
+(``install.py``, OP-48d) — legendary has no separate ``update`` verb,
+it re-runs ``install`` and reuses the existing install directory.
 """
 
 from __future__ import annotations
@@ -73,6 +74,7 @@ class EpicUpdateChecker:
                 self._cli_path,
                 "list-installed",
                 "--check-updates",
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=clean_cli_env(),
@@ -125,8 +127,18 @@ class EpicUpdateChecker:
                 store="epic",
                 game_id=game_id,
             )
-        install_data = entry.get("install") or {}
-        current_path = install_data.get("install_path", "")
+        # legendary records ``install_path`` at the TOP level of each
+        # ``installed.json`` entry — there is no nested ``install`` object.
+        # Reading only the nested key made ``base_path`` always ``None``, so
+        # the installer fell back to the default internal root and logged a
+        # path the update was never going to use. (legendary itself reuses
+        # the existing install directory for an already-installed game and
+        # ignores ``--base-path``, which is why nothing was mislocated — but
+        # the read was still wrong.) ``library.py`` already reads it this way.
+        current_path = (
+            entry.get("install_path")
+            or (entry.get("install") or {}).get("install_path", "")
+        )
         base_path = str(Path(current_path).parent) if current_path else None
         result = await installer.install_game(
             game_id,

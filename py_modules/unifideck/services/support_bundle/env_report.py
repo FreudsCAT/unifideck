@@ -20,7 +20,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import probe_conflicts, probe_device, probe_stack, probe_storage
+from . import (
+    probe_conflicts,
+    probe_device,
+    probe_plugin_logs,
+    probe_protontricks,
+    probe_stack,
+    probe_storage,
+)
 from .spec import BundleContext
 
 logger = logging.getLogger(__name__)
@@ -101,6 +108,13 @@ def _conflict_blocks(ctx: BundleContext) -> dict[str, Callable[[], Any]]:
     """Third-party interference and stale live state."""
     return {
         "plugins_installed": probe_conflicts.plugins_block,
+        # Which sibling plugin logs the archive carries. Names and versions
+        # alone can only ever make a neighbour a suspect; their logs are what
+        # convict or clear one.
+        "plugin_logs": probe_plugin_logs.plugin_logs_block,
+        # External Wine tooling is a conflict surface too: it reads the same
+        # prefixes and resolves the same Proton, by its own rules.
+        "protontricks": probe_protontricks.protontricks_block,
         "scheduled_writers": probe_conflicts.scheduled_writers_block,
         "processes": probe_conflicts.processes_block,
         "session_env": probe_conflicts.session_env_block,

@@ -129,6 +129,7 @@ class EpicLibraryReader:
             proc = await asyncio.create_subprocess_exec(
                 self._cli_path,
                 *args,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=clean_cli_env(),

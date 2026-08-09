@@ -86,8 +86,9 @@ class UpdaterRPCMixin:
         """Get release notes (markdown body) for a specific version.
 
         Args:
-            version: semver string like ``"0.6.1"`` or tag-derived
-                string like ``"Dev"``.
+            version: semver string like ``"0.6.1"`` or, for a dev
+                build, the raw non-semver tag it was derived from
+                (e.g. ``"Dev-20260808-171205-47e6d28"``).
 
         Returns the raw markdown body from the GitHub release, or
         an empty string if the version is not found.

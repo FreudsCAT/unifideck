@@ -388,7 +388,8 @@
     "cloudPullDone": "Cloud-Spielstand heruntergeladen",
     "cloudPullFailed": "Cloud-Spielstand-Download fehlgeschlagen",
     "cloudPushDone": "Lokaler Spielstand hochgeladen",
-    "cloudPushFailed": "Lokaler Spielstand-Upload fehlgeschlagen"
+    "cloudPushFailed": "Lokaler Spielstand-Upload fehlgeschlagen",
+    "cloudSavePathReset": "Speicherort auf automatisch zurückgesetzt"
   },
   "uninstallModal": {
     "title": "Deinstallation bestätigen",
@@ -399,6 +400,12 @@
     "warningBody": "Dadurch werden alle im Wine-Präfix gespeicherten Spielstände dauerhaft gelöscht. Stelle sicher, dass sie gesichert sind.",
     "cancel": "Abbrechen",
     "uninstall": "Deinstallieren"
+  },
+  "updateModal": {
+    "title": "Update verfügbar",
+    "description": "Für {{title}} ist ein Update verfügbar. Ohne das Update funktionieren Online-Funktionen möglicherweise nicht.",
+    "updateNow": "Jetzt aktualisieren",
+    "playAnyway": "Trotzdem spielen"
   },
   "languageSettings": {
     "title": "SPRACHE",
@@ -562,7 +569,7 @@
     "simple": "Einfach",
     "detailed": "Detailliert"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "Sprache auswählen",
     "description": "Wähle die Sprache, in der {{title}} heruntergeladen werden soll",
     "label": "Sprache",
@@ -699,7 +706,11 @@
       "statusSyncing": "Cloud-Spielstände werden synchronisiert…",
       "statusUnresolved": "Speicherort nicht gefunden — Synchronisation funktioniert für dieses Spiel eventuell nicht.",
       "unresolvedHint": "Starte das Spiel einmal, damit wir den Speicherordner erkennen können, oder lege den Ort manuell fest.",
-      "upload": "Lokalen Spielstand hochladen"
+      "upload": "Lokalen Spielstand hochladen",
+      "currentLocation": "Speicherort",
+      "changeLocation": "Speicherort ändern",
+      "resetLocation": "Auf automatisch zurücksetzen",
+      "statusInSync": "Cloud-Spielstände aktuell"
     },
     "exe": {
       "browse": "Durchsuchen…",
@@ -721,7 +732,11 @@
     "neverPlayed": "Nie gespielt",
     "hoursShort": "Std.",
     "minutesShort": "Min.",
-    "played": "Gespielt"
+    "played": "Gespielt",
+    "cloudSaves": "Cloud-Speicherstände",
+    "cloudSupported": "Unterstützt",
+    "cloudNotSupported": "Nicht unterstützt",
+    "cloudUnknown": "Unbekannt"
   },
   "downloads": {
     "title": "Downloads",
@@ -732,13 +747,20 @@
     "cancel": "Abbrechen",
     "removeFromQueue": "Entfernen",
     "play": "Spielen",
+    "update": "Aktualisieren",
     "outcome": {
       "queued": "In Warteschlange",
       "downloading": "Wird heruntergeladen",
       "completed": "Abgeschlossen",
       "cancelled": "Abgebrochen",
       "error": "Fehlgeschlagen"
-    }
+    },
+    "installedCount": "Installiert ({{count}})",
+    "failed": "Fehlgeschlagen",
+    "clearFailed": "Fehlgeschlagene entfernen",
+    "uninstall": "Deinstallieren",
+    "locationInternal": "Intern",
+    "locationExternal": "Extern"
   },
   "navigation": {
     "loading": "Laden...",

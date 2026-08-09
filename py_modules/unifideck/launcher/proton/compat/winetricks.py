@@ -63,6 +63,17 @@ def _write_marker(marker: Path, body: str) -> None:
         logger.debug("[compat.winetricks] marker write failed: %s", e)
 
 
+def winetricks_pending(plan: ProtonLaunchPlan) -> bool:
+    """Whether :func:`apply_winetricks` still has work for this prefix.
+
+    Lets a caller decide whether it's worth arranging a winetricks-capable
+    Proton at all, without running the step. A prefix that has never run it
+    reports pending even if the package list would turn out empty — the step
+    itself records that outcome in the marker on its first run.
+    """
+    return not _already_done(_prefix_root(plan) / _MARKER_NAME)
+
+
 async def apply_winetricks(plan: ProtonLaunchPlan) -> bool:
     """Install required redistributables once per prefix.
 

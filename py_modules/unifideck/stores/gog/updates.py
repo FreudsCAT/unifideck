@@ -33,6 +33,16 @@ _CONTENT_SYSTEM_URL_TEMPLATE = (
 )
 _UPDATE_CHECK_TIMEOUT_S = 10.0
 
+# How many per-game build-id lookups run at once in the bulk scan.
+#
+# The scan used to be a plain sequential loop, so its wall-clock was
+# ``installed_games x round_trip`` — a 60-game library on a slow
+# connection could take minutes, and the whole thing sat in front of the
+# App-Details Update button. Six is a deliberate middle: enough to hide
+# per-request latency, few enough that we are not hammering
+# ``content-system.gog.com`` with a burst it could rate-limit.
+_UPDATE_CHECK_CONCURRENCY = 6
+
 
 class GOGUpdatesChecker:
     """Gogupdates checker."""
@@ -181,17 +191,34 @@ class GOGUpdatesChecker:
         return str(build_id)
 
     async def check_for_updates(self) -> list[str]:
-        """Check for updates."""
+        """Check for updates across every installed GOG game.
+
+        Runs ``_UPDATE_CHECK_CONCURRENCY`` lookups at a time rather than
+        one after another — the result order is preserved by indexing,
+        so the returned list stays stable regardless of which request
+        finishes first. A game whose check raises is treated as "no
+        update" (the same as the ``None`` its checker returns for an
+        unauthenticated or unresolvable game) so one bad id cannot fail
+        the scan for the whole library.
+        """
         installed_ids = self._get_installed()
         if not installed_ids:
             return []
-        updates: list[str] = []
-        for game_id in installed_ids:
-            has_update = await self.check_for_game_update(
-                game_id,
-            )
-            if has_update:
-                updates.append(game_id)
+        gate = asyncio.Semaphore(_UPDATE_CHECK_CONCURRENCY)
+
+        async def check_one(game_id: str) -> bool:
+            async with gate:
+                return bool(await self.check_for_game_update(game_id))
+
+        outcomes = await asyncio.gather(
+            *(check_one(gid) for gid in installed_ids),
+            return_exceptions=True,
+        )
+        updates = [
+            game_id
+            for game_id, outcome in zip(installed_ids, outcomes, strict=True)
+            if outcome is True
+        ]
         logger.info(
             "[GOGUpdatesChecker] bulk check: %d/%d have updates",
             len(updates),

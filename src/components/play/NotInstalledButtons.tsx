@@ -13,7 +13,8 @@
 import { FC, useCallback } from "react";
 import { DialogButton } from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { FaGamepad, FaCog, FaDownload } from "react-icons/fa";
+import { FaDownload } from "react-icons/fa";
+import { SteamControllerIcon, SteamGearIcon } from "../shared";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useInstallFlow } from "../../hooks/useInstallFlow";
 import { useToast } from "../../hooks/useToast";
@@ -25,6 +26,9 @@ import {
   IconGroup,
   actionBtnStyle,
   iconBtnStyle,
+  actionBtnClass,
+  iconBtnClass,
+  controllerBtnClass,
 } from "./PlayMeta";
 
 interface Props {
@@ -85,7 +89,7 @@ export const NotInstalledButtons: FC<Props> = ({
     // eslint-disable-next-line jsx-a11y/no-autofocus
     <PlayShell autoFocus>
       <DialogButton
-        className="unifideck-install-btn"
+        className={actionBtnClass("unifideck-install-btn")}
         disabled={loading || installFlow.isWorking || !game}
         onClick={onInstall}
         style={actionBtnStyle}
@@ -106,15 +110,15 @@ export const NotInstalledButtons: FC<Props> = ({
 
       <IconGroup>
         <DialogButton
-          className="unifideck-icon-btn"
+          className={controllerBtnClass()}
           style={iconBtnStyle}
           onClick={() => openControllerConfig(appId)}
           aria-label={t("playButton.controllerConfig")}
         >
-          <FaGamepad />
+          <SteamControllerIcon />
         </DialogButton>
         <DialogButton
-          className="unifideck-icon-btn"
+          className={iconBtnClass()}
           style={iconBtnStyle}
           onClick={(e) => {
             // Open Steam's native app menu (Manage / Properties / …),
@@ -125,7 +129,7 @@ export const NotInstalledButtons: FC<Props> = ({
           }}
           aria-label={t("playButton.appSettings")}
         >
-          <FaCog />
+          <SteamGearIcon />
         </DialogButton>
       </IconGroup>
     </PlayShell>

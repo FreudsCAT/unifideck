@@ -388,7 +388,8 @@
     "cloudPullDone": "تم تنزيل الحفظ السحابي",
     "cloudPullFailed": "فشل تنزيل الحفظ السحابي",
     "cloudPushDone": "تم رفع الحفظ المحلي",
-    "cloudPushFailed": "فشل رفع الحفظ المحلي"
+    "cloudPushFailed": "فشل رفع الحفظ المحلي",
+    "cloudSavePathReset": "تمت إعادة تعيين موقع الحفظ إلى تلقائي"
   },
   "uninstallModal": {
     "title": "تأكيد إلغاء التثبيت",
@@ -399,6 +400,12 @@
     "warningBody": "سيؤدي هذا إلى حذف بيانات الحفظ المخزنة داخل بيئة تشغيل Wine نهائياً. تأكد من وجود نسخة احتياطية لديك.",
     "cancel": "إلغاء",
     "uninstall": "إلغاء التثبيت"
+  },
+  "updateModal": {
+    "title": "يتوفر تحديث",
+    "description": "يتوفر تحديث للعبة {{title}}. قد لا تعمل الميزات عبر الإنترنت بدونه.",
+    "updateNow": "تحديث الآن",
+    "playAnyway": "اللعب على أي حال"
   },
   "languageSettings": {
     "title": "اللغة",
@@ -560,7 +567,7 @@
     "simple": "مبسطة",
     "detailed": "تفصيلية"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "اختر اللغة",
     "description": "اختر لغة التنزيل للعبة {{title}}",
     "label": "اللغة",
@@ -697,7 +704,11 @@
       "statusSyncing": "جاري مزامنة الحفظ السحابي...",
       "statusUnresolved": "لم يتم العถور على موقع الحفظ — قد لا تعمل المزامنة لهذه اللعبة.",
       "unresolvedHint": "قم بتشغيل اللعبة مرة واحدة حتى نتمكن من اكتشاف مجلد الحفظ الخاص بها، أو حدد الموقع يدويًا.",
-      "upload": "رفع الحفظ المحلي"
+      "upload": "رفع الحفظ المحلي",
+      "currentLocation": "موقع الحفظ",
+      "changeLocation": "تغيير الموقع",
+      "resetLocation": "إعادة التعيين إلى تلقائي",
+      "statusInSync": "الحفظ السحابي محدَّث"
     },
     "exe": {
       "browse": "تصفح…",
@@ -719,7 +730,11 @@
     "neverPlayed": "لم يتم اللعب بها قط",
     "hoursShort": "ساعة",
     "minutesShort": "دقيقة",
-    "played": "وقت اللعب"
+    "played": "وقت اللعب",
+    "cloudSaves": "الحفظ السحابي",
+    "cloudSupported": "مدعوم",
+    "cloudNotSupported": "غير مدعوم",
+    "cloudUnknown": "غير معروف"
   },
   "downloads": {
     "title": "التنزيلات",
@@ -730,13 +745,20 @@
     "cancel": "إلغاء",
     "removeFromQueue": "إزالة من قائمة الانتظار",
     "play": "لعب",
+    "update": "تحديث",
     "outcome": {
       "queued": "في الانتظار",
       "downloading": "جاري التنزيل",
       "completed": "مكتمل",
       "cancelled": "ملغى",
       "error": "خطأ"
-    }
+    },
+    "installedCount": "المثبتة ({{count}})",
+    "failed": "فشلت",
+    "clearFailed": "مسح الفاشلة",
+    "uninstall": "إلغاء التثبيت",
+    "locationInternal": "داخلي",
+    "locationExternal": "خارجي"
   },
   "navigation": {
     "loading": "جاري التحميل...",

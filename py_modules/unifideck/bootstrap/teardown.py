@@ -48,6 +48,14 @@ async def unload_plugin(plugin: Any) -> None:
             await updater.stop_polling()
         except Exception:
             logger.warning("[Unifideck] updater stop_polling failed")
+    # Same for the game-update sweep: it holds a bus subscription and can
+    # have a store scan in flight, both of which must not outlive a reload.
+    sweep = getattr(plugin, "_update_sweep_service", None)
+    if sweep is not None:
+        try:
+            await sweep.stop()
+        except Exception:
+            logger.warning("[Unifideck] update sweep stop failed")
     services = getattr(plugin, "services", None)
     if services is not None:
         await stop_all_services(services)

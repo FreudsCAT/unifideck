@@ -6,8 +6,12 @@
  * download is queued :
  *  - Storage picker: `pickStorageForInstall` always runs first
  *    so the user chooses where the game lands.
- *  - GOG: fetch `get_gog_game_languages`, prompt the user via
- *    `<GOGLanguageSelectModal>` when more than one is offered.
+ *  - GOG / Epic: fetch the store's install languages, prompt the
+ *    user via `<LanguageSelectModal>` when more than one is
+ *    offered. Epic only reports languages for legendary's
+ *    Selective Downloads titles, where the language packs are
+ *    separate downloads; everything else comes back empty and
+ *    installs without a prompt.
  *  - Other stores: pass straight through.
  */
 import { useCallback, useState } from "react";
@@ -17,7 +21,7 @@ import { useRPC } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
 import { useGameActions } from "./useGameActions";
 import { useStorageConfig } from "./useStorageConfig";
-import { GOGLanguageSelectModal } from "../components/modals/GOGLanguageSelectModal";
+import { LanguageSelectModal } from "../components/modals/LanguageSelectModal";
 import { pickStorageForInstall } from "../components/modals/PickStorageModal";
 import type { Game, Result } from "../types/api";
 import type { StorageLocationsResponse } from "../types/downloads";
@@ -29,13 +33,22 @@ interface SteamBridgeShape {
   terminateApp(appId: string, force?: boolean): void;
 }
 
-/** Languages response from `get_gog_game_languages`. The
- *  backend returns the raw locale codes ; the modal maps
- *  them to display labels. */
-interface GogLanguagesResponse {
+/** Languages response from `get_gog_game_languages` /
+ *  `get_epic_game_languages`. GOG returns raw locale codes and the
+ *  modal maps them to display labels; Epic's SDL configs carry their
+ *  own names, so it also sends `labels`. */
+interface LanguagesResponse {
   success: boolean;
   languages: string[];
+  labels?: Record<string, string>;
 }
+
+/** Stores whose installs offer a language choice, and which RPC
+ *  reports it. Every other store installs without prompting. */
+const LANGUAGE_STORES: Record<string, "gog" | "epic" | undefined> = {
+  gog: "gog",
+  epic: "epic",
+};
 
 /**
  * Bundle returned by {@link useInstallFlow} — `start(game)`
@@ -54,8 +67,11 @@ export interface UseInstallFlowResult {
  */
 export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
   const actions = useGameActions(bridge);
-  const getGogLangs = useRPC<[string], GogLanguagesResponse>(
+  const getGogLangs = useRPC<[string], LanguagesResponse>(
     rpcRoutes.getGogGameLanguages,
+  );
+  const getEpicLangs = useRPC<[string], LanguagesResponse>(
+    rpcRoutes.getEpicGameLanguages,
   );
   const getStorageLocations = useRPC<[], StorageLocationsResponse>(
     rpcRoutes.getStorageLocations,
@@ -104,7 +120,8 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
           customPath ?? "none",
         );
 
-        if (game.store !== "gog") {
+        const fetchLangs = LANGUAGE_STORES[game.store];
+        if (!fetchLangs) {
           console.log(
             "[useInstallFlow] installing %s/%s with storage=%s",
             game.store,
@@ -116,7 +133,10 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
             title: game.title,
           });
         }
-        const langs = await getGogLangs(game.store_game_id).catch(() => null);
+        const langs = await (fetchLangs === "gog"
+          ? getGogLangs(game.store_game_id)
+          : getEpicLangs(game.store_game_id)
+        ).catch(() => null);
         const list = langs?.languages ?? [];
         if (list.length <= 1) {
           const language = list[0];
@@ -126,7 +146,11 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
             title: game.title,
           });
         }
-        const language = await pickLanguageViaModal(game.title, list);
+        const language = await pickLanguageViaModal(
+          game.title,
+          list,
+          langs?.labels,
+        );
         if (!language) return null;
         return await actions.install(game.store, game.store_game_id, {
           language,
@@ -140,6 +164,7 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
     [
       actions,
       getGogLangs,
+      getEpicLangs,
       getStorageLocations,
       locations,
       defaultLocation,
@@ -157,13 +182,15 @@ export function useInstallFlow(bridge: SteamBridgeShape): UseInstallFlowResult {
 function pickLanguageViaModal(
   title: string,
   languages: string[],
+  labels?: Record<string, string>,
 ): Promise<string | null> {
   return new Promise((resolve) => {
     let confirmed = false;
     const handle = showModal(
-      <GOGLanguageSelectModal
+      <LanguageSelectModal
         gameTitle={title}
         languages={languages}
+        labels={labels}
         preferredTag={i18n.language}
         onConfirm={(lang) => {
           confirmed = true;
