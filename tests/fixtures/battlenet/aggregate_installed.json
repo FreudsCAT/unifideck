@@ -1,0 +1,14 @@
+{
+  "installed": [
+    {
+      "box_art_uri": "https://bnetxboxassets.akamaized.net/hsb/box-enUS.webp",
+      "icon_index": 0,
+      "icon_path": "C:/Program Files (x86)/Hearthstone/Hearthstone Beta Launcher.exe",
+      "last_played_timestamp": 1786266760000,
+      "launch_uri": "battlenet://game/hsb",
+      "logo_art_uri": "https://bnetxboxassets.akamaized.net/hsb/logo-enUS.webp",
+      "name": "Hearthstone",
+      "product_id": "hsb"
+    }
+  ]
+}
