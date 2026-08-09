@@ -22,7 +22,7 @@ from unifideck.utils.config_helpers import get_cfg
 from .types import Game, SyncResult
 
 logger = logging.getLogger(__name__)
-_DEFAULT_TRACKED_STORES = ("epic", "gog", "amazon", "ubisoft")
+_DEFAULT_TRACKED_STORES = ("epic", "gog", "amazon", "ubisoft", "battlenet")
 
 
 class _SyncResultsMixin:

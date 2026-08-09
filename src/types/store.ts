@@ -9,7 +9,7 @@ import type { StoreId } from "./api";
 export type { StoreId };
 /** Full set of stores the architecture knows about, including
  *  not-yet-implemented ones flagged in the design doc. */
-export type StoreIdExtended = StoreId | "ea" | "battlenet" | "itch";
+export type StoreIdExtended = StoreId | "ea" | "itch";
 
 /** Per-store visual config used by `<StoreIcon>`. */
 export interface StoreVisual {
@@ -61,5 +61,11 @@ export const STORE_VISUALS: Record<StoreId, StoreVisual> = {
     display_name: "Ubisoft Connect",
     brand_color: "#0052cc",
     icon_path: "/assets/ubisoft.svg",
+  },
+  battlenet: {
+    id: "battlenet",
+    display_name: "Battle.net",
+    brand_color: "#00aeff",
+    icon_path: "/assets/battlenet.svg",
   },
 };

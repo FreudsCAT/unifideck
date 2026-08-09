@@ -61,6 +61,7 @@ const WATCHED_EVENTS: EventName[] = [
   // "Installing Ubisoft Connect" (the rest of the chain — RunGame → launcher
   // → UPC — works; this allowlist omission was the whole bug).
   "ubisoft_install_launch_requested",
+  "battlenet_install_launch_requested",
   "game_installed",
   "game_uninstalled",
   "game_update_available",
@@ -81,7 +82,10 @@ const WATCHED_EVENTS: EventName[] = [
  *  Steam restart relaunches UPC once per buffered event. They're primed past
  *  (watermark advanced, not dispatched) on the first poll after load; events
  *  emitted live during the session still fire normally. */
-const IMPERATIVE_EVENTS = new Set<string>(["ubisoft_install_launch_requested"]);
+const IMPERATIVE_EVENTS = new Set<string>([
+  "ubisoft_install_launch_requested",
+  "battlenet_install_launch_requested",
+]);
 
 /** Sync-lifecycle events describe a sync that was already underway or
  *  finished in a PRIOR session. ``SteamRestartModal`` only restarts the

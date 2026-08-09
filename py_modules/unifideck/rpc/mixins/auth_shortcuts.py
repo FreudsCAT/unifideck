@@ -110,6 +110,36 @@ class AuthShortcutsRPCMixin:
         )
         return result
 
+    async def get_battlenet_auth_shortcut_context(self) -> Any:
+        """Auth-shortcut context for the Battle.net client.
+
+        Delegates to ``UbisoftStore.get_auth_shortcut_context``
+        which has its own VDF-scan + repair logic. Falls back to
+        a structured error if the Ubisoft store isn't registered
+        (test installs, partial deployments).
+        """
+        logger.info("[AuthShortcuts:battlenet] context requested")
+        store = self.registry.get("battlenet")
+        if store is None:
+            logger.warning(
+                "[AuthShortcuts:battlenet] store not registered",
+            )
+            return {"success": False, "error": "store_not_found"}
+        if not hasattr(store, "get_auth_shortcut_context"):
+            logger.warning(
+                "[AuthShortcuts:battlenet] store lacks "
+                "get_auth_shortcut_context method",
+            )
+            return {"success": False, "error": "auth_shortcut_not_supported"}
+        result = await store.get_auth_shortcut_context()
+        logger.info(
+            "[AuthShortcuts:battlenet] context resolved: success=%s "
+            "appid=%s",
+            result.get("success"),
+            result.get("appid_unsigned"),
+        )
+        return result
+
     async def get_compat_tool_for_game(self, store_game_id: str) -> Any:
         """See full doc on the body — logging-wrapped variant."""
         logger.info(

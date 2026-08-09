@@ -26,6 +26,7 @@ import { invalidateGameInfo } from "../hooks/useGameInfo";
 import { bumpGameStateVersion } from "../lib/game-state-version";
 import { friendlyDownloadError } from "../lib/download-errors";
 import { launchUbisoftInstallViaShortcut } from "../utils/ubisoftShortcutLaunch";
+import { launchBattlenetInstallViaShortcut } from "../utils/battlenetShortcutLaunch";
 import type { DownloadItem, DownloadQueueInfo } from "../types/downloads";
 
 // ── Helpers (moved from DownloadContext) ─────────────────
@@ -221,6 +222,31 @@ class DownloadStoreImpl {
               this._ubisoftLaunched.delete(storeGameId);
               console.error(
                 "[DownloadStore] Ubisoft UPC RunGame failed:",
+                result.error,
+              );
+            }
+          });
+        },
+      ),
+    );
+
+    // Battle.net install — open the client via Steam's RunGame. The user
+    // presses Install inside it; `--exec="install <FAMILY>"` does not start
+    // a download, which was measured against the current client.
+    this._unsubs.push(
+      EventBusClient.subscribe(
+        "battlenet_install_launch_requested",
+        (payload) => {
+          const storeGameId = (payload as { store_game_id?: unknown })
+            .store_game_id;
+          if (typeof storeGameId !== "string" || !storeGameId) return;
+          if (this._ubisoftLaunched.has(storeGameId)) return;
+          this._ubisoftLaunched.add(storeGameId);
+          void launchBattlenetInstallViaShortcut(storeGameId).then((result) => {
+            if (!result.success) {
+              this._ubisoftLaunched.delete(storeGameId);
+              console.error(
+                "[DownloadStore] Battle.net RunGame failed:",
                 result.error,
               );
             }

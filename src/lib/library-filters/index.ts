@@ -31,6 +31,7 @@ export type StoreSlug =
   | "gog"
   | "amazon"
   | "ubisoft"
+  | "battlenet"
   | "microsoft";
 
 export type FilterType =
@@ -382,6 +383,7 @@ export async function loadUnifideckCache(): Promise<void> {
       gog: 0,
       amazon: 0,
       ubisoft: 0,
+      battlenet: 0,
       microsoft: 0,
     };
     for (const g of games ?? []) {

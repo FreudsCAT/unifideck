@@ -777,6 +777,10 @@ build_local() {
         "py_modules/unifideck/stores/amazon/amazon_store.py"
         "py_modules/unifideck/stores/ubisoft/__init__.py"
         "py_modules/unifideck/stores/ubisoft/store.py"
+    "py_modules/unifideck/stores/battlenet/__init__.py"
+    "py_modules/unifideck/stores/battlenet/store.py"
+    "py_modules/unifideck/launcher/proton/handlers/battlenet.py"
+    "py_modules/unifideck/launcher/proton/wrapper_stores.py"
         "py_modules/unifideck/stores/microsoft/__init__.py"
         "py_modules/unifideck/stores/microsoft/microsoft_store.py"
 

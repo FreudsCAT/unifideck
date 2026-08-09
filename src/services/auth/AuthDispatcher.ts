@@ -36,6 +36,7 @@ import {
   launchMicrosoftAuthViaShortcut,
 } from "../../utils/authShortcutLaunch";
 import { launchUbisoftAuthViaShortcut } from "../../utils/ubisoftShortcutLaunch";
+import { launchBattlenetAuthViaShortcut } from "../../utils/battlenetShortcutLaunch";
 import type { StoreId, AuthResult } from "../../types/api";
 
 const AUTH_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes ceiling
@@ -254,6 +255,8 @@ class AuthDispatcherImpl {
         return launchMicrosoftAuthViaShortcut();
       case "ubisoft":
         return launchUbisoftAuthViaShortcut();
+      case "battlenet":
+        return launchBattlenetAuthViaShortcut();
       default:
         return { success: false, error: `no launcher wired for ${store}` };
     }

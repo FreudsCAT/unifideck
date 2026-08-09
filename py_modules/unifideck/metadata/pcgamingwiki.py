@@ -60,6 +60,7 @@ _PLATFORM_TO_STORES: dict[str, list[str]] = {
     "steam": ["steam"],
     "origin": ["origin"],
     "ubisoft connect": ["uplay"],
+    "battle.net": ["blizzard", "battlenet"],
     "uplay": ["uplay"],
 }
 

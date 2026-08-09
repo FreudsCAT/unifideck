@@ -51,6 +51,7 @@ DEFAULT_INSTALL_DIRS = {
     "gog": "~/GOG Games",
     "amazon": "~/Games/Amazon",
     "microsoft": "~/Games/Microsoft",
+    "battlenet": "~/Games/Battlenet",
     "ubisoft": "~/Games/Ubisoft",
 }
 

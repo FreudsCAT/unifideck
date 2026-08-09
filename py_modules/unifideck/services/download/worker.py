@@ -26,6 +26,10 @@ from unifideck.launcher.proton.wrapper_stores import uses_manual_download_phase
 
 from .models import MAX_FINISHED_HISTORY, DownloadItem, classify_download_error
 from .worker_helpers import apply_dict_progress, track_task
+from .wrapper_signals import (
+    make_ubisoft_launch_signal,
+    signal_battlenet_install,
+)
 
 if TYPE_CHECKING:
     from unifideck.core.types import InstallResult
@@ -256,8 +260,16 @@ class _WorkerMixin:
                 item.game_id,
                 progress_cb=progress_cb,
                 install_path=item.install_path or None,
-                on_ready=self._make_ubisoft_launch_signal(item),
+                on_ready=make_ubisoft_launch_signal(self._bus, item),
             )
+        if item.store == "battlenet":
+            # Kept separate from Ubisoft rather than merged: the signal
+            # factories differ, and a shared shape would be a lie once EA
+            # App adds a third.
+            result = await store.install_game(item.game_id)
+            if result.success:
+                await signal_battlenet_install(self._bus, item)
+            return result
         # GOG and Epic honour a user-picked install language (GOG via
         # gogdl's --lang, Epic via a legendary SDL install tag); the
         # other stores don't accept the kwarg, so only pass it to those.
@@ -273,32 +285,6 @@ class _WorkerMixin:
             progress_cb=progress_cb,
             **extra,
         )
-
-    def _make_ubisoft_launch_signal(self, item: DownloadItem) -> Any:
-        """Build the post-bootstrap callback that asks the frontend to
-        open Ubisoft Connect via RunGame.
-
-        Ubisoft installs can't spawn UPC from the backend — in Gaming
-        Mode a bare subprocess has no gamescope session, so the window
-        never appears. Instead the installer bootstraps the per-game
-        prefix and then invokes this callback; we emit
-        ``UBISOFT_INSTALL_LAUNCH_REQUESTED`` and the frontend reacts by
-        calling ``RunGame`` (which gives UPC its own session). The worker
-        then keeps monitoring the prefix for the installed files.
-        """
-        async def _signal() -> None:
-            if not self._bus:
-                return
-            from unifideck.core.types.events import Events
-            await self._bus.emit(
-                Events.UBISOFT_INSTALL_LAUNCH_REQUESTED,
-                store_game_id=f"ubisoft:{item.game_id}",
-            )
-            logger.info(
-                "[DownloadWorker] requested UPC launch for ubisoft:%s",
-                item.game_id,
-            )
-        return _signal
 
     async def _on_install_success(
         self, item: DownloadItem, result: InstallResult, store: StoreBase, key: str,

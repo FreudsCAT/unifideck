@@ -63,6 +63,7 @@ export const Events = {
   // by the download worker once the per-game prefix is bootstrapped.
   // Payload: { store_game_id: "ubisoft:<game_id>" }.
   UBISOFT_INSTALL_LAUNCH_REQUESTED: "ubisoft_install_launch_requested",
+  BATTLENET_INSTALL_LAUNCH_REQUESTED: "battlenet_install_launch_requested",
   // Game state
   GAME_INSTALLED: "game_installed",
   GAME_UNINSTALLED: "game_uninstalled",

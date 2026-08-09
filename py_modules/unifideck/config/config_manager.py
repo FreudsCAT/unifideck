@@ -50,6 +50,7 @@ _FALLBACK: dict[str, Any] = {
         "gog": {"client_secret": ""},
         "amazon": {},
         "ubisoft": {},
+        "battlenet": {},
         "microsoft": {},
     },
 }

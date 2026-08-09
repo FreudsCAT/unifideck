@@ -148,6 +148,7 @@ class Events(StrEnum):
     # by calling ``launchUbisoftInstallViaShortcut`` with an ``install``
     # action and the worker then monitors the filesystem for the install.
     # Payload fields: store_game_id (str — "ubisoft:<game_id>").
+    BATTLENET_INSTALL_LAUNCH_REQUESTED = "battlenet_install_launch_requested"
     UBISOFT_INSTALL_LAUNCH_REQUESTED = "ubisoft_install_launch_requested"
 
     # Generic store error
@@ -344,6 +345,7 @@ class StoreEnum(StrEnum):
     AMAZON = "amazon"
     MICROSOFT = "microsoft"
     UBISOFT = "ubisoft"
+    BATTLENET = "battlenet"
 
 
 class OwnershipType(StrEnum):

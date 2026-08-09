@@ -349,7 +349,22 @@
       "ubisoftAuthPrefixNotReady": "Ubisoft Connect ist nicht bereit",
       "ubisoftAuthPrefixNotReadyMessage": "Ubisoft Connect konnte nicht für die Anmeldung vorbereitet werden. Versuche es in einem Moment erneut.",
       "ubisoftLaunchIdMissing": "Ubisoft Connect wird geöffnet",
-      "ubisoftLaunchIdMissingMessage": "Die Start-ID für dieses Spiel konnte nicht ermittelt werden – Ubisoft Connect wird geöffnet, damit du es aus deiner Bibliothek starten kannst. Führe eine Bibliotheks-Synchronisierung erneut aus, um den Direktstart zu reparieren."
+      "ubisoftLaunchIdMissingMessage": "Die Start-ID für dieses Spiel konnte nicht ermittelt werden – Ubisoft Connect wird geöffnet, damit du es aus deiner Bibliothek starten kannst. Führe eine Bibliotheks-Synchronisierung erneut aus, um den Direktstart zu reparieren.",
+      "startingBattlenetGame": "Starting {{gameTitle}} through Battle.net…",
+      "battlenetStartingClient": "Opening Battle.net",
+      "battlenetStartingClientMessage": "Waiting for the Battle.net client to be ready…",
+      "battlenetClientNotReady": "Battle.net Didn't Start",
+      "battlenetClientNotReadyMessage": "The Battle.net client did not finish starting. It may be applying an update — try again in a moment.",
+      "battlenetFamilyMissing": "Can't Launch This Game",
+      "battlenetFamilyMissingMessage": "Unifideck doesn't know Battle.net's code for {{gameTitle}}. Re-sync your library to refresh it.",
+      "battlenetLaunchNotObserved": "Game Didn't Start",
+      "battlenetLaunchNotObservedMessage": "Battle.net accepted the launch for {{gameTitle}} but no game started. Its launch code may have changed — re-sync to refresh it.",
+      "battlenetPrefixNotReady": "Battle.net Not Installed",
+      "battlenetPrefixNotReadyMessage": "The Battle.net client isn't set up for {{gameTitle}} yet. Reinstall the game to rebuild it.",
+      "signingInBattlenet": "Battle.net Sign-In",
+      "signingInBattlenetMessage": "Opening the Battle.net client so you can sign in…",
+      "installingBattlenet": "Installing via Battle.net",
+      "installingBattlenetMessage": "Opening Battle.net — press Install there to start the download for {{gameTitle}}."
     },
     "updateComplete": "Update abgeschlossen!",
     "updateCompleteMessage": "{{title}} wurde aktualisiert.",
@@ -504,7 +519,8 @@
     "gog": "GOG",
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
-    "microsoft": "Microsoft"
+    "microsoft": "Microsoft",
+    "battlenet": "Battle.net"
   },
   "unifiedLibrary": {
     "error": "Unifideck-Fehler",

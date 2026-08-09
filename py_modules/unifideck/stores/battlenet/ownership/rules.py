@@ -28,6 +28,7 @@ to "not owned" rather than granting everything.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 # Rules whose actions are all evaluated.
@@ -100,28 +101,40 @@ def _match_flag(criteria: object, facts: AccountFacts) -> bool:
     return any(f in facts.flags for f in _as_list(criteria) if isinstance(f, str))
 
 
+def _match_all_of(value: object, facts: AccountFacts) -> bool:
+    return all(matches(c, facts) for c in _as_list(value))
+
+
+def _match_any_of(value: object, facts: AccountFacts) -> bool:
+    return any(matches(c, facts) for c in _as_list(value))
+
+
+def _match_not(value: object, facts: AccountFacts) -> bool:
+    return not matches(value, facts)
+
+
+# The grammar as data. A key absent from here evaluates False — inventing
+# ownership is worse than missing it, so an unfamiliar future criterion
+# degrades to "not owned" rather than granting everything.
+_MATCHERS: dict[str, Callable[[object, AccountFacts], bool]] = {
+    "license_id": _match_licence,
+    "game_account": _match_game_account,
+    "flag": _match_flag,
+    "all_of": _match_all_of,
+    "any_of": _match_any_of,
+    "not": _match_not,
+}
+
+
 def matches(criteria: object, facts: AccountFacts) -> bool:
     """Evaluate one ``match`` block. Unknown keys are False, never True."""
     if not isinstance(criteria, dict) or not criteria:
         return False
-    results: list[bool] = []
-    for key, value in criteria.items():
-        if key == "license_id":
-            results.append(_match_licence(value, facts))
-        elif key == "game_account":
-            results.append(_match_game_account(value, facts))
-        elif key == "flag":
-            results.append(_match_flag(value, facts))
-        elif key == "all_of":
-            results.append(all(matches(c, facts) for c in _as_list(value)))
-        elif key == "any_of":
-            results.append(any(matches(c, facts) for c in _as_list(value)))
-        elif key == "not":
-            results.append(not matches(value, facts))
-        else:
-            results.append(False)
     # Sibling keys within one match block are conjunctive.
-    return all(results)
+    return all(
+        _MATCHERS[key](value, facts) if key in _MATCHERS else False
+        for key, value in criteria.items()
+    )
 
 
 def _action_tags(items: list[object]) -> set[str]:

@@ -166,7 +166,7 @@ export interface StoreInfo {
  * accepting a store argument validates against this
  * union and rejects anything else. Adding a 6th store
  * therefore requires a coordinated change in both
- * `core/types/store_id.py` and this file.
+ * `core/types/events.py` (StoreEnum) and this file.
  */
 export type StoreId =
   | "steam"
@@ -174,7 +174,8 @@ export type StoreId =
   | "gog"
   | "amazon"
   | "microsoft"
-  | "ubisoft";
+  | "ubisoft"
+  | "battlenet";
 
 /**
  * Per-store availability + auth state, returned by
