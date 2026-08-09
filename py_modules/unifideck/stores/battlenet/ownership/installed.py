@@ -47,6 +47,10 @@ class InstalledGame:
     """One entry from ``aggregate.json``, enriched from ``product.db``."""
 
     code: str
+    # The install variant id, e.g. 'hs_beta' for product code 'hsb'. This is
+    # the join key against the catalog, which addresses titles by uid;
+    # matching on `code` fails because the catalog never mentions it.
+    uid: str | None = None
     name: str | None = None
     exe_windows_path: str | None = None
     launch_uri: str | None = None
@@ -136,6 +140,7 @@ def merge_install_state(
             continue
         merged[code] = replace(
             game,
+            uid=product.uid,
             install_path=product.install_path,
             version=product.version,
             total_bytes=product.total_bytes,
@@ -146,6 +151,7 @@ def merge_install_state(
         if code not in merged:
             merged[code] = InstalledGame(
                 code=code,
+                uid=product.uid,
                 install_path=product.install_path,
                 version=product.version,
                 total_bytes=product.total_bytes,

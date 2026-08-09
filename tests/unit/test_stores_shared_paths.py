@@ -18,7 +18,6 @@ from unifideck.stores.shared.install_base import (
 )
 from unifideck.stores.shared.wine_path import wine_path_to_linux
 
-
 # --------------------------------------------------------------------------
 # wine path conversion
 # --------------------------------------------------------------------------

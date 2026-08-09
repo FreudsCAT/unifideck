@@ -1,0 +1,117 @@
+"""Prefix tweaks the Battle.net client needs before it will behave.
+
+py_modules/unifideck/stores/battlenet/prefix/tweaks.py
+
+Each of these is on-disk state that must exist *before* the client's first
+run, so they cannot live in the launch environment:
+
+* ``Battle.net.config`` with hardware acceleration, sound and streaming
+  disabled. Without the HW-accel change the login view renders as a
+  spinner with no login buttons — the long-standing Wine symptom Lutris
+  also works around.
+* ``HKCU\\Software\\Wine\\DXVA2`` ``backend=va``, from Lutris' shipped
+  install script.
+
+Applied under a **versioned marker** so a future tweak change re-applies
+itself on the next launch rather than needing a prefix rebuild — the same
+``.v2`` self-heal idiom the GOG registry fix uses.
+
+Deliberately *not* here: ``WINE_SIMULATE_WRITECOPY``, ``PROTON_USE_XALIA``
+and ``WINEDLLOVERRIDES``. Those are launch-time environment, and they
+belong in the launcher's env builder so they apply to every invocation
+including install and auth, not just the ones that happen to run after a
+tweak pass.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# Bump when the tweak content changes; the old marker no longer matches and
+# the tweaks re-apply on the next launch.
+TWEAKS_MARKER = ".unifideck_battlenet_tweaks.v1"
+
+CONFIG_RELATIVE = "users/steamuser/AppData/Roaming/Battle.net/Battle.net.config"
+
+# Client-side settings. HardwareAcceleration is the load-bearing one.
+_CLIENT_SETTINGS: dict[str, object] = {
+    "HardwareAcceleration": "false",
+    "Sound": "false",
+    "Streaming": "false",
+}
+
+# Written by the caller into the prefix registry; kept here so the whole
+# tweak surface is visible in one place.
+DXVA2_REGISTRY = (r"HKEY_CURRENT_USER\Software\Wine\DXVA2", "backend", "va")
+
+
+def tweaks_applied(prefix: Path) -> bool:
+    """True when this prefix already has the current tweak generation."""
+    return (Path(prefix) / TWEAKS_MARKER).exists()
+
+
+def _load_config(path: Path) -> dict[str, object]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_client_config(drive_c: Path) -> bool:
+    """Merge our settings into ``Battle.net.config``, preserving the rest.
+
+    Merged rather than overwritten on purpose: the file also carries the
+    user's saved account name and auto-login state, and clobbering it would
+    silently sign them out of a prefix they had already authenticated.
+    """
+    path = Path(drive_c) / CONFIG_RELATIVE
+    config = _load_config(path)
+    client = config.get("Client")
+    if not isinstance(client, dict):
+        client = {}
+    client.update(_CLIENT_SETTINGS)
+    config["Client"] = client
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(config, indent=4), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("[Battlenet] cannot write %s: %s", path, exc)
+        return False
+    return True
+
+
+def mark_applied(prefix: Path) -> bool:
+    try:
+        (Path(prefix) / TWEAKS_MARKER).write_text("", encoding="utf-8")
+    except OSError as exc:
+        logger.warning("[Battlenet] cannot mark tweaks applied: %s", exc)
+        return False
+    return True
+
+
+def clear_client_credentials(drive_c: Path) -> bool:
+    """Sign the client out by dropping its saved-account keys.
+
+    Used by "sign out of the Battle.net client", which is deliberately
+    separate from ``logout()``: the plugin's logout must never touch a
+    prefix, because for this store the prefix holds the game.
+    """
+    path = Path(drive_c) / CONFIG_RELATIVE
+    config = _load_config(path)
+    client = config.get("Client")
+    if not isinstance(client, dict):
+        return True
+    for key in ("SavedAccountNames", "AutoLogin", "LastLoginAddress", "LastLoginRegion"):
+        client.pop(key, None)
+    config["Client"] = client
+    try:
+        path.write_text(json.dumps(config, indent=4), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("[Battlenet] cannot clear credentials in %s: %s", path, exc)
+        return False
+    return True

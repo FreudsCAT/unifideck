@@ -62,6 +62,13 @@ _STORE_INJECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
     "ubisoft": (
         ("_shortcut_service", "shortcut"),
     ),
+    # Battle.net signs in through the vendor client in its own prefix, so it
+    # needs the shortcut service to place the auth tile. It deliberately does
+    # NOT take the Edge/CDP services: ownership is read from the client's
+    # local licence ledger, and the web endpoint is optional enrichment only.
+    "battlenet": (
+        ("_shortcut_service", "shortcut"),
+    ),
 }
 
 
