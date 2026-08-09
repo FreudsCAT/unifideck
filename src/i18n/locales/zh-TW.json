@@ -1003,7 +1003,7 @@
   },
   "collectionSettings": {
     "title": "STEAM 收藏",
-    "enabled": "收藏功能已啟用",
-    "disabled": "收藏功能已停用"
+    "enabled": "已啟用收藏",
+    "disabled": "已停用收藏"
   }
 }
