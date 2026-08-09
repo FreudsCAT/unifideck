@@ -214,19 +214,22 @@ def _resolve_epic_language(plan: ProtonLaunchPlan) -> str:
         return override
     try:
         from unifideck.config.config_manager import ConfigManager
+        from unifideck.config.defaults_path import resolve_defaults_config_path
         from unifideck.config.user_config_path import resolve_user_config_path
         from unifideck.launcher.proton.language_setup import (
             get_unifideck_language,
         )
-        # ``user_path`` is what makes this read the language the user PICKED.
-        # Without it ``ConfigManager`` sees only ``defaults/config.json``,
-        # whose ``ui.locale`` is ``"auto"`` — no locale matches, so
-        # ``get_unifideck_locale`` falls through to the system POSIX locale and
-        # the Unifideck language dropdown has no effect on Epic games at all.
-        # It looks right on a machine whose OS language already matches, which
-        # is exactly why it survives testing.
+        # Both arguments matter, and neither was here before.
+        # ``resolve_defaults_config_path`` finds the bundled config on a
+        # Decky CLI build, which flattens ``defaults/`` to the install
+        # root; the hardcoded nested path found nothing there.
+        # ``user_path`` is what makes this see the language the user
+        # actually PICKED. Without them the merged view was the hardcoded
+        # _FALLBACK alone, so the setting had no effect on Epic titles —
+        # and it still looked right on any machine already in that
+        # language, which is why it survived casual testing.
         config = ConfigManager(
-            str(plan.context.plugin_dir / "defaults" / "config.json"),
+            resolve_defaults_config_path(plan.context.plugin_dir),
             user_path=resolve_user_config_path(),
         )
         locale_tag = get_unifideck_language(config)
