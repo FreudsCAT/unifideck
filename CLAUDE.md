@@ -63,29 +63,57 @@ está en `01ea75a`, con los PR #1–#4 mergeados.
 
 ### 1. Idioma de los juegos de Epic que ignoran `-epiclocale`
 
-Síntoma reproducido: Overcooked 2 (`epic:Potoo`) arranca en inglés con
-`ui.locale = es-ES`. **No es una regresión del PR #1** — ese arreglo funciona.
-El log lo prueba: `resolved language es from config locale es-ES`, y
-`--language es` llega a legendary, que lo traduce a `-epiclocale=es`. Dying
-Light lo respeta; Overcooked 2 no, porque es Unity y lee el idioma del sistema
-operativo, no los parámetros de Epic.
+Síntoma: Overcooked 2 (`epic:Potoo`) arranca en inglés con `ui.locale = es-ES`.
+**No es el bug del PR #1** — ese arreglo funciona y está verificado: el log dice
+`language es-ES → -epiclocale=es` y el parámetro llega a la línea de órdenes
+real del juego. Dying Light lo respeta; Overcooked 2 no.
 
-El hueco: `launcher/proton/language_setup/` tiene `amazon.py` y `ubisoft.py`,
-que llaman a `registry_io._apply_windows_locale` para escribir
-`[Control Panel\International]` en el `user.reg` del prefijo. **Para Epic no
-existe**, así que Epic tiene una palanca donde los otros tienen dos.
+**Descartado en dispositivo el 2026-08-09 — no repetirlo:**
 
-Trabajo: añadir `language_setup/epic.py` calcado de `amazon.py` (~12 líneas) y
-llamarlo desde `handlers/epic.py::epic_launch`. `es-ES` ya está en
-`LOCALE_MAP` (`00000c0a`, `ESN`, Spain), no hay tabla nueva que mantener.
+- **No es el locale de Windows del prefijo.** Se escribieron a mano las cuatro
+  claves de `[Control Panel\International]` (`Locale=00000c0a`,
+  `LocaleName=es-ES`, `sLanguage=ESN`, `sCountry=Spain`) en
+  `prefixes/Potoo/pfx/user.reg` — exactamente lo que escribiría
+  `registry_io._apply_windows_locale` — y el juego **siguió en inglés**. La
+  hipótesis de que un juego Unity lee `Application.systemLanguage` no se
+  sostiene aquí, así que un `language_setup/epic.py` calcado de `amazon.py`
+  **no arreglaría este título**. Podría seguir sirviendo para otros juegos de
+  Epic, pero ya no hay motivo para darlo por hecho.
+- **No es `write_app_language`.** `stores/epic/install.py:220` ya la llama al
+  instalar, y solo fija el valor que legendary usa para `-epiclocale` — la
+  misma palanca que el juego ignora.
+- **No es que falten los textos.** La copia de GOG del mismo juego
+  (`gog:1297999995`) arranca en español, así que la localización existe.
 
-Dos avisos que hay que dar antes de empezar: no garantiza español si el juego no
-trae los textos, y cambia el prefijo entero (igual que ya se hace con Amazon y
-Ubisoft).
+La diferencia real con GOG: `stores/gog/install/progress.py:144` pasa
+`--lang` a gogdl, que **descarga los ficheros de ese idioma** y escribe el
+`goggame-<id>.info`. legendary no hace nada equivalente; los juegos de Epic
+traen todos los idiomas y eligen en tiempo de ejecución.
+
+Siguiente pista, sin explorar: el juego debe guardar su idioma en un ajuste
+propio dentro del prefijo. El resolutor de partidas en la nube ya conoce la
+ruta — `drive_c/users/steamuser/AppData/LocalLow/Team17/Overcooked2/` — y los
+juegos de Unity suelen usar ahí un fichero de preferencias o una clave de
+registro bajo `HKCU\Software\Team17`. Mirar qué cambia al elegir idioma dentro
+del propio juego es la vía barata.
 
 De paso, comprobar `handlers/generic.py::_amazon_launch`: construye
 `ConfigManager` sin `user_path`, que es el mismo patrón que causaba el bug del
 PR #1. Puede que Amazon tampoco lea la elección del usuario.
+
+### 1b. `ui.locale = "auto"` no sirve en una Steam Deck
+
+Con `auto`, `utils/locale.py::_detect_system_locale` usa `locale.getlocale()`,
+o sea `LANG`. SteamOS se queda en `en_US.UTF-8` de fábrica y el idioma real lo
+elige el usuario dentro de Steam, que no lo exporta al entorno. Verificado: con
+`auto`, Dying Light arranca en inglés en una máquina cuyo usuario tiene Steam
+en español.
+
+Arreglo propuesto: un nivel intermedio que lea el idioma de Steam en
+`~/.steam/registry.vdf` (`HKCU/Software/Valve/Steam`, valores tipo `spanish`,
+`koreana`, `schinese`) entre la elección explícita y el locale POSIX.
+`steam/current_user.py:60-62` ya lee ese fichero y resuelve sus tres rutas
+posibles. Haría falta una tabla nombre-de-Steam → BCP-47.
 
 ### 2. Selector de Proton propio en Unifideck
 
