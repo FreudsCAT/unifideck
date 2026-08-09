@@ -488,7 +488,9 @@
     "downloadProgress": "Grafiken heruntergeladen: {{synced}}/{{total}} ({{game}})"
   },
   "deckTabs": {
-    "greatOnDeck": "Für das Steam Deck optimierte Spiele",
+    "greatOnDeck": "Hervorragend auf Deck",
+    "greatOnMachine": "Für Steam Machine optimierte Spiele",
+    "steamOSCompatible": "Mit SteamOS kompatibel",
     "allGames": "Alle Spiele",
     "installed": "Installiert",
     "nonSteam": "Steam-Fremd",
