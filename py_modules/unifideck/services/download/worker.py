@@ -26,10 +26,7 @@ from unifideck.launcher.proton.wrapper_stores import uses_manual_download_phase
 
 from .models import MAX_FINISHED_HISTORY, DownloadItem, classify_download_error
 from .worker_helpers import apply_dict_progress, track_task
-from .wrapper_signals import (
-    make_ubisoft_launch_signal,
-    signal_battlenet_install,
-)
+from .wrapper_signals import make_launch_signal, signal_install_launch
 
 if TYPE_CHECKING:
     from unifideck.core.types import InstallResult
@@ -260,7 +257,7 @@ class _WorkerMixin:
                 item.game_id,
                 progress_cb=progress_cb,
                 install_path=item.install_path or None,
-                on_ready=make_ubisoft_launch_signal(self._bus, item),
+                on_ready=make_launch_signal(self._bus, item),
             )
         if item.store == "battlenet":
             # Kept separate from Ubisoft rather than merged: the signal
@@ -268,7 +265,7 @@ class _WorkerMixin:
             # App adds a third.
             result = await store.install_game(item.game_id)
             if result.success:
-                await signal_battlenet_install(self._bus, item)
+                await signal_install_launch(self._bus, item.store, item.game_id)
             return result
         # GOG and Epic honour a user-picked install language (GOG via
         # gogdl's --lang, Epic via a legendary SDL install tag); the

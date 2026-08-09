@@ -53,7 +53,13 @@ class _Cache:
 
 class _Config:
     def __init__(self, data_dir: Path, prefixes_dir: Path) -> None:
-        self._values = {"data_dir": str(data_dir), "prefixes_dir": str(prefixes_dir)}
+        self._values = {
+            "data_dir": str(data_dir),
+            "prefixes_dir": str(prefixes_dir),
+            # Isolated: the real cache may hold a genuine installer, which
+            # would make this test depend on the developer's machine.
+            "installer_cache_dir": str(data_dir / "installer-cache"),
+        }
 
     def get(self, key: str, default: Any = None) -> Any:
         return self._values if key == "stores.battlenet" else default
@@ -133,10 +139,44 @@ def test_empty_library_without_a_prefix_rather_than_an_error(store: BattlenetSto
     assert asyncio.run(store.get_library()) == []
 
 
-def test_start_auth_reports_a_missing_client_as_structured_error(store: BattlenetStore) -> None:
+def test_start_auth_bootstraps_the_client_when_it_is_missing(
+    store: BattlenetStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing is bundled — signing in fetches and installs the client."""
+    calls: list[Path] = []
+
+    async def fake_bootstrap(prefix: Path, **_kw: Any) -> Any:
+        from unifideck.stores.battlenet.prefix import BootstrapResult
+
+        calls.append(prefix)
+        return BootstrapResult(success=True)
+
+    monkeypatch.setattr(
+        "unifideck.stores.battlenet.store.bootstrap_client", fake_bootstrap,
+    )
+    result = asyncio.run(store.start_auth())
+    assert result.success is True
+    assert calls == [store.prefixes.auth_prefix]
+
+
+def test_start_auth_surfaces_a_bootstrap_failure(
+    store: BattlenetStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_bootstrap(prefix: Path, **_kw: Any) -> Any:
+        from unifideck.stores.battlenet.prefix import BootstrapResult
+
+        return BootstrapResult(
+            success=False,
+            error="32-bit Vulkan drivers are missing",
+            error_code="missing_32bit_vulkan",
+        )
+
+    monkeypatch.setattr(
+        "unifideck.stores.battlenet.store.bootstrap_client", fake_bootstrap,
+    )
     result = asyncio.run(store.start_auth())
     assert result.success is False
-    assert result.error_code == "client_not_installed"
+    assert result.error_code == "missing_32bit_vulkan"
     assert result.metadata["needs_bootstrap"] is True
 
 

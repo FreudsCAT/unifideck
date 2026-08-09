@@ -32,6 +32,10 @@ _FIELD_SPECS: dict[str, tuple[str, Any]] = {
         "?os=win&version=LIVE&gameProgram=BATTLENET_APP",
     ),
     "installer_filename": ("installer_filename", "Battle.net-Setup.exe"),
+    "installer_cache_dir": (
+        "installer_cache_dir",
+        "~/.local/share/unifideck/battlenet_installer_cache",
+    ),
     "client_ready_timeout_seconds": ("client_ready_timeout_seconds", 300),
     "game_appear_timeout_seconds": ("game_appear_timeout_seconds", 180),
     "install_poll_interval_seconds": ("install_poll_interval_seconds", 10),
@@ -53,6 +57,7 @@ class BattlenetConfig:
         "?os=win&version=LIVE&gameProgram=BATTLENET_APP"
     )
     installer_filename: str = "Battle.net-Setup.exe"
+    installer_cache_dir: str = "~/.local/share/unifideck/battlenet_installer_cache"
     client_ready_timeout_seconds: int = 300
     game_appear_timeout_seconds: int = 180
     install_poll_interval_seconds: int = 10
@@ -68,6 +73,11 @@ class BattlenetConfig:
     @property
     def prefixes_dir_path(self) -> Path:
         return Path(self.prefixes_dir).expanduser()
+
+    @property
+    def installer_path(self) -> Path:
+        """Where the downloaded client installer is cached."""
+        return Path(self.installer_cache_dir).expanduser() / self.installer_filename
 
     @property
     def id_map_path(self) -> Path:

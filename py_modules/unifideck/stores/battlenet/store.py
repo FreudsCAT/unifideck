@@ -36,7 +36,7 @@ from . import library as library_mod
 from . import paths
 from .id_map import BattlenetIdMap
 from .ownership import read_catalog
-from .prefix import BattlenetPrefixManager, inspect_prefix
+from .prefix import BattlenetPrefixManager, bootstrap_client, inspect_prefix
 
 if TYPE_CHECKING:
     from unifideck.core.cache_manager import CacheManager
@@ -79,6 +79,12 @@ class BattlenetStore(StoreBase):
     def _auth_drive_c(self) -> Path | None:
         """drive_c of the prefix the user signed into, if it exists."""
         return paths.drive_c(self.prefixes.auth_prefix)
+
+    def _wine_env(self) -> Any:
+        """umu / Proton / display resolution for backend-side installs."""
+        from unifideck.stores.shared.wine_env import WineEnvResolver
+
+        return WineEnvResolver("battlenet", self._plugin_dir)
 
     def _launcher_path(self) -> str:
         base = Path(self._plugin_dir) if self._plugin_dir else Path()
@@ -127,13 +133,23 @@ class BattlenetStore(StoreBase):
         """
         status = inspect_prefix(self.prefixes.auth_prefix)
         if not status.usable:
-            return AuthResult(
-                success=False,
-                error="Battle.net client is not installed yet",
-                error_code="client_not_installed",
-                store=self.store_name,
-                metadata={"needs_bootstrap": True},
+            # Nothing is bundled: fetch Blizzard's installer and run it into
+            # the auth prefix, the same shape as Ubisoft's UPC bootstrap.
+            logger.info("[Battlenet] auth prefix has no client — bootstrapping")
+            result = await bootstrap_client(
+                self.prefixes.auth_prefix,
+                installer_url=self.config.installer_url,
+                installer_cache=self.config.installer_path,
+                resolver=self._wine_env(),
             )
+            if not result.success:
+                return AuthResult(
+                    success=False,
+                    error=result.error,
+                    error_code=result.error_code,
+                    store=self.store_name,
+                    metadata={"needs_bootstrap": True},
+                )
         return AuthResult(
             success=True,
             store=self.store_name,

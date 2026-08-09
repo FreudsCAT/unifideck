@@ -8,6 +8,7 @@ cloned: a freshly installed client self-updates within minutes and then
 demands a restart via a modal nobody can click in Gaming Mode.
 """
 
+from .client_install import BootstrapResult, bootstrap_client, has_32bit_vulkan
 from .manager import (
     MARKER_FILENAME,
     WARMED_MARKER,
@@ -20,6 +21,9 @@ __all__ = [
     "MARKER_FILENAME",
     "WARMED_MARKER",
     "BattlenetPrefixManager",
+    "BootstrapResult",
     "PrefixStatus",
+    "bootstrap_client",
+    "has_32bit_vulkan",
     "inspect_prefix",
 ]
