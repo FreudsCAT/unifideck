@@ -37,9 +37,11 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections.abc import AsyncGenerator
 from pathlib import Path
 
 from unifideck.launcher.frontend_bridge import launcher_toast
+from unifideck.launcher.game_title import resolve_title
 from unifideck.launcher.proton.handlers import battlenet_watch as watch
 from unifideck.launcher.proton.handlers.battlenet_client import (
     find_client_exe,
@@ -74,7 +76,7 @@ def _fail(
     launcher_toast(
         f"toasts.launcher.{key}Message",
         i18n_title_key=f"toasts.launcher.{key}",
-        game_title=plan.context.game_key,
+        game_title=resolve_title(plan.context.game_key),
         severity="error",
     )
     plan.state.game_exit_code = rc
@@ -128,7 +130,7 @@ async def _bring_up_client(plan: ProtonLaunchPlan) -> Path:
         launcher_toast(
             "toasts.launcher.battlenetStartingClientMessage",
             i18n_title_key="toasts.launcher.battlenetStartingClient",
-            game_title=plan.context.game_key,
+            game_title=resolve_title(plan.context.game_key),
         )
         if not await watch.wait_for_client_ready(plan.prefix_path, CLIENT_READY_TIMEOUT):
             raise _fail(
@@ -157,14 +159,36 @@ async def battlenet_launch(plan: ProtonLaunchPlan) -> int:
     launcher_toast(
         "toasts.launcher.startingBattlenetGame",
         i18n_title_key="toasts.launcher.launchingGame",
-        game_title=plan.context.game_key,
+        game_title=resolve_title(plan.context.game_key),
     )
     client_exe = await _bring_up_client(plan)
     pid = await _issue_and_confirm(plan, client_exe, uid, family)
 
-    await watch.wait_for_exit(plan.prefix_path, pid)
+    async with _client_teardown(plan):
+        await watch.wait_for_exit(plan.prefix_path, pid)
     plan.state.game_exit_code = 0
     return 0
+
+
+@contextlib.asynccontextmanager
+async def _client_teardown(plan: ProtonLaunchPlan) -> AsyncGenerator[None]:
+    """Stop the client in this prefix when the run ends, however it ends.
+
+    The client is started detached (``start_new_session=True``), so it
+    outlives us by default: on a normal exit Steam marks the shortcut
+    stopped while Battle.net is still running, and on a stop from the UI
+    the SIGTERM reaches only this launcher. Either way the user is left
+    with a window whose "X" no longer talks to anything and a play session
+    that never closes.
+
+    Runs on cancellation too, which is the path the Steam stop button and
+    the QAM "X" actually take.
+    """
+    try:
+        yield
+    finally:
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(watch.stop_client, plan.prefix_path)
 
 
 async def _issue_and_confirm(
@@ -218,7 +242,8 @@ async def battlenet_auth_launch(plan: ProtonLaunchPlan) -> int:
         i18n_title_key="toasts.launcher.signingInBattlenet",
     )
     argv = [str(plan.python_bin), str(plan.umu_wrapper), str(launcher_exe)]
-    rc = await run_umu_with_retry(argv, env=plan.env, on_start=plan.on_process_start)
+    async with _client_teardown(plan):
+        rc = await run_umu_with_retry(argv, env=plan.env, on_start=plan.on_process_start)
     plan.state.game_exit_code = rc
     return rc
 
@@ -243,13 +268,14 @@ async def battlenet_install_launch(plan: ProtonLaunchPlan) -> int:
     launcher_toast(
         "toasts.launcher.installingBattlenetMessage",
         i18n_title_key="toasts.launcher.installingBattlenet",
-        game_title=plan.context.game_key,
+        game_title=resolve_title(plan.context.game_key),
     )
     client_exe = await _bring_up_client(plan)
     # Navigate to the game's page; the user presses Install there.
     await _issue_exec(plan, client_exe, f"launch {family}")
     # Stay alive while the client is up so Steam keeps the shortcut running
     # and the install window is not torn down under the user.
-    await watch.wait_while_client_running(plan.prefix_path)
+    async with _client_teardown(plan):
+        await watch.wait_while_client_running(plan.prefix_path)
     plan.state.game_exit_code = 0
     return 0

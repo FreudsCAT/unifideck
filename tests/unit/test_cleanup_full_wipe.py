@@ -159,6 +159,81 @@ async def test_delete_external_prefixes_reaches_out_of_tree(
     assert internal.exists()          # internal left to the data-dir wipe
 
 
+@pytest.mark.asyncio
+async def test_delete_external_prefixes_covers_every_wrapper_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A store missing from the sweep leaks whole Wine prefixes.
+
+    Each is gigabytes — the Battle.net one measured 2.5 GB on-device — and
+    an id map left unread is the only record of where they went, so nothing
+    later can find them either.
+    """
+    home = _fake_home(monkeypatch, tmp_path)
+    data = home / ".local/share/unifideck"
+    data.mkdir(parents=True)
+    ubi = home / "Games/prefixes/ubisoft/46"
+    bnet = home / "Games/prefixes/battlenet/D1"
+    for d in (ubi, bnet):
+        d.mkdir(parents=True)
+    (data / "ubisoft_id_map.json").write_text(
+        json.dumps({"46": {"prefix_path": str(ubi)}}),
+    )
+    (data / "battlenet_id_map.json").write_text(
+        json.dumps({"D1": {"family": "D1", "prefix_path": str(bnet)}}),
+    )
+    m = _mixin()
+
+    count = await m._delete_external_prefixes()
+
+    assert count == 2
+    assert not ubi.exists()
+    assert not bnet.exists()
+
+
+@pytest.mark.asyncio
+async def test_keeping_games_keeps_the_index_into_them(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The id map is what maps a uid to the prefix holding its files.
+
+    The resolvers deliberately never reconstruct a path from a uid, so a
+    non-destructive cleanup that kept ``prefixes/`` but deleted the map
+    turned every installed wrapper-store game into an unreachable orphan.
+    """
+    home = _fake_home(monkeypatch, tmp_path)
+    data = home / ".local/share/unifideck"
+    (data / "prefixes/battlenet/D1").mkdir(parents=True)
+    (data / "battlenet_id_map.json").write_text("{}")
+    (data / "ubisoft_id_map.json").write_text("{}")
+    (data / "library_cache.json").write_text("{}")
+    m = _mixin()
+
+    await m._wipe_data_dir(delete_files=False)
+
+    assert (data / "prefixes/battlenet/D1").exists()
+    assert (data / "battlenet_id_map.json").exists()
+    assert (data / "ubisoft_id_map.json").exists()
+    assert not (data / "library_cache.json").exists(), "caches must still go"
+
+
+@pytest.mark.asyncio
+async def test_destructive_cleanup_keeps_no_id_map(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """"Delete all data" means the maps go with the prefixes they index."""
+    home = _fake_home(monkeypatch, tmp_path)
+    data = home / ".local/share/unifideck"
+    (data / "prefixes/battlenet/D1").mkdir(parents=True)
+    (data / "battlenet_id_map.json").write_text("{}")
+    m = _mixin()
+
+    await m._wipe_data_dir(delete_files=True)
+
+    assert not (data / "battlenet_id_map.json").exists()
+    assert not (data / "prefixes").exists()
+
+
 # --------------------------------------------------------------------------
 # _wipe_config_auth — GOG creds vs preserved files
 # --------------------------------------------------------------------------

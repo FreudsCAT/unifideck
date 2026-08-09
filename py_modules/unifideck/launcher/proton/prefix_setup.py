@@ -331,9 +331,9 @@ def _nothing_to_do(
     """
     if prefix_owns_game_install(ctx.store):
         logger.info(
-            "[prefix_setup] skipping setup for ubisoft:%s — UPC owns this "
+            "[prefix_setup] skipping setup for %s — the %s client owns this "
             "prefix (compat is skipped and a reset would delete the game)",
-            ctx.game_id,
+            ctx.game_key, ctx.store,
         )
         return True
     if not _compat_pending(ctx, state, python_bin, default):

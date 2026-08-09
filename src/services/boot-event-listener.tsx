@@ -53,9 +53,14 @@ export function startBootEventListener(): () => void {
   unsubs.push(
     EventBusClient.subscribe("launcher_stage", (payload) => {
       const p = payload as ToastActionPayload;
-      const message = p.i18n_key
-        ? String(i18n.t(p.i18n_key, p.i18n_params as Record<string, string>))
-        : "";
+      // `game_title` arrives as a top-level field while the strings
+      // interpolate `{{gameTitle}}`; merging it here is what stops every
+      // launcher toast rendering with the placeholder unfilled.
+      const params = {
+        ...(p.game_title ? { gameTitle: String(p.game_title) } : {}),
+        ...((p.i18n_params ?? {}) as Record<string, string>),
+      } as Record<string, string>;
+      const message = p.i18n_key ? String(i18n.t(p.i18n_key, params)) : "";
       if (!message) return;
 
       // Cloud-save conflict → modal
@@ -99,9 +104,7 @@ export function startBootEventListener(): () => void {
 
       // Generic toast
       if (p.i18n_title_key) {
-        const title = String(
-          i18n.t(p.i18n_title_key, p.i18n_params as Record<string, string>),
-        );
+        const title = String(i18n.t(p.i18n_title_key, params));
         showToast(title, message, p.severity);
       } else {
         showToast(message, "", p.severity);

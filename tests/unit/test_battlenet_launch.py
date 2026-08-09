@@ -292,3 +292,88 @@ def test_gating_env_does_not_duplicate_locationapi() -> None:
     env = {"WINEDLLOVERRIDES": "locationapi=d;other=b"}
     _apply_battlenet_env(env)
     assert env["WINEDLLOVERRIDES"].count("locationapi") == 1
+
+
+# ── the readiness probe ───────────────────────────────────────────
+#
+# Measured on-device: /proc yielded the ``--from-launcher`` main process
+# (pid 69087) before the two live renderers (69473, 69551). The loop
+# returned that first process's verdict, so ``client_ready`` answered False
+# while the client was plainly up — every launch then failed after the full
+# 300 s timeout, and the install shortcut's keep-alive returned instantly.
+
+
+class _FakeProc:
+    """A /proc stand-in that preserves iteration order."""
+
+    def __init__(self, entries: list[tuple[str, str, str]]) -> None:
+        # (pid, cmdline, wineprefix)
+        self._entries = entries
+
+    def install(self, monkeypatch, watch_mod) -> None:
+        order = [pid for pid, _, _ in self._entries]
+        by_pid = {pid: (cmd, pfx) for pid, cmd, pfx in self._entries}
+        monkeypatch.setattr(watch_mod, "_pids", lambda: order)
+
+        def _field(pid: str, field: str) -> str:
+            cmd, pfx = by_pid.get(pid, ("", ""))
+            return cmd if field == "cmdline" else f"WINEPREFIX={pfx}\x00"
+
+        monkeypatch.setattr(watch_mod, "_proc_field", _field)
+
+
+PREFIX = "/prefixes/battlenet/D1"
+_EXE = "C:\\Program Files (x86)\\Battle.net\\Battle.net.exe"
+# NUL-separated, as /proc/<pid>/cmdline really is — a space-separated
+# fake makes the image name parse as "battle.net.exe --type=renderer".
+_MAIN = ("69087", f"{_EXE}\x00--from-launcher\x00", PREFIX)
+_R1 = ("69473", f"{_EXE}\x00--type=renderer\x00", PREFIX)
+_R2 = ("69551", f"{_EXE}\x00--type=renderer\x00", PREFIX)
+
+
+def test_ready_when_the_main_process_is_enumerated_first(monkeypatch) -> None:
+    """The exact on-device ordering that made every launch fail."""
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    _FakeProc([_MAIN, _R1, _R2]).install(monkeypatch, w)
+    assert w.client_ready(PREFIX) is True
+
+
+def test_ready_when_a_renderer_is_enumerated_first(monkeypatch) -> None:
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    _FakeProc([_R1, _MAIN]).install(monkeypatch, w)
+    assert w.client_ready(PREFIX) is True
+
+
+def test_not_ready_with_only_the_main_process(monkeypatch) -> None:
+    """No renderer means no window yet — it cannot accept --exec."""
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    _FakeProc([_MAIN]).install(monkeypatch, w)
+    assert w.client_ready(PREFIX) is False
+
+
+def test_running_is_weaker_than_ready(monkeypatch) -> None:
+    """Liveness must survive a moment with no renderer.
+
+    ``wait_while_client_running`` keyed on readiness returned on its first
+    poll, so Steam marked the install shortcut finished while the detached
+    client kept running — the tile stopped responding and the play session
+    never closed.
+    """
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    _FakeProc([_MAIN]).install(monkeypatch, w)
+    assert w.client_ready(PREFIX) is False
+    assert w.client_running(PREFIX) is True
+
+
+def test_another_prefix_client_is_not_ours(monkeypatch) -> None:
+    """A sibling Blizzard game's client must never count as this one's."""
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    other = ("70001", _R1[1], "/prefixes/battlenet/fenris")
+    _FakeProc([other]).install(monkeypatch, w)
+    assert w.client_ready(PREFIX) is False
+    assert w.client_running(PREFIX) is False

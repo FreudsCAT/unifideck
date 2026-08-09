@@ -355,11 +355,12 @@ def test_install_refuses_when_the_family_code_is_unknown(store: BattlenetStore) 
     assert result.error_code == "family_unknown"
 
 
-def test_install_refuses_when_the_template_is_not_warmed(store: BattlenetStore) -> None:
+def test_install_refuses_when_not_signed_in(store: BattlenetStore) -> None:
+    """No auth prefix means no session for the game prefix to inherit."""
     store.id_map.merge("wow", family="WoW")
     result = asyncio.run(store.install_game("wow"))
     assert result.success is False
-    assert result.error_code == "template_not_ready"
+    assert result.error_code == "not_signed_in"
 
 
 def test_check_for_updates_reports_nothing_rather_than_guessing(store: BattlenetStore) -> None:
@@ -432,9 +433,9 @@ def test_install_resolves_a_family_from_the_catalog_when_sync_has_not_run(
     uid = _catalog().entry_for("ARK").uid_for()
     assert store.id_map.resolve_family(uid) is None
 
-    # Fails later, on the template — but past the family gate, which is
-    # what this pins.
+    # Fails later, on the missing client — but past the family gate,
+    # which is what this pins.
     result = asyncio.run(store.install_game(uid))
 
-    assert result.error_code == "template_not_ready"
+    assert result.error_code == "not_signed_in"
     assert store.id_map.resolve_family(uid) == "ARK"

@@ -37,6 +37,15 @@ _AUTH_DATA_CANDIDATES = (
     "~/.local/share/unifideck/ubisoft_upc_session.txt",
 )
 
+# Wrapper-store id maps. Each records an absolute ``prefix_path`` per game,
+# which is the only way to find a prefix the user put on an SD card — the
+# data-dir wipe cannot reach those. Add a row when a wrapper store is added;
+# omitting one silently leaks gigabyte-sized Wine prefixes through cleanup.
+_WRAPPER_ID_MAPS = (
+    "~/.local/share/unifideck/ubisoft_id_map.json",
+    "~/.local/share/unifideck/battlenet_id_map.json",
+)
+
 # Unifideck-owned store creds under ``~/.config/unifideck`` (leaves the
 # user's ``config.json`` and Heroic's ``heroic_gogdl`` untouched).
 _CONFIG_AUTH_FILES = (
@@ -157,28 +166,35 @@ def sweep_data_dir(keep: frozenset[str]) -> int:
 def sweep_external_prefixes() -> int:
     """Delete per-game prefixes recorded *outside* the data dir.
 
-    Ubisoft games installed to SD/custom storage record an absolute
-    ``prefix_path`` in ``ubisoft_id_map.json`` that lives outside
-    ``~/.local/share/unifideck/prefixes``, so the blanket data-dir wipe
-    never reaches them. Internal prefixes are left to the data-dir wipe.
+    A wrapper-store game installed to SD/custom storage records an absolute
+    ``prefix_path`` in its id map that lives outside
+    ``~/.local/share/unifideck/prefixes``, so the blanket data-dir wipe never
+    reaches it. Internal prefixes are left to the data-dir wipe.
+
+    Every wrapper store's id map is read, not just Ubisoft's: the id maps
+    share this shape precisely so cleanup does not have to know which store
+    wrote them, and a store missing from this list leaks whole Wine prefixes
+    (gigabytes each) through "Delete all data".
     """
-    id_map = Path("~/.local/share/unifideck/ubisoft_id_map.json").expanduser()
     data_dir = str(Path("~/.local/share/unifideck").expanduser())
-    try:
-        data = json.loads(id_map.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return 0
-    if not isinstance(data, dict):
-        return 0
     count = 0
-    for entry in data.values():
-        p = entry.get("prefix_path") if isinstance(entry, dict) else None
-        if not p:
+    for id_map in _WRAPPER_ID_MAPS:
+        path = Path(id_map).expanduser()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
             continue
-        if str(Path(p).expanduser()).startswith(data_dir):
+        if not isinstance(data, dict):
             continue
-        if safe_rmtree(p):
-            count += 1
+        for entry in data.values():
+            p = entry.get("prefix_path") if isinstance(entry, dict) else None
+            if not p:
+                continue
+            if str(Path(p).expanduser()).startswith(data_dir):
+                continue
+            if safe_rmtree(p):
+                count += 1
+                logger.info("[cleanup] removed external prefix %s", p)
     return count
 
 

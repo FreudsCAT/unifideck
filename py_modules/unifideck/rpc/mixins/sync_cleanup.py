@@ -438,8 +438,22 @@ class CleanupRPCMixin:
     # game data — kept in non-destructive mode so "installed games stay on
     # disk and can be re-synced" (per the modal). Destructive removes these
     # too (this is where the ~20 GB of Proton prefixes lives).
+    # Non-destructive cleanup keeps the games, so it must also keep the only
+    # index into them. A wrapper store's id map is what maps a game uid to
+    # the prefix its files live in — and those resolvers deliberately never
+    # guess a path from a uid (a reconstructed path once stamped a marker
+    # into a directory no launch opened, wedging the prefix in a reset loop).
+    # Deleting the map while keeping ``prefixes/`` therefore turned every
+    # installed wrapper-store game into an unreachable multi-GB orphan:
+    # exactly the stale data this flow exists to remove.
     _DATA_DIR_KEEP_WHEN_KEEPING_GAMES = frozenset(
-        {"prefixes", "saves", "save_backups"},
+        {
+            "prefixes",
+            "saves",
+            "save_backups",
+            "ubisoft_id_map.json",
+            "battlenet_id_map.json",
+        },
     )
 
     async def _wipe_data_dir(self, delete_files: bool) -> int:

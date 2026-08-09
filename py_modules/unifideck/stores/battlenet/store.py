@@ -23,6 +23,7 @@ Delegation only. Every concern lives in its own module (``ownership/``,
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -116,55 +117,6 @@ class BattlenetStore(StoreBase):
             self._shortcut_service, self.AUTH_SHORTCUT, self._plugin_dir,
         )
 
-    async def ensure_template(self) -> bool:
-        """Build the template prefix that per-game prefixes are cloned from.
-
-        Cloning the *auth* prefix would copy the user's session into every
-        game prefix; the template is a separate pristine install. It is
-        marked warmed only after the client has run once and applied its
-        self-update, because a stale template makes every game prefix open
-        with a blocking "Required Update" modal nobody can click in Gaming
-        Mode.
-
-        Bounded by :data:`TEMPLATE_BOOTSTRAP_TIMEOUT`. This downloads and
-        silently installs the vendor client, and it is awaited from the
-        download worker — an installer that hangs (a dead CDN, a wedged
-        wineserver) would otherwise stall the whole download queue with no
-        way out but a plugin restart.
-        """
-        template = self.prefixes.template_prefix
-        if self.prefixes.template_ready():
-            return True
-        import asyncio
-
-        try:
-            result = await asyncio.wait_for(
-                bootstrap_client(
-                    template,
-                    installer_url=self.config.installer_url,
-                    installer_cache=self.config.installer_path,
-                    resolver=self._wine_env(),
-                ),
-                timeout=TEMPLATE_BOOTSTRAP_TIMEOUT,
-            )
-        except TimeoutError:
-            logger.exception(
-                "[Battlenet] template bootstrap timed out after %.0fs",
-                TEMPLATE_BOOTSTRAP_TIMEOUT,
-            )
-            return False
-        if not result.success:
-            logger.error("[Battlenet] template bootstrap failed: %s", result.error)
-            return False
-        # The installer ships the current build, so the freshly installed
-        # client is by definition not stale.
-        build = None
-        versions = paths.client_version_dirs(template)
-        if versions:
-            build = versions[-1].name.rsplit(".", 1)[-1]
-        self.prefixes.mark_template_warmed(client_build=build)
-        return True
-
     def _wine_env(self) -> Any:
         """umu / Proton / display resolution for backend-side installs."""
         from unifideck.stores.shared.wine_env import WineEnvResolver
@@ -202,7 +154,7 @@ class BattlenetStore(StoreBase):
         connected.
         """
         drive_c = self._auth_drive_c
-        if drive_c is None:
+        if drive_c is None or self._signed_out_marker.exists():
             self._cached_available = False
             return False
         from .ownership import read_licences
@@ -212,6 +164,22 @@ class BattlenetStore(StoreBase):
         self._cached_available = read_licences(drive_c).is_usable
         return self._cached_available
 
+    @property
+    def _signed_out_marker(self) -> Path:
+        """Set by logout, cleared by a successful sign-in.
+
+        Needed because nothing on disk distinguishes "signed in" from
+        "signed out but remembered". Measured across three prefixes: the
+        licence ledger AND the ``login_cache`` battle tag both survive a
+        sign-out — they are a cache of the last account, which is how the
+        client pre-fills the login form. Keying availability on either one
+        means the store reports connected forever.
+
+        A marker rather than deleting the prefix, because for this store the
+        prefix holds the user's installed games.
+        """
+        return self.config.prefixes_dir_path / ".unifideck_signed_out"
+
     async def start_auth(self, **_kwargs: Any) -> AuthResult:
         """Open the vendor client so the user can sign in.
 
@@ -220,6 +188,12 @@ class BattlenetStore(StoreBase):
         RunGame-ing an auth shortcut, because a backend-spawned process has
         no gamescope session in Gaming Mode.
         """
+        # Clear the signed-out marker up front. The client login happens in
+        # a subprocess we do not observe, so the moment the user asks to
+        # sign in is the last point we can reliably act; leaving it set
+        # would make a successful sign-in still read as disconnected.
+        with contextlib.suppress(OSError):
+            self._signed_out_marker.unlink(missing_ok=True)
         status = inspect_prefix(self.prefixes.auth_prefix)
         if not status.usable:
             # Nothing is bundled: fetch Blizzard's installer and run it into
@@ -246,50 +220,8 @@ class BattlenetStore(StoreBase):
             metadata={"pending": True, "prefix": str(self.prefixes.auth_prefix)},
         )
 
-    def _spawn_template_warm(self) -> None:
-        """Schedule :meth:`_warm_template_in_background`, if there is a loop.
-
-        ``complete_auth`` is also driven from tests and from the RPC layer
-        without a running loop in some paths; no loop simply means no warm,
-        and ``install_game`` builds the template itself.
-        """
-        import asyncio
-
-        if self.prefixes.template_ready():
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        task = loop.create_task(
-            self._warm_template_in_background(), name="battlenet_template_warm",
-        )
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
-
-    async def _warm_template_in_background(self) -> None:
-        """Build the template prefix off the install hot path.
-
-        ``install_game`` needs it and will build it on demand, but that runs
-        on the download worker and takes minutes with no progress to show —
-        the user sees an install that appears to do nothing. Sign-in is the
-        natural moment: the installer has just been fetched, so this is
-        mostly a second silent install into a second prefix, and by the time
-        the user picks a game it is already done.
-
-        Fire-and-forget and fully guarded: a failure here costs nothing,
-        because ``install_game`` still calls ``ensure_template`` itself.
-        """
-        try:
-            if await self.ensure_template():
-                logger.info("[Battlenet] template prefix warmed after sign-in")
-        except Exception:
-            logger.exception("[Battlenet] background template warm failed")
-
     async def complete_auth(self, **_kwargs: Any) -> AuthResult:
         signed_in = await self.is_available()
-        if signed_in:
-            self._spawn_template_warm()
         return AuthResult(
             success=signed_in,
             store=self.store_name,
@@ -309,10 +241,18 @@ class BattlenetStore(StoreBase):
             self._cache.clear("battlenet")
         except Exception:
             logger.warning("[Battlenet] cache invalidate failed during logout")
+        try:
+            self._signed_out_marker.parent.mkdir(parents=True, exist_ok=True)
+            self._signed_out_marker.touch()
+        except OSError:
+            logger.warning("[Battlenet] could not record the signed-out state")
         # STORE_LOGOUT is emitted by ``StoreRegistry.auth_action`` on a
         # successful logout, which is the only path that reaches here.
         # Emitting it again would deliver the event twice.
         self._cached_available = False
+        logger.info(
+            "[Battlenet] signed out (prefixes untouched — they hold the games)",
+        )
         return Result(success=True, store=self.store_name)
 
     async def get_library(self, *, force: bool = False) -> list[Game] | None:
@@ -395,13 +335,16 @@ class BattlenetStore(StoreBase):
                 ),
                 error_code="family_unknown",
             )
-        if not await self.ensure_template():
+        if not self.prefixes.auth_ready():
             return InstallResult(
                 success=False,
                 game_id=game_id,
                 store=self.store_name,
-                error="Could not prepare the Battle.net client template",
-                error_code="template_not_ready",
+                error=(
+                    "Sign in to Battle.net first — the game prefix inherits "
+                    "your signed-in session"
+                ),
+                error_code="not_signed_in",
             )
         prefix = await self.prefixes.create_game_prefix(game_id)
         if prefix is None:
@@ -409,8 +352,11 @@ class BattlenetStore(StoreBase):
                 success=False,
                 game_id=game_id,
                 store=self.store_name,
-                error="Battle.net client template is not ready",
-                error_code="template_not_ready",
+                error=(
+                    "Could not prepare the game's Battle.net prefix — close "
+                    "the Battle.net window and try again"
+                ),
+                error_code="prefix_clone_failed",
             )
         self.id_map.merge(game_id, prefix_path=str(prefix))
         return InstallResult(

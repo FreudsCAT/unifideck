@@ -24,6 +24,7 @@ Two measured facts shape the probes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -122,14 +123,15 @@ def scan(prefix: str | Path) -> list[tuple[str, str]]:
     return found
 
 
-def client_ready(prefix: str | Path) -> bool:
-    """True once the client can accept an ``--exec`` command.
+def _client_pids(prefix: str | Path) -> tuple[list[str], list[str]]:
+    """``(all_client_pids, renderer_pids)`` for the client in this prefix.
 
-    Keyed on a CEF renderer being up, which is the Linux-observable
-    equivalent of "the main window exists". A window probe is not usable:
-    xdotool cannot see into Gaming Mode's separate gamescope session.
+    One scan answering both questions, because they are asked together and
+    ``/proc`` is the expensive part.
     """
     target = _normalise_prefix(prefix)
+    everything: list[str] = []
+    renderers: list[str] = []
     for pid in _pids():
         cmdline = _proc_field(pid, "cmdline")
         if _RENDERER not in cmdline and _FROM_LAUNCHER not in cmdline:
@@ -137,9 +139,42 @@ def client_ready(prefix: str | Path) -> bool:
         if _image_name(cmdline) != "battle.net.exe":
             continue
         environ = _proc_field(pid, "environ")
-        if f"WINEPREFIX={target}" in environ or target in environ:
-            return _RENDERER in cmdline
-    return False
+        if f"WINEPREFIX={target}" not in environ and target not in environ:
+            continue
+        everything.append(pid)
+        if _RENDERER in cmdline:
+            renderers.append(pid)
+    return everything, renderers
+
+
+def client_ready(prefix: str | Path) -> bool:
+    """True once the client can accept an ``--exec`` command.
+
+    Keyed on a CEF renderer being up, which is the Linux-observable
+    equivalent of "the main window exists". A window probe is not usable:
+    xdotool cannot see into Gaming Mode's separate gamescope session.
+
+    **Every candidate is examined before concluding "no".** This used to
+    ``return`` the verdict for whichever process ``/proc`` yielded first,
+    and the ``--from-launcher`` main process starts first (so gets a lower
+    pid) and is not a renderer — so the probe answered False while two
+    renderers were running. Measured on-device: pid 69087 (main) shadowed
+    69473 and 69551 (both renderers), the client never became "ready", and
+    every launch failed after the full 300 s timeout.
+    """
+    return bool(_client_pids(prefix)[1])
+
+
+def client_running(prefix: str | Path) -> bool:
+    """True while *any* client process is alive in this prefix.
+
+    Deliberately weaker than :func:`client_ready`. Readiness asks "can it
+    accept a command yet"; liveness asks "is it still up". Using readiness
+    to decide when to stop waiting ends the wait during a client restart or
+    an update pass, when the renderer is momentarily gone but the client is
+    very much still running.
+    """
+    return bool(_client_pids(prefix)[0])
 
 
 def game_pids(prefix: str | Path) -> set[str]:
@@ -211,6 +246,52 @@ async def wait_while_client_running(prefix: str | Path, poll: float = 10.0) -> N
 
     Same reasoning as :func:`wait_for_exit`: the client is a detached
     process we do not own.
+
+    Waits on *liveness*, not readiness. Keyed on ``client_ready`` this
+    returned on the first poll — the readiness probe was answering False
+    for a running client — so Steam saw the install shortcut exit
+    immediately while the detached client stayed up: the tile stopped
+    responding, the playtime session never closed, and the window's "X"
+    had nothing left listening to it.
     """
-    while client_ready(prefix):  # noqa: ASYNC110 — external state, no event source
+    while client_running(prefix):  # noqa: ASYNC110 — external state, no event source
         await asyncio.sleep(poll)
+
+
+def stop_client(prefix: str | Path, *, timeout: float = 15.0) -> int:
+    """Terminate the client running in ``prefix``. Returns how many were signalled.
+
+    Scoped to this prefix by ``WINEPREFIX`` and signalled per-pid — never
+    ``killpg``. The process group here contains our own launcher (and, when
+    Steam wraps us, more besides), and group-killing a store's processes is
+    exactly how the legendary cancel path once took down its own subprocess
+    tree.
+
+    SIGTERM first so the client can flush its session — the token it
+    rotated during this run lives in ``CachedData.db`` and a SIGKILL can
+    lose it. SIGKILL only for what is still alive at the deadline.
+    """
+    import signal
+    import time
+
+    pids, _ = _client_pids(prefix)
+    if not pids:
+        return 0
+    logger.info("[battlenet] stopping %d client process(es) in %s", len(pids), prefix)
+    for pid in pids:
+        with contextlib.suppress(OSError, ValueError):
+            os.kill(int(pid), signal.SIGTERM)
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _client_pids(prefix)[0]:
+            logger.info("[battlenet] client stopped cleanly")
+            return len(pids)
+        time.sleep(0.5)
+
+    survivors, _ = _client_pids(prefix)
+    for pid in survivors:
+        logger.warning("[battlenet] client pid %s ignored SIGTERM — killing", pid)
+        with contextlib.suppress(OSError, ValueError):
+            os.kill(int(pid), signal.SIGKILL)
+    return len(pids)

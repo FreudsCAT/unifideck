@@ -22,7 +22,7 @@ import pytest
 from unifideck.stores.battlenet import paths
 from unifideck.stores.battlenet.prefix import (
     MARKER_FILENAME,
-    WARMED_MARKER,
+    DERIVED_MARKER,
     BattlenetPrefixManager,
     inspect_prefix,
 )
@@ -36,7 +36,15 @@ def _install_client(prefix: Path) -> None:
     (client / paths.LAUNCHER_EXE).write_bytes(b"MZ")
 
 
-def _make_template(root: Path, *, warmed: bool = True, marked: bool = True) -> Path:
+def _make_auth(root: Path) -> Path:
+    """A signed-in auth prefix — the only legitimate template source."""
+    auth = paths.auth_prefix(root)
+    auth.mkdir(parents=True, exist_ok=True)
+    _install_client(auth)
+    return auth
+
+
+def _make_template(root: Path, *, derived: bool = True, marked: bool = True) -> Path:
     template = paths.template_prefix(root)
     template.mkdir(parents=True, exist_ok=True)
     _install_client(template)
@@ -45,8 +53,8 @@ def _make_template(root: Path, *, warmed: bool = True, marked: bool = True) -> P
             template, MARKER_FILENAME,
             pc.PrefixMarker(store="battlenet", created_at=1.0, client_build="17651"),
         )
-    if warmed:
-        (template / WARMED_MARKER).write_text("17651")
+    if derived:
+        (template / DERIVED_MARKER).write_text("")
     return template
 
 
@@ -153,11 +161,27 @@ def test_three_tiers_have_distinct_paths(tmp_path: Path) -> None:
     assert len({mgr.auth_prefix, mgr.template_prefix, mgr.game_prefix("wow")}) == 3
 
 
-def test_refuses_to_clone_an_unwarmed_template(tmp_path: Path) -> None:
-    """Guards the 'Required Update' modal nobody can click in Gaming Mode."""
-    _make_template(tmp_path, warmed=False)
+def test_a_template_not_derived_from_auth_is_rebuilt(tmp_path: Path) -> None:
+    """The defect this whole tier exists to prevent.
+
+    A standalone template carries its own client identity, so the session
+    in a clone of it is rejected and the user is asked to sign in for
+    every game. Measured on-device: copying the token without a matching
+    ``GaClientId`` still produced a password form.
+    """
+    _make_template(tmp_path, derived=False)
+    _make_auth(tmp_path)
     mgr = BattlenetPrefixManager(tmp_path)
     assert mgr.template_ready() is False
+
+    assert asyncio.run(mgr.create_game_prefix("wow")) is not None
+    assert mgr.template_ready() is True, "template must be re-derived from auth"
+
+
+def test_refuses_to_clone_when_there_is_no_signed_in_auth_prefix(tmp_path: Path) -> None:
+    """No auth prefix means no session to inherit — refuse, do not guess."""
+    _make_template(tmp_path, derived=False)
+    mgr = BattlenetPrefixManager(tmp_path)
     assert asyncio.run(mgr.create_game_prefix("wow")) is None
     assert not mgr.game_prefix("wow").exists()
 
@@ -165,11 +189,35 @@ def test_refuses_to_clone_an_unwarmed_template(tmp_path: Path) -> None:
 def test_refuses_to_clone_a_template_with_no_client(tmp_path: Path) -> None:
     template = paths.template_prefix(tmp_path)
     (template / "drive_c").mkdir(parents=True)
-    (template / WARMED_MARKER).write_text("")
+    (template / DERIVED_MARKER).write_text("")
     assert BattlenetPrefixManager(tmp_path).template_ready() is False
 
 
-def test_creates_a_marked_game_prefix_from_a_warmed_template(tmp_path: Path) -> None:
+def test_the_template_is_derived_from_auth_not_installed(tmp_path: Path) -> None:
+    """Ubisoft's shared-identity invariant, now held for Battle.net too."""
+    auth = _make_auth(tmp_path)
+    (auth / "drive_c" / "session-token").write_text("secret")
+    mgr = BattlenetPrefixManager(tmp_path)
+
+    assert asyncio.run(mgr.ensure_template()) is True
+    assert mgr.template_ready() is True
+    # The session came across because the WHOLE prefix did.
+    assert (mgr.template_prefix / "drive_c" / "session-token").read_text() == "secret"
+
+
+def test_a_game_prefix_inherits_the_session(tmp_path: Path) -> None:
+    auth = _make_auth(tmp_path)
+    (auth / "drive_c" / "session-token").write_text("secret")
+    mgr = BattlenetPrefixManager(tmp_path)
+
+    created = asyncio.run(mgr.create_game_prefix("hs_beta"))
+
+    assert created is not None
+    assert (created / "drive_c" / "session-token").read_text() == "secret"
+
+
+def test_creates_a_marked_game_prefix_from_a_derived_template(tmp_path: Path) -> None:
+    _make_auth(tmp_path)
     _make_template(tmp_path)
     mgr = BattlenetPrefixManager(tmp_path)
     created = asyncio.run(mgr.create_game_prefix("hs_beta"))
@@ -180,6 +228,7 @@ def test_creates_a_marked_game_prefix_from_a_warmed_template(tmp_path: Path) -> 
 
 def test_clone_records_the_template_client_build(tmp_path: Path) -> None:
     """Lets self-update repair know which build the prefix started from."""
+    _make_auth(tmp_path)
     _make_template(tmp_path)
     mgr = BattlenetPrefixManager(tmp_path)
     created = asyncio.run(mgr.create_game_prefix("hs_beta"))
@@ -187,6 +236,7 @@ def test_clone_records_the_template_client_build(tmp_path: Path) -> None:
 
 
 def test_existing_prefix_is_returned_not_reclobbered(tmp_path: Path) -> None:
+    _make_auth(tmp_path)
     _make_template(tmp_path)
     mgr = BattlenetPrefixManager(tmp_path)
     existing = mgr.game_prefix("hs_beta")
@@ -206,6 +256,7 @@ def test_never_deletes_an_unmarked_prefix(tmp_path: Path) -> None:
 
 
 def test_deletes_a_prefix_we_marked(tmp_path: Path) -> None:
+    _make_auth(tmp_path)
     _make_template(tmp_path)
     mgr = BattlenetPrefixManager(tmp_path)
     created = asyncio.run(mgr.create_game_prefix("hs_beta"))
@@ -219,6 +270,7 @@ def test_removing_an_absent_prefix_is_a_no_op(tmp_path: Path) -> None:
 
 
 def test_never_repairs_an_unmarked_prefix(tmp_path: Path) -> None:
+    _make_auth(tmp_path)
     _make_template(tmp_path)
     mgr = BattlenetPrefixManager(tmp_path)
     stranger = mgr.game_prefix("not_ours")
@@ -226,12 +278,16 @@ def test_never_repairs_an_unmarked_prefix(tmp_path: Path) -> None:
     assert asyncio.run(mgr.repair_game_prefix(stranger)) is False
 
 
-def test_mark_template_warmed_records_the_build(tmp_path: Path) -> None:
-    _make_template(tmp_path, warmed=False)
+def test_an_already_derived_template_is_not_rebuilt(tmp_path: Path) -> None:
+    """Re-deriving on every install would copy 1.2 GB each time."""
+    _make_auth(tmp_path)
+    _make_auth(tmp_path)
+    _make_template(tmp_path)
     mgr = BattlenetPrefixManager(tmp_path)
-    assert mgr.mark_template_warmed(client_build="17651") is True
-    assert mgr.template_ready() is True
-    assert (mgr.template_prefix / WARMED_MARKER).read_text() == "17651"
+    (mgr.template_prefix / "drive_c" / "sentinel").write_text("kept")
+
+    assert asyncio.run(mgr.ensure_template()) is True
+    assert (mgr.template_prefix / "drive_c" / "sentinel").read_text() == "kept"
 
 
 @pytest.mark.parametrize("attr", ["auth_prefix", "template_prefix"])

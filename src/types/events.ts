@@ -101,6 +101,8 @@ export interface ToastActionPayload {
   /** Optional bold title rendered above `i18n_key`'s message. */
   i18n_title_key?: string;
   i18n_params?: Record<string, unknown>;
+  /** Resolved game title. Merged into the i18n params as `gameTitle`. */
+  game_title?: string;
   duration_ms?: number;
   action?: { verb: string; args: string[] };
 }

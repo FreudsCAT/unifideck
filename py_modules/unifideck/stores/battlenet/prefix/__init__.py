@@ -10,16 +10,16 @@ demands a restart via a modal nobody can click in Gaming Mode.
 
 from .client_install import BootstrapResult, bootstrap_client, has_32bit_vulkan
 from .manager import (
+    DERIVED_MARKER,
     MARKER_FILENAME,
-    WARMED_MARKER,
     BattlenetPrefixManager,
     PrefixStatus,
     inspect_prefix,
 )
 
 __all__ = [
+    "DERIVED_MARKER",
     "MARKER_FILENAME",
-    "WARMED_MARKER",
     "BattlenetPrefixManager",
     "BootstrapResult",
     "PrefixStatus",
