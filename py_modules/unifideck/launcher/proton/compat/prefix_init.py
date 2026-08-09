@@ -52,6 +52,9 @@ from unifideck.launcher.proton.infrastructure.umu_runtime import (
     open_game_log,
     repair_incomplete_umu_runtime,
 )
+from unifideck.launcher.proton.wrapper_stores import (
+    prefix_owns_game_install,
+)
 
 if TYPE_CHECKING:
     from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
@@ -75,10 +78,16 @@ _UMU_STEP_TIMEOUT_SECONDS = 120.0
 def _prefix_owns_game_install(plan: ProtonLaunchPlan) -> bool:
     """True when the game's own files live INSIDE the prefix.
 
-    Ubisoft is the one store where they do: UPC runs in-prefix and installs
-    titles to ``drive_c/Program Files (x86)/Ubisoft/Ubisoft Game
-    Launcher/games/``. Every other store downloads outside the prefix, so a
-    reset there costs a rebuild; here it costs the user their game.
+    True for the launcher-wrapper stores, where the vendor client runs
+    in-prefix and installs there: Ubisoft to ``drive_c/Program Files
+    (x86)/Ubisoft/Ubisoft Game Launcher/games/``, Battle.net to
+    ``drive_c/Program Files (x86)/<Game>`` (confirmed on-device by a real
+    Hearthstone install). Every other store downloads outside the prefix,
+    so a reset there costs a rebuild; here it costs the user their game.
+
+    The membership test lives in :mod:`launcher.proton.wrapper_stores` so
+    this can never disagree with ``prefix_setup`` — that disagreement is
+    precisely what caused the incident below.
 
     Confirmed live 2026-08-01: launching Rayman Origins resolved
     ``proton_experimental``, ``prefix_setup`` borrowed managed GE-Proton for
@@ -86,7 +95,7 @@ def _prefix_owns_game_install(plan: ProtonLaunchPlan) -> bool:
     the prefix — deleting the install. The borrow was for a step
     ``apply_prefix_compat`` skips for Ubisoft anyway.
     """
-    return getattr(plan.context, "store", "") == "ubisoft"
+    return prefix_owns_game_install(getattr(plan.context, "store", ""))
 
 
 def _proton_family(tool_id: str) -> str:

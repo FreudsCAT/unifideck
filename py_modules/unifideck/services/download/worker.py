@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from unifideck.core import stale_installs
 from unifideck.core.types import Game
+from unifideck.launcher.proton.wrapper_stores import uses_manual_download_phase
 
 from .models import MAX_FINISHED_HISTORY, DownloadItem, classify_download_error
 from .worker_helpers import apply_dict_progress, track_task
@@ -215,11 +216,12 @@ class _WorkerMixin:
         from unifideck.core.types.events import Events
         item.status = "running"
         item.start_time = time.time()
-        # Ubisoft is a launcher-driven (UPC) install — there is no real
-        # download. Start it in the indeterminate "manual" phase so the UI
-        # never shows a "DOWNLOADING… 0.0%" frame before the first progress
-        # emit lands. The store's progress callback keeps it on "manual".
-        if item.store == "ubisoft":
+        # Wrapper stores are vendor-client-driven installs — there is no
+        # real download to measure. Start in the indeterminate "manual"
+        # phase so the UI never shows a "DOWNLOADING… 0.0%" frame before the
+        # first progress emit lands. The store's progress callback keeps it
+        # on "manual".
+        if uses_manual_download_phase(item.store):
             item.download_phase = "manual"
         if self._bus:
             await self._bus.emit(Events.DOWNLOAD_STARTED, item=item.to_dict())
@@ -349,7 +351,7 @@ class _WorkerMixin:
         picks up the new ``download_phase`` (same mechanism Ubisoft's
         "manual" phase uses).
         """
-        if item.store in ("ubisoft", "microsoft"):
+        if uses_manual_download_phase(item.store) or item.store == "microsoft":
             return
         if item.store == "gog" and (Path(item.install_path) / "start.sh").is_file():
             logger.info(

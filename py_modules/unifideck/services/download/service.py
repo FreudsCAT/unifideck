@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Result
+from unifideck.launcher.proton.wrapper_stores import uses_manual_download_phase
 
 from .models import MAX_FINISHED_HISTORY, DownloadItem
 from .persistence import load_queue, save_queue
@@ -161,10 +162,14 @@ class DownloadService(_WorkerMixin):
                 language=language or "",
                 # Ubisoft is a launcher-driven (UPC) install with no real
                 # download — mark it "manual" from enqueue so the UI shows the
-                # indeterminate "Installing in Ubisoft Connect" state instead
+                # indeterminate "Installing in <vendor client>" state instead
                 # of a fake "Download Queued"/"DOWNLOADING 0%" bar, even while
                 # it waits behind other downloads in the queue.
-                download_phase="manual" if store == "ubisoft" else "downloading",
+                download_phase=(
+                    "manual"
+                    if uses_manual_download_phase(store)
+                    else "downloading"
+                ),
             )
             self._queue.append(item)
 
