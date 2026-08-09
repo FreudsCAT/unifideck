@@ -49,9 +49,16 @@ async def _amazon_launch(plan: ProtonLaunchPlan) -> int:
     """Amazon launch."""
     try:
         from unifideck.config.config_manager import ConfigManager
+        from unifideck.config.defaults_path import (
+            resolve_defaults_config_path,
+        )
+        from unifideck.config.user_config_path import (
+            resolve_user_config_path,
+        )
         from unifideck.launcher.proton.language_setup import apply_amazon_language
         _cfg = ConfigManager(
-            str(plan.context.plugin_dir / "defaults" / "config.json"),
+            resolve_defaults_config_path(plan.context.plugin_dir),
+            user_path=resolve_user_config_path(),
         )
         apply_amazon_language(str(plan.prefix_path), config=_cfg)
     except Exception as err:
