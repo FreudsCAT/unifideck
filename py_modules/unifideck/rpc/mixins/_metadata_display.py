@@ -413,6 +413,8 @@ def store_search_url(store: str, title: str) -> str:
         return "https://gaming.amazon.com/home"
     if store == "ubisoft":
         return f"https://store.ubisoft.com/us/search?q={encoded}"
+    if store == "battlenet":
+        return f"https://us.shop.battle.net/en-us/search?q={encoded}"
     if store == "microsoft":
         return "https://www.xbox.com/en-US/games"
     return ""

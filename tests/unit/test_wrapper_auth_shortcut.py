@@ -183,3 +183,109 @@ def test_store_id_is_recoverable_from_the_launch_options(spec: AuthShortcutSpec)
     from unifideck.services.shortcut.launch_options import get_full_id
 
     assert get_full_id(spec.launch_options("/l")) == spec.store_game_id
+
+
+# ── The prefix-name token ─────────────────────────────────────────
+#
+# Without it the launcher derives the prefix from ``ctx.game_id``
+# ("bnet-auth") and signs the user in to an empty
+# ``prefixes/battlenet/bnet-auth`` while the client lives in
+# ``.bnet-auth``. Observed on-device as a stray empty prefix beside the
+# real one, and as a sign-in that opened a client with no session.
+
+BATTLENET_WITH_PREFIX = AuthShortcutSpec(
+    store="battlenet",
+    store_game_id="battlenet:bnet-auth",
+    display_name="Battle.net",
+    action_env="UNIFIDECK_BATTLENET_ACTION",
+    prefix_env="UNIFIDECK_BATTLENET_PREFIX_NAME",
+    prefix_name=".bnet-auth",
+)
+
+
+def test_launch_options_name_the_auth_prefix() -> None:
+    options = BATTLENET_WITH_PREFIX.launch_options("/plugin/bin/unifideck-launcher")
+    assert "UNIFIDECK_BATTLENET_PREFIX_NAME=.bnet-auth" in options
+
+
+def test_launch_options_omit_the_token_when_no_prefix_is_declared() -> None:
+    """Stores that do not need it must not grow an empty assignment."""
+    options = BATTLENET.launch_options("/plugin/bin/unifideck-launcher")
+    assert "PREFIX_NAME" not in options
+
+
+def test_the_real_store_spec_carries_the_prefix_token() -> None:
+    """The store's own spec, not just a test fixture, must set it.
+
+    This is the assertion that would have caught the shipped bug: the
+    dataclass supported the field while the Battle.net spec left it unset.
+    """
+    from unifideck.stores.battlenet import paths as bpaths
+    from unifideck.stores.battlenet.store import BattlenetStore
+
+    spec = BattlenetStore.AUTH_SHORTCUT
+    assert spec.prefix_env == "UNIFIDECK_BATTLENET_PREFIX_NAME"
+    assert spec.prefix_name == bpaths.AUTH_PREFIX_NAME
+
+
+def test_a_stale_shortcut_is_repaired_rather_than_left_wrong() -> None:
+    """A row written before the token existed must be rewritten.
+
+    ``find_in_vdf`` matches on the store_game_id alone, so the old row keeps
+    winning the lookup; without repair the tile goes on launching with the
+    previous, wrong arguments forever.
+    """
+    stale = {
+        "0": {
+            "appid": -12345,
+            "AppName": "Battle.net",
+            "LaunchOptions": "battlenet:bnet-auth UNIFIDECK_BATTLENET_ACTION=auth",
+        },
+    }
+    sm = _ShortcutService(stale)
+    appid = asyncio.run(ensure_auth_shortcut(sm, BATTLENET_WITH_PREFIX, "/plugin"))
+
+    assert appid == -12345 + 2**32, "the existing appid must be preserved"
+    assert sm.writes == 1, "the repair must be persisted"
+    options = sm.data["shortcuts"]["0"]["LaunchOptions"]
+    assert "UNIFIDECK_BATTLENET_PREFIX_NAME=.bnet-auth" in options
+    assert len(sm.data["shortcuts"]) == 1, "repair must not add a duplicate row"
+
+
+def test_an_up_to_date_shortcut_is_not_rewritten() -> None:
+    current = {
+        "0": {
+            "appid": -12345,
+            "AppName": "Battle.net",
+            "LaunchOptions": BATTLENET_WITH_PREFIX.launch_options("/plugin"),
+        },
+    }
+    sm = _ShortcutService(current)
+    asyncio.run(ensure_auth_shortcut(sm, BATTLENET_WITH_PREFIX, "/plugin"))
+    assert sm.writes == 0
+
+
+def test_presence_is_checked_against_disk_not_the_cache() -> None:
+    """Steam flushes its own copy over ours, so the cache lies.
+
+    Measured on-device: a row written at 01:39 was gone from disk at 01:58
+    while every later check still answered "already in VDF", so nothing ever
+    re-created it. Passing ``from_disk`` is what lets sign-in self-heal.
+    """
+    seen: list[bool] = []
+
+    class _DiskAwareService(_ShortcutService):
+        async def read_shortcuts(self, *, from_disk: bool = False) -> dict[str, Any]:
+            seen.append(from_disk)
+            return self.data
+
+    sm = _DiskAwareService()
+    asyncio.run(ensure_auth_shortcut(sm, BATTLENET_WITH_PREFIX, "/plugin"))
+    assert seen == [True]
+
+
+def test_a_service_without_the_keyword_still_works() -> None:
+    """Third-party / older shortcut services must not break sign-in."""
+    sm = _ShortcutService()
+    appid = asyncio.run(ensure_auth_shortcut(sm, BATTLENET_WITH_PREFIX, "/plugin"))
+    assert appid == -12345 + 2**32

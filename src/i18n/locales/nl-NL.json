@@ -113,10 +113,10 @@
     "etaLabel": "Resterende tijd: {{eta}}",
     "preparingMessage": "Prefix initialiseren en cloudopslag synchroniseren...",
     "preparingLabel": "Spel instellen...",
-    "installingViaUpcLabel": "Installeren via Ubisoft Connect",
+    "installingViaClientLabel": "Installeren via {{client}}",
     "extractingMessage": "Bestanden uitpakken...",
     "verifyingMessage": "Bestanden controleren... {{pct}}%",
-    "installingViaUpcMessage": "Volg het Ubisoft Connect-venster om de installatie te voltooien..."
+    "installingViaClientMessage": "Volg het {{client}}-venster om de installatie te voltooien..."
   },
   "cloudSave": {
     "title": "Cloudopslagconflict",

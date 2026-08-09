@@ -113,10 +113,10 @@
     "etaLabel": "Залишилося часу: {{eta}}",
     "preparingMessage": "Ініціалізація префікса та синхронізація хмарних збережень...",
     "preparingLabel": "Налаштування гри...",
-    "installingViaUpcLabel": "Встановлення через Ubisoft Connect",
+    "installingViaClientLabel": "Встановлення через {{client}}",
     "extractingMessage": "Розпакування файлів...",
     "verifyingMessage": "Перевірка файлів... {{pct}}%",
-    "installingViaUpcMessage": "Дотримуйтесь вікна Ubisoft Connect, щоб завершити встановлення..."
+    "installingViaClientMessage": "Дотримуйтесь вікна {{client}}, щоб завершити встановлення..."
   },
   "cloudSave": {
     "title": "Конфлікт хмарних збережень",

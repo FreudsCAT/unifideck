@@ -134,13 +134,39 @@ class BattlenetIdMap:
 
     def merge(self, uid: str, **fields: object) -> GameRecord:
         """Update a record in place, keeping values not being overwritten."""
-        current = self._records.get(uid) or GameRecord(uid=uid)
-        merged = {k: v for k, v in asdict(current).items() if k != "uid"}
-        merged.update({k: v for k, v in fields.items() if v is not None})
-        record = GameRecord(uid=uid, **merged)
+        record = self._merged(uid, fields)
         self._records[uid] = record
         self._save()
         return record
+
+    def _merged(self, uid: str, fields: dict[str, object]) -> GameRecord:
+        """The record ``uid`` would become, without persisting it."""
+        current = self._records.get(uid) or GameRecord(uid=uid)
+        merged: dict[str, object] = {
+            k: v for k, v in asdict(current).items() if k != "uid"
+        }
+        merged.update({k: v for k, v in fields.items() if v is not None})
+        return GameRecord(uid=uid, **merged)  # type: ignore[arg-type]
+
+    def merge_many(self, updates: dict[str, dict[str, object]]) -> int:
+        """Merge several records, writing the file at most once.
+
+        A sync refreshes the family code for the whole library at once;
+        per-record :meth:`merge` would rewrite the file once per title. The
+        file is only written when something actually changed, so a sync that
+        learns nothing new does no IO at all.
+
+        Returns the number of records that changed.
+        """
+        changed = 0
+        for uid, fields in updates.items():
+            record = self._merged(uid, fields)
+            if record != self._records.get(uid):
+                self._records[uid] = record
+                changed += 1
+        if changed:
+            self._save()
+        return changed
 
     def mark_launch_ok(self, uid: str, family: str, when: float) -> None:
         """Record that this family actually started the game.

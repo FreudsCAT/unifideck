@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from pathlib import Path
 
 from unifideck.launcher.frontend_bridge import launcher_toast
@@ -43,6 +44,7 @@ from unifideck.launcher.proton.handlers import battlenet_watch as watch
 from unifideck.launcher.proton.handlers.battlenet_client import (
     find_client_exe,
     find_launcher_exe,
+    record_launch_ok,
     resolve_family,
 )
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
@@ -158,7 +160,22 @@ async def battlenet_launch(plan: ProtonLaunchPlan) -> int:
         game_title=plan.context.game_key,
     )
     client_exe = await _bring_up_client(plan)
+    pid = await _issue_and_confirm(plan, client_exe, uid, family)
 
+    await watch.wait_for_exit(plan.prefix_path, pid)
+    plan.state.game_exit_code = 0
+    return 0
+
+
+async def _issue_and_confirm(
+    plan: ProtonLaunchPlan, client_exe: Path, uid: str, family: str,
+) -> str:
+    """Phases C + D: send the launch, then prove a game process appeared.
+
+    Returns the new pid. Raises when nothing started, because the client
+    accepts an obsolete family code and does nothing — no error, no dialog,
+    no exit code — so only a new process is evidence.
+    """
     before = watch.game_pids(plan.prefix_path)
     await _issue_exec(plan, client_exe, f"launch {family}")
 
@@ -172,9 +189,13 @@ async def battlenet_launch(plan: ProtonLaunchPlan) -> int:
             family=family,
         )
 
-    await watch.wait_for_exit(plan.prefix_path, pid)
-    plan.state.game_exit_code = 0
-    return 0
+    # This family is now proven for this uid. Record it before the
+    # (potentially hours-long) exit wait: a crash or a forced shutdown
+    # mid-session must not cost us the one fact that makes a later family
+    # rename detectable.
+    with contextlib.suppress(Exception):
+        record_launch_ok(uid, family, time.time())
+    return pid
 
 
 async def battlenet_auth_launch(plan: ProtonLaunchPlan) -> int:

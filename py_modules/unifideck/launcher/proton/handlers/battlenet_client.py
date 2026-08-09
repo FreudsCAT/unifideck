@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,39 @@ def resolve_prefix(uid: str) -> Path | None:
         return None
     path = record.get("prefix_path")
     return Path(path) if isinstance(path, str) and path else None
+
+
+def record_launch_ok(uid: str, family: str, when: float) -> None:
+    """Stamp a family that has demonstrably started this game.
+
+    Written from the launcher rather than the backend because only this
+    process observes the outcome: the game is spawned by the client inside
+    the prefix, so the backend never sees it start. The backend reads the
+    same fields back through ``BattlenetIdMap``.
+
+    Read-modify-atomic-write against the whole file. The backend can be
+    writing concurrently (a sync refreshing family codes), and a partial
+    write would lose every recorded ``prefix_path`` — which is the one
+    thing in this file that cannot be recomputed. Best-effort throughout:
+    failing to record a successful launch must never fail the launch.
+    """
+    data = _load_id_map()
+    record = data.get(uid)
+    entry: dict[str, object] = dict(record) if isinstance(record, dict) else {}
+    entry.update(
+        {"family": family, "last_launch_family": family, "launch_ok_at": when},
+    )
+    data[uid] = entry
+    try:
+        ID_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=ID_MAP_PATH.parent, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, sort_keys=True)
+        Path(tmp).replace(ID_MAP_PATH)
+    except OSError as exc:
+        logger.warning("[battlenet] cannot record launch for %s: %s", uid, exc)
+        return
+    logger.info("[battlenet] recorded proven family %s for %s", family, uid)
 
 
 def client_installed(prefix: Path | str) -> bool:

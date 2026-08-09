@@ -95,7 +95,9 @@ class AuthShortcutsRPCMixin:
         """
         tag = f"[AuthShortcuts:{store_id}]"
         logger.info("%s context requested", tag)
-        store = self.registry.get(store_id)
+        # ``get`` RAISES KeyError for an unregistered store; ``get_store``
+        # is the None-returning variant this function's contract needs.
+        store = self.registry.get_store(store_id)
         if store is None:
             logger.warning("%s store not registered", tag)
             return {"success": False, "error": "store_not_found"}

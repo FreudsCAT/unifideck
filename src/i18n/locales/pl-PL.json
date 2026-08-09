@@ -113,10 +113,10 @@
     "etaLabel": "Pozostały czas: {{eta}}",
     "preparingMessage": "Inicjowanie prefiksu i synchronizowanie zapisów w chmurze...",
     "preparingLabel": "Przygotowywanie gry...",
-    "installingViaUpcLabel": "Instalowanie przez Ubisoft Connect",
+    "installingViaClientLabel": "Instalowanie przez {{client}}",
     "extractingMessage": "Wyodrębnianie plików...",
     "verifyingMessage": "Weryfikowanie plików... {{pct}}%",
-    "installingViaUpcMessage": "Postępuj zgodnie z oknem Ubisoft Connect, aby zakończyć instalację..."
+    "installingViaClientMessage": "Postępuj zgodnie z oknem {{client}}, aby zakończyć instalację..."
   },
   "cloudSave": {
     "title": "Konflikt zapisów w chmurze",

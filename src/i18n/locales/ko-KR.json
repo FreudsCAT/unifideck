@@ -113,10 +113,10 @@
     "etaLabel": "남은 시간: {{eta}}",
     "preparingMessage": "접두사 초기화 및 클라우드 저장 데이터 동기화 중...",
     "preparingLabel": "게임 설정 중...",
-    "installingViaUpcLabel": "Ubisoft Connect로 설치 중",
+    "installingViaClientLabel": "{{client}}로 설치 중",
     "extractingMessage": "파일 압축 해제 중...",
     "verifyingMessage": "파일 확인 중... {{pct}}%",
-    "installingViaUpcMessage": "Ubisoft Connect 창에 따라 설치를 완료하세요..."
+    "installingViaClientMessage": "{{client}} 창에 따라 설치를 완료하세요..."
   },
   "cloudSave": {
     "title": "클라우드 저장 데이터 충돌",

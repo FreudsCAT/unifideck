@@ -113,10 +113,10 @@
     "etaLabel": "残り時間: {{eta}}",
     "preparingMessage": "プレフィックスを初期化し、クラウドセーブを同期しています...",
     "preparingLabel": "ゲームを準備しています...",
-    "installingViaUpcLabel": "Ubisoft Connect でインストール中",
+    "installingViaClientLabel": "{{client}} でインストール中",
     "extractingMessage": "ファイルを展開しています...",
     "verifyingMessage": "ファイルを検証しています... {{pct}}%",
-    "installingViaUpcMessage": "Ubisoft Connect のウィンドウに従ってインストールを完了してください..."
+    "installingViaClientMessage": "{{client}} のウィンドウに従ってインストールを完了してください..."
   },
   "cloudSave": {
     "title": "クラウドセーブの競合",

@@ -22,6 +22,12 @@ class CloudFailureRPCMixin:
     """Per-store cloud-failure behaviour read/write RPC."""
 
     config: Any
+    # Battle.net is deliberately absent: it declares
+    # ``supports_cloud_saves=False`` (Blizzard titles that sync do it
+    # in-game against Blizzard's own service, which we neither drive nor
+    # observe), so there is no cloud failure of ours to have a behaviour
+    # for. Adding a row here would offer the user a setting that can never
+    # take effect. Microsoft is absent for the same reason — xCloud streams.
     _CLOUD_FAILURE_STORES: tuple[str, ...] = (
         "default",
         "epic",

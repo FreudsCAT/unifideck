@@ -113,10 +113,10 @@
     "etaLabel": "Tempo stimato: {{eta}}",
     "preparingMessage": "Inizializzazione del prefisso e sincronizzazione dei salvataggi cloud...",
     "preparingLabel": "Configurazione del gioco...",
-    "installingViaUpcLabel": "Installazione tramite Ubisoft Connect",
+    "installingViaClientLabel": "Installazione tramite {{client}}",
     "extractingMessage": "Estrazione dei file...",
     "verifyingMessage": "Verifica dei file... {{pct}}%",
-    "installingViaUpcMessage": "Segui la finestra di Ubisoft Connect per completare l'installazione..."
+    "installingViaClientMessage": "Segui la finestra di {{client}} per completare l'installazione..."
   },
   "cloudSave": {
     "title": "Conflitto di salvataggio cloud",

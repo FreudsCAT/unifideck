@@ -64,9 +64,13 @@ export interface WrapperShortcutConfig {
   /** Env var carrying the action, e.g. "UNIFIDECK_UBISOFT_ACTION". */
   actionEnvVar: string;
   /**
-   * Optional env var naming the auth prefix. Ubisoft threads this because
-   * its auth prefix is chosen at launch time; Battle.net does not, because
-   * its launcher resolves the prefix from the recorded id map.
+   * Optional env var naming the auth prefix.
+   *
+   * Required whenever the auth prefix is not named after the id in
+   * `authShortcutStoreId`. Both wrapper stores need it: the launcher
+   * derives the prefix from `ctx.game_id` otherwise, and an auth prefix
+   * has no id-map record to resolve instead — so sign-in silently targets
+   * an empty directory.
    */
   prefixEnvVar?: string;
   /** Value for `prefixEnvVar`, e.g. ".upc-auth". */

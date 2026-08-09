@@ -113,10 +113,10 @@
     "etaLabel": "Tiempo restante: {{eta}}",
     "preparingMessage": "Inicializando prefijo y sincronizando guardados en la nube...",
     "preparingLabel": "Configurando el juego...",
-    "installingViaUpcLabel": "Instalando con Ubisoft Connect",
+    "installingViaClientLabel": "Instalando con {{client}}",
     "extractingMessage": "Extrayendo archivos...",
     "verifyingMessage": "Verificando archivos... {{pct}}%",
-    "installingViaUpcMessage": "Sigue la ventana de Ubisoft Connect para completar la instalación..."
+    "installingViaClientMessage": "Sigue la ventana de {{client}} para completar la instalación..."
   },
   "cloudSave": {
     "title": "Conflicto de guardado en la nube",

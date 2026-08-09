@@ -113,10 +113,10 @@
     "etaLabel": "الوقت المتبقي: {{eta}}",
     "preparingMessage": "جاري تهيئة البادئة ومزامنة الحفظ السحابي...",
     "preparingLabel": "جارٍ إعداد اللعبة...",
-    "installingViaUpcLabel": "التثبيت عبر Ubisoft Connect",
+    "installingViaClientLabel": "التثبيت عبر {{client}}",
     "extractingMessage": "جارٍ استخراج الملفات...",
     "verifyingMessage": "جارٍ التحقق من الملفات... {{pct}}%",
-    "installingViaUpcMessage": "اتبع نافذة Ubisoft Connect لإكمال التثبيت..."
+    "installingViaClientMessage": "اتبع نافذة {{client}} لإكمال التثبيت..."
   },
   "cloudSave": {
     "title": "تعارض الحفظ السحابي",

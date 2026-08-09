@@ -47,6 +47,12 @@ AUTH_TOKEN_PATHS: dict[str, Path] = {
     "ubisoft": Path.home() / ".local/share/unifideck/ubisoft_token.json",
     "ubisoft_session": Path.home() / ".local/share/unifideck/ubisoft_upc_session.txt",
     "microsoft": Path.home() / ".config/unifideck/microsoft_token.json",
+    # Battle.net keeps no token file of ours — its credential lives inside
+    # the auth prefix, which is also where installed games live, so the
+    # prefix is deliberately NOT listed here (clearing it would delete the
+    # user's games). The id map is the account-scoped state worth clearing:
+    # it holds which uid installed to which prefix for the previous account.
+    "battlenet": Path.home() / ".local/share/unifideck/battlenet_id_map.json",
 }
 
 # Shared Unifideck data file (same path on the new branch —

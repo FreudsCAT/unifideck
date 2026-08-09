@@ -49,17 +49,30 @@ class AuthShortcutSpec:
     display_name: str
     #: Env token telling the launcher this run is a sign-in.
     action_env: str
+    #: Env token naming the prefix directory, e.g.
+    #: ``UNIFIDECK_BATTLENET_PREFIX_NAME``. Required whenever the auth
+    #: prefix is not named after the id in ``store_game_id`` — the launcher
+    #: otherwise derives the prefix from ``ctx.game_id`` and signs the user
+    #: in to an empty directory. Set both this and :attr:`prefix_name`.
+    prefix_env: str | None = None
+    #: Directory name of the auth prefix, e.g. ``.bnet-auth``.
+    prefix_name: str | None = None
     #: Milliseconds the frontend should wait for Steam to register it.
     launch_wait_ms: int = 3000
 
     def launch_options(self, launcher_path: str) -> str:
         """LaunchOptions for the shortcut. Must be byte-stable.
 
-        ``validate`` compares against this exactly, so any change here
-        orphans existing shortcuts until they are rewritten.
+        :func:`ensure_auth_shortcut` compares against this exactly, so any
+        change here orphans existing shortcuts — which is why it repairs a
+        row whose id matches but whose options differ, rather than leaving
+        the user with a tile that launches the wrong thing.
         """
         del launcher_path
-        return f"{self.store_game_id} {self.action_env}=auth"
+        options = f"{self.store_game_id} {self.action_env}=auth"
+        if self.prefix_env and self.prefix_name:
+            options += f" {self.prefix_env}={self.prefix_name}"
+        return options
 
 
 def launcher_path_for(plugin_dir: str | None) -> str:
@@ -85,6 +98,35 @@ def find_in_vdf(shortcuts: dict[str, Any], spec: AuthShortcutSpec) -> int | None
     return None
 
 
+def repair_launch_options(
+    shortcuts: dict[str, Any], spec: AuthShortcutSpec, launcher_path: str,
+) -> bool:
+    """Rewrite a matching row whose LaunchOptions have gone stale.
+
+    A row is matched on ``store_game_id`` alone, so it survives a change to
+    the rest of the string — adding the prefix-name token, for instance.
+    Without this the old row keeps winning the ``find_in_vdf`` lookup and
+    the shortcut goes on launching with the previous, wrong arguments; the
+    user sees a tile that works and a sign-in that silently does nothing.
+
+    Returns True when something was changed and the VDF needs writing.
+    """
+    expected = spec.launch_options(launcher_path)
+    repaired = False
+    for entry in shortcuts.values():
+        if not _entry_matches(entry, spec):
+            continue
+        if str(entry.get("LaunchOptions") or "") == expected:
+            continue
+        logger.info(
+            "[%s] repairing stale auth LaunchOptions: %r -> %r",
+            spec.store, entry.get("LaunchOptions"), expected,
+        )
+        entry["LaunchOptions"] = expected
+        repaired = True
+    return repaired
+
+
 def _build_entry(
     spec: AuthShortcutSpec, launcher_path: str, appid: int,
 ) -> dict[str, Any]:
@@ -100,6 +142,27 @@ def _build_entry(
         "OpenVR": 0,
         "tags": {"0": spec.display_name},
     }
+
+
+async def _read_shortcuts_from_disk(shortcut_service: Any) -> dict[str, Any]:
+    """The VDF as it is on disk, not as the service last cached it.
+
+    ``ShortcutService`` keeps ``shortcuts.vdf`` in memory for the process
+    lifetime. Steam keeps its own copy and flushes it over ours, so a row we
+    wrote this session can be gone from disk while the cache still reports
+    it — measured on-device: an auth shortcut written at 01:39 was absent at
+    01:58, and every later check answered "already in VDF", so nothing ever
+    re-created it and the tile stayed missing from Steam.
+
+    Falls back to the plain read when the service predates the keyword (test
+    doubles, and any third-party shortcut service): a stale answer is worse
+    than a fresh one but far better than an exception on the sign-in path.
+    """
+    try:
+        data = await shortcut_service.read_shortcuts(from_disk=True)
+    except TypeError:
+        data = await shortcut_service.read_shortcuts()
+    return dict(data) if isinstance(data, dict) else {"shortcuts": {}}
 
 
 async def ensure_auth_shortcut(
@@ -121,11 +184,14 @@ async def ensure_auth_shortcut(
         appid = shortcut_service.generate_app_id(launcher_path, spec.display_name)
         unsigned = appid if appid >= 0 else appid + 2**32
 
-        data = await shortcut_service.read_shortcuts()
+        data = await _read_shortcuts_from_disk(shortcut_service)
         shortcuts = data.get("shortcuts", {})
 
         existing = find_in_vdf(shortcuts, spec)
         if existing is not None:
+            if repair_launch_options(shortcuts, spec, launcher_path):
+                data["shortcuts"] = shortcuts
+                await shortcut_service.write_shortcuts(data)
             logger.info("[%s] auth shortcut already in VDF (appid=%s)", spec.store, existing)
             return existing if existing >= 0 else existing + 2**32
 

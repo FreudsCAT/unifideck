@@ -101,6 +101,50 @@ def _game_from(
     )
 
 
+def family_updates(games: list[Game]) -> dict[str, dict[str, Any]]:
+    """``uid -> {"family": …}`` for every game whose family the catalog knew.
+
+    The family code is the ``--exec`` argument the client needs and it lives
+    only here, in the catalog join — the launcher runs out-of-process and
+    cannot recompute it. Persisting it at sync is what makes a game
+    launchable *before* it is installed, and is the only writer that sees
+    every title rather than just the one being installed.
+    """
+    updates: dict[str, dict[str, Any]] = {}
+    for game in games:
+        family = game.metadata.get("family") if game.metadata else None
+        if isinstance(family, str) and family and game.store_game_id:
+            updates[game.store_game_id] = {"family": family}
+    return updates
+
+
+def record_families(id_map: Any, games: list[Game]) -> int:
+    """Persist each title's ``--exec`` family code. Returns how many changed.
+
+    Best-effort by contract: an unwritable id map must not fail a library
+    read, because an empty library is a far worse outcome than a launch that
+    later reports a missing family.
+    """
+    try:
+        return int(id_map.merge_many(family_updates(games)))
+    except Exception:
+        logger.exception("[Battlenet] could not record family codes")
+        return 0
+
+
+def family_from_catalog(catalog: MergedCatalog, uid: str) -> str | None:
+    """The program id (family) whose install uid is ``uid``, or None.
+
+    The catalog maps family -> uid, so going the other way means scanning.
+    Only used on the install path, where a title may not have been through a
+    sync yet; :func:`record_families` covers the whole library at once.
+    """
+    for entry in catalog.entries.values():
+        if entry.uid_for() == uid:
+            return entry.program_id
+    return None
+
+
 def _index_by_uid(installed: dict[str, InstalledGame]) -> dict[str, InstalledGame]:
     """Re-key install state on uid.
 

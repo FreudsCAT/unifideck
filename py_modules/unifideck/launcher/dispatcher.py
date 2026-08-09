@@ -14,6 +14,7 @@ from .types.context import LaunchContext
 from .types.errors import GameNotFoundError, LauncherError
 from .types.exit_codes import ExitCode
 from .ubisoft_prefix_probe import _ubisoft_has_populated_prefix
+from .wrapper_stores import is_wrapper_store
 
 if TYPE_CHECKING:
     from unifideck.services.shortcut import ShortcutService
@@ -139,20 +140,14 @@ async def _build_context(
     # Non-launch action path. Two kinds, both keyed by
     # ``UNIFIDECK_<STORE>_ACTION``:
     #   * ``auth``    — key ``<store>:<store>-auth``, opens sign-in.
-    #   * ``install`` — Ubisoft only; key ``ubisoft:<game_id>``, opens
-    #     UPC to install the title (via RunGame, so it gets a gamescope
-    #     session in Gaming Mode). The game has no games.map row yet, so
-    #     short-circuit the registry lookup like auth does.
-    action_store, action, is_launch_action = _detect_special_action()
-    if not is_launch_action:
-        logger.info(
-            "[launcher.dispatcher] %s action detected: "
-            "store=%s game_key=%s",
-            action, action_store, game_key,
-        )
-        if action == "install":
-            return _ubisoft_install_context(store, game_id, raw_options)
-        return _auth_context(store, game_id, raw_options, action_store)
+    #   * ``install`` — wrapper stores only; key ``<store>:<game_id>``,
+    #     opens the vendor client to install the title (via RunGame, so it
+    #     gets a gamescope session in Gaming Mode). The game has no
+    #     games.map row yet, so short-circuit the registry lookup like auth
+    #     does.
+    special = _special_action_context(store, game_id, raw_options, game_key)
+    if special is not None:
+        return special
 
     exe, work_dir, has_entry, app_id = await _resolve_game_exe(
         shortcut_svc, store, game_id, game_key,
@@ -193,7 +188,9 @@ async def _build_context(
                     "but has a populated prefix — treating as install action",
                     game_key,
                 )
-                return _ubisoft_install_context(store, game_id, raw_options)
+                return _wrapper_install_context(
+                    store, game_id, raw_options, "ubisoft",
+                )
         raise GameNotFoundError(
             f"game {game_key!r} not found in games.map",
             context={"game_key": game_key},
@@ -241,6 +238,28 @@ async def _resolve_game_exe(
     return exe, work_dir, has_entry, app_id
 
 
+def _special_action_context(
+    store: str, game_id: str, raw_options: str, game_key: str,
+) -> LaunchContext | None:
+    """The non-launch context for this run, or ``None`` for a plain launch.
+
+    Split out of ``_build_context`` to keep it under the line cap; the
+    branch itself is unchanged.
+    """
+    action_store, action, is_launch_action = _detect_special_action()
+    if is_launch_action:
+        return None
+    logger.info(
+        "[launcher.dispatcher] %s action detected: store=%s game_key=%s",
+        action, action_store, game_key,
+    )
+    if action == "install":
+        return _wrapper_install_context(
+            store, game_id, raw_options, action_store or store,
+        )
+    return _auth_context(store, game_id, raw_options, action_store)
+
+
 def _auth_context(
     store: str, game_id: str, raw_options: str, auth_store: str | None,
 ) -> LaunchContext:
@@ -260,17 +279,19 @@ def _auth_context(
     )
 
 
-def _ubisoft_install_context(
-    store: str, game_id: str, raw_options: str,
+def _wrapper_install_context(
+    store: str, game_id: str, raw_options: str, wrapper_store: str,
 ) -> LaunchContext:
-    """Context for a Ubisoft ``install`` action (open UPC to install).
+    """Context for a wrapper store's ``install`` action.
 
-    Like the auth context this is a non-launch action with no games.map
-    row (the title isn't installed yet), but it carries the real
-    ``game_id`` so the launcher resolves the per-game prefix (recorded in
-    ``ubisoft_id_map.json`` during bootstrap) and the ``uplay://install``
-    deeplink. Routed by ``LauncherService._handle_auth_path`` on
-    ``action == "install"``.
+    Like the auth context this is a non-launch action with no games.map row
+    (the title isn't installed yet), but it carries the real ``game_id`` so
+    the launcher resolves the per-game prefix recorded in the store's id map
+    during bootstrap — plus, for Ubisoft, the ``uplay://install`` deeplink
+    and, for Battle.net, the ``--exec`` family code. Routed by
+    ``LauncherService._handle_auth_path`` on ``action == "install"``, which
+    picks the handler off ``auth_store`` — so that field must name the
+    wrapper store, not be hardcoded.
     """
     plugin_dir = _resolve_plugin_dir()
     return LaunchContext(
@@ -281,7 +302,7 @@ def _ubisoft_install_context(
         plugin_dir=plugin_dir,
         raw_options=raw_options,
         is_launch_action=False,
-        auth_store="ubisoft",
+        auth_store=wrapper_store,
         action="install",
         bypass_circuit_breaker=False,
     )
@@ -336,9 +357,15 @@ def _detect_special_action() -> tuple[str | None, str | None, bool]:
     """Detect a non-launch action from ``UNIFIDECK_<STORE>_ACTION``.
 
     Returns ``(store, action, is_launch_action)``. ``auth`` is valid for
-    every store; ``install`` is Ubisoft-only (opens UPC to install a
-    title). Anything else (or no token) is a normal game launch
-    (``(None, None, True)``).
+    every store; ``install`` is valid for the *wrapper* stores only, where
+    it opens the vendor client so the user can start the download. Anything
+    else (or no token) is a normal game launch (``(None, None, True)``).
+
+    The wrapper test goes through ``is_wrapper_store`` rather than a literal
+    ``== "ubisoft"``: that literal is why ``UNIFIDECK_BATTLENET_ACTION=install``
+    fell through to the normal-launch path, found no games.map row for a
+    game that is by definition not installed yet, and raised
+    ``GameNotFoundError`` — leaving ``battlenet_install_launch`` unreachable.
     """
     action_env = {
         "epic":      os.environ.get("UNIFIDECK_EPIC_ACTION"),
@@ -351,7 +378,7 @@ def _detect_special_action() -> tuple[str | None, str | None, bool]:
     for candidate_store, action in action_env.items():
         if action == "auth":
             return candidate_store, "auth", False
-        if action == "install" and candidate_store == "ubisoft":
+        if action == "install" and is_wrapper_store(candidate_store):
             return candidate_store, "install", False
     return None, None, True
 def _resolve_bypass_flag(store: str, game_id: str) -> bool:

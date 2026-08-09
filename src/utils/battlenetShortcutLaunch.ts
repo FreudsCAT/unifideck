@@ -7,9 +7,14 @@
  * shared with Ubisoft Connect (and EA App next). This file is only the
  * values that are actually Battle.net's.
  *
- * No `prefixEnvVar` is threaded: Ubisoft picks its auth prefix at launch
- * time, whereas the Battle.net launcher resolves the per-game prefix from
- * the recorded id map instead of from a launch-time token.
+ * `prefixEnvVar` IS threaded, and is load-bearing for sign-in. The
+ * launcher resolves a per-*game* prefix from the recorded id map, but the
+ * auth prefix has no id-map record — so without this token it falls back
+ * to `ctx.game_id` ("bnet-auth") and signs the user in to an empty
+ * `prefixes/battlenet/bnet-auth` while the client lives in `.bnet-auth`.
+ * Observed on-device: an empty stray prefix created beside the real one.
+ * This must stay in step with `BattlenetStore.AUTH_SHORTCUT`, which writes
+ * the same token into the persistent shortcut's LaunchOptions.
  */
 import { rpcRoutes } from "../api/rpc-routes";
 import type { ShortcutLaunchResult } from "../lib/steam-bridge";
@@ -27,6 +32,8 @@ export const BATTLENET_SHORTCUT_CONFIG: WrapperShortcutConfig = {
   authShortcutStoreId: "battlenet:bnet-auth",
   authContextRoute: rpcRoutes.getBattlenetAuthShortcutContext,
   actionEnvVar: "UNIFIDECK_BATTLENET_ACTION",
+  prefixEnvVar: "UNIFIDECK_BATTLENET_PREFIX_NAME",
+  authPrefixName: ".bnet-auth",
 };
 
 /**

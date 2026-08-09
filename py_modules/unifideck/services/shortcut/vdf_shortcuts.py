@@ -20,12 +20,23 @@ class _VdfShortcutsMixin:
     # async def _load_shortcuts(self) -> None: ...
     # async def _save_all(self) -> None: ...
 
-    async def read_shortcuts(self: Any) -> dict[str, Any]:
+    async def read_shortcuts(self: Any, *, from_disk: bool = False) -> dict[str, Any]:
         """Return the raw shortcuts dictionary.
 
         Used by the UI layer to list/view all current shortcuts
         without making modifications.
+
+        ``from_disk`` forces a re-read instead of returning the long-lived
+        in-memory cache (``_load_shortcuts`` is idempotent and never
+        re-reads). Steam holds ``shortcuts.vdf`` in memory too and flushes
+        its own copy over ours, so a row we added this session can be gone
+        from disk while our cache still reports it present — measured: an
+        auth shortcut written at 01:39 was absent at 01:58, and the cache
+        went on answering "already in VDF" so nothing ever re-created it.
+        Callers that must not be fooled by that pass ``from_disk=True``.
         """
+        if from_disk:
+            self._shortcuts_loaded = False
         await self._load_shortcuts()
 
         # We store internally as {"shortcuts": {"0": {}, "1": {}}}

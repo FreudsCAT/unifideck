@@ -49,6 +49,34 @@ _UPC_PROBES = (
     "tracked_files",
 )
 
+# Same idea for Battle.net, whose failures are also absence-shaped. The
+# client exe missing means the prefix never got bootstrapped; CachedData.db
+# missing means the user never completed sign-in, so the library is empty
+# for a reason that is not a bug; and the warmed marker missing on
+# ``.template`` is exactly why an install refuses to clone.
+_BNET_PROBES = (
+    "pfx/drive_c/Program Files (x86)/Battle.net/Battle.net.exe",
+    "pfx/drive_c/Program Files (x86)/Battle.net/Battle.net Launcher.exe",
+    "pfx/drive_c/ProgramData/Battle.net/Agent/product.db",
+    "pfx/drive_c/ProgramData/Battle.net/Agent/data/cache",
+    "pfx/drive_c/users/steamuser/AppData/Roaming/Battle.net/Battle.net.config",
+    ".unifideck_battlenet",
+    ".unifideck_battlenet_tweaks.v1",
+    "config_info",
+    "version",
+)
+
+# (prefix subdirectory, section tag, client name, probes) per wrapper store.
+# Both namespace their prefixes a level deeper than every other store.
+#
+# The tag is spelled out rather than derived from the store id: triage notes
+# and saved greps refer to ``ubisoft_upc_state`` by name, so renaming it to
+# match a new convention would silently break searching old bundles.
+_WRAPPER_PREFIX_PROBES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    ("ubisoft", "ubisoft_upc_state", "Ubisoft Connect", _UPC_PROBES),
+    ("battlenet", "battlenet_client_state", "Battle.net", _BNET_PROBES),
+)
+
 
 class Root(NamedTuple):
     """One directory tree to enumerate."""
@@ -173,34 +201,47 @@ def _render_root(root: Root) -> list[str]:
 
 
 def _render_upc(ctx: Any) -> list[str]:
-    """Existence of known Ubisoft Connect state, per prefix.
+    """Existence of known vendor-client state, per wrapper-store prefix.
 
-    Probed by name because absence is the signal. Ubisoft is the only
-    store whose prefixes are namespaced a level deeper, and its install
-    and sign-in failures usually come down to which of these exist.
+    Probed by name because absence is the signal. The wrapper stores are
+    the ones whose prefixes are namespaced a level deeper, and whose
+    install and sign-in failures usually come down to which of these exist.
     """
     data = ctx.root("data")
     if not data:
         return []
-    base = Path(data) / "prefixes" / "ubisoft"
+    lines: list[str] = []
+    for store, tag, label, probes in _WRAPPER_PREFIX_PROBES:
+        lines.extend(
+            _render_wrapper_prefixes(Path(data), store, tag, label, probes),
+        )
+    return lines
+
+
+def _render_wrapper_prefixes(
+    data: Path, store: str, section: str, label: str, probes: tuple[str, ...],
+) -> list[str]:
+    """The per-prefix existence block for one wrapper store."""
+    tag = f"[{section}]"
+    base = data / "prefixes" / store
     if not base.is_dir():
-        return ["[ubisoft_upc_state] no Ubisoft prefixes on this device", ""]
-    lines = ["[ubisoft_upc_state] per-prefix Ubisoft Connect state (existence only)"]
+        return [f"{tag} no {label} prefixes on this device", ""]
+    lines = [f"{tag} per-prefix {label} state (existence only)"]
     try:
         prefixes = sorted(child for child in base.iterdir() if child.is_dir())
     except OSError as err:
         return [*lines, f"  <unreadable: {err.strerror}>", ""]
     for prefix in prefixes:
         lines.append(f"  {prefix.name}")
-        lines.extend(f"    {row}" for row in _upc_rows(prefix))
+        lines.extend(f"    {row}" for row in _upc_rows(prefix, probes))
     lines.append("")
     return lines
 
 
-def _upc_rows(prefix: Path) -> list[str]:
-    """One existence row per known UPC path inside ``prefix``."""
+def _upc_rows(prefix: Path, probes: tuple[str, ...] = _UPC_PROBES) -> list[str]:
+    """One existence row per known vendor path inside ``prefix``."""
     rows: list[str] = []
-    for relative in _UPC_PROBES:
+    for relative in probes:
         target = prefix / relative
         try:
             info = target.stat()

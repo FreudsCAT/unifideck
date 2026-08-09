@@ -343,7 +343,20 @@ def test_uninstall_refuses_a_prefix_we_did_not_create(store: BattlenetStore, tmp
     assert stranger.is_dir()
 
 
+def test_install_refuses_when_the_family_code_is_unknown(store: BattlenetStore) -> None:
+    """A missing family fails the install rather than the launch.
+
+    ``--exec`` needs it, and Battle.net's response to a missing or obsolete
+    family is silent — the client opens and nothing happens. Refusing here
+    is the only place the user can be told to re-sync.
+    """
+    result = asyncio.run(store.install_game("wow"))
+    assert result.success is False
+    assert result.error_code == "family_unknown"
+
+
 def test_install_refuses_when_the_template_is_not_warmed(store: BattlenetStore) -> None:
+    store.id_map.merge("wow", family="WoW")
     result = asyncio.run(store.install_game("wow"))
     assert result.success is False
     assert result.error_code == "template_not_ready"
@@ -351,3 +364,77 @@ def test_install_refuses_when_the_template_is_not_warmed(store: BattlenetStore) 
 
 def test_check_for_updates_reports_nothing_rather_than_guessing(store: BattlenetStore) -> None:
     assert asyncio.run(store.check_for_updates()) == []
+
+
+# --------------------------------------------------------------------------
+# family codes reach the id map
+# --------------------------------------------------------------------------
+
+
+def test_a_library_read_records_every_family_code(
+    store: BattlenetStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sync is the writer that makes a title launchable before installing.
+
+    The launcher runs out-of-process and cannot reach the catalog, so a
+    family it is never told is one it can never use — and Battle.net's
+    failure for a missing family is silent. Before this, the id map was
+    never written at all and every launch aborted ``battlenetFamilyMissing``.
+    """
+    _sign_in(store, [1105059])
+    monkeypatch.setattr(
+        "unifideck.stores.battlenet.store.read_catalog", lambda _dc: _catalog(),
+    )
+
+    games = asyncio.run(store.get_library())
+
+    assert games, "fixture account should own something"
+    for game in games:
+        family = game.metadata.get("family")
+        if not family:
+            continue
+        assert store.id_map.resolve_family(game.store_game_id) == family
+
+
+def test_recorded_families_are_readable_by_the_launcher(
+    store: BattlenetStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cross the process boundary the real launcher crosses."""
+    from unifideck.launcher.proton.handlers import battlenet_client as client
+
+    _sign_in(store, [1105059])
+    monkeypatch.setattr(
+        "unifideck.stores.battlenet.store.read_catalog", lambda _dc: _catalog(),
+    )
+    monkeypatch.setattr(client, "ID_MAP_PATH", store.id_map.path)
+
+    games = asyncio.run(store.get_library())
+    launchable = next(g for g in games if g.metadata.get("family"))
+
+    assert client.resolve_family(launchable.store_game_id) == (
+        launchable.metadata["family"]
+    )
+
+
+def test_install_resolves_a_family_from_the_catalog_when_sync_has_not_run(
+    store: BattlenetStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Installing without a recent sync must not dead-end.
+
+    ``install_game`` refuses on an unknown family rather than handing the
+    launcher a game it cannot start, so it has to be able to resolve one
+    itself — otherwise a fresh profile can never install anything.
+    """
+    _sign_in(store, [1105059])
+    monkeypatch.setattr(
+        "unifideck.stores.battlenet.store.read_catalog", lambda _dc: _catalog(),
+    )
+    uid = _catalog().entry_for("ARK").uid_for()
+    assert store.id_map.resolve_family(uid) is None
+
+    # Fails later, on the template — but past the family gate, which is
+    # what this pins.
+    result = asyncio.run(store.install_game(uid))
+
+    assert result.error_code == "template_not_ready"
+    assert store.id_map.resolve_family(uid) == "ARK"

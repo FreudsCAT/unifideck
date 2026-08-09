@@ -48,6 +48,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Downloading Blizzard's installer and running it into a fresh prefix. Ten
+# minutes is generous for a ~5 MB stub plus a silent install; the point is
+# that it terminates at all, because this is awaited from the download
+# worker and a hang there wedges every queued install for every store.
+TEMPLATE_BOOTSTRAP_TIMEOUT = 600.0
+
 
 class BattlenetStore(StoreBase):
     """Blizzard Battle.net, driven through the vendor client in a prefix."""
@@ -75,7 +81,9 @@ class BattlenetStore(StoreBase):
         self.id_map = BattlenetIdMap(self.config.id_map_path)
         # Injected post-discovery by services/bootstrap/store_injector.py.
         self._shortcut_service: Any | None = None
-        self._edge: Any | None = None
+        # Strong refs to the background template warm, so the GC cannot
+        # collect the task mid-install.
+        self._background_tasks: set[Any] = set()
 
     # -- helpers -----------------------------------------------------------
 
@@ -84,11 +92,17 @@ class BattlenetStore(StoreBase):
         """drive_c of the prefix the user signed into, if it exists."""
         return paths.drive_c(self.prefixes.auth_prefix)
 
+    # ``prefix_env``/``prefix_name`` are load-bearing: without them the
+    # launcher derives the prefix from ``ctx.game_id`` ("bnet-auth") and
+    # signs the user in to an empty ``prefixes/battlenet/bnet-auth`` while
+    # the client lives in ``.bnet-auth``. Same token Ubisoft passes for UPC.
     AUTH_SHORTCUT = AuthShortcutSpec(
         store="battlenet",
         store_game_id="battlenet:bnet-auth",
         display_name="Battle.net",
         action_env="UNIFIDECK_BATTLENET_ACTION",
+        prefix_env="UNIFIDECK_BATTLENET_PREFIX_NAME",
+        prefix_name=paths.AUTH_PREFIX_NAME,
     )
 
     async def get_auth_shortcut_context(self) -> dict[str, Any]:
@@ -111,16 +125,34 @@ class BattlenetStore(StoreBase):
         self-update, because a stale template makes every game prefix open
         with a blocking "Required Update" modal nobody can click in Gaming
         Mode.
+
+        Bounded by :data:`TEMPLATE_BOOTSTRAP_TIMEOUT`. This downloads and
+        silently installs the vendor client, and it is awaited from the
+        download worker — an installer that hangs (a dead CDN, a wedged
+        wineserver) would otherwise stall the whole download queue with no
+        way out but a plugin restart.
         """
         template = self.prefixes.template_prefix
         if self.prefixes.template_ready():
             return True
-        result = await bootstrap_client(
-            template,
-            installer_url=self.config.installer_url,
-            installer_cache=self.config.installer_path,
-            resolver=self._wine_env(),
-        )
+        import asyncio
+
+        try:
+            result = await asyncio.wait_for(
+                bootstrap_client(
+                    template,
+                    installer_url=self.config.installer_url,
+                    installer_cache=self.config.installer_path,
+                    resolver=self._wine_env(),
+                ),
+                timeout=TEMPLATE_BOOTSTRAP_TIMEOUT,
+            )
+        except TimeoutError:
+            logger.exception(
+                "[Battlenet] template bootstrap timed out after %.0fs",
+                TEMPLATE_BOOTSTRAP_TIMEOUT,
+            )
+            return False
         if not result.success:
             logger.error("[Battlenet] template bootstrap failed: %s", result.error)
             return False
@@ -171,10 +203,14 @@ class BattlenetStore(StoreBase):
         """
         drive_c = self._auth_drive_c
         if drive_c is None:
+            self._cached_available = False
             return False
         from .ownership import read_licences
 
-        return read_licences(drive_c).is_usable
+        # ``StoreRegistry.available()`` reads this attribute rather than
+        # calling us, so a store that never sets it is never "available".
+        self._cached_available = read_licences(drive_c).is_usable
+        return self._cached_available
 
     async def start_auth(self, **_kwargs: Any) -> AuthResult:
         """Open the vendor client so the user can sign in.
@@ -210,8 +246,50 @@ class BattlenetStore(StoreBase):
             metadata={"pending": True, "prefix": str(self.prefixes.auth_prefix)},
         )
 
+    def _spawn_template_warm(self) -> None:
+        """Schedule :meth:`_warm_template_in_background`, if there is a loop.
+
+        ``complete_auth`` is also driven from tests and from the RPC layer
+        without a running loop in some paths; no loop simply means no warm,
+        and ``install_game`` builds the template itself.
+        """
+        import asyncio
+
+        if self.prefixes.template_ready():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(
+            self._warm_template_in_background(), name="battlenet_template_warm",
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _warm_template_in_background(self) -> None:
+        """Build the template prefix off the install hot path.
+
+        ``install_game`` needs it and will build it on demand, but that runs
+        on the download worker and takes minutes with no progress to show —
+        the user sees an install that appears to do nothing. Sign-in is the
+        natural moment: the installer has just been fetched, so this is
+        mostly a second silent install into a second prefix, and by the time
+        the user picks a game it is already done.
+
+        Fire-and-forget and fully guarded: a failure here costs nothing,
+        because ``install_game`` still calls ``ensure_template`` itself.
+        """
+        try:
+            if await self.ensure_template():
+                logger.info("[Battlenet] template prefix warmed after sign-in")
+        except Exception:
+            logger.exception("[Battlenet] background template warm failed")
+
     async def complete_auth(self, **_kwargs: Any) -> AuthResult:
         signed_in = await self.is_available()
+        if signed_in:
+            self._spawn_template_warm()
         return AuthResult(
             success=signed_in,
             store=self.store_name,
@@ -231,13 +309,11 @@ class BattlenetStore(StoreBase):
             self._cache.clear("battlenet")
         except Exception:
             logger.warning("[Battlenet] cache invalidate failed during logout")
-        await self._emit_logout()
+        # STORE_LOGOUT is emitted by ``StoreRegistry.auth_action`` on a
+        # successful logout, which is the only path that reaches here.
+        # Emitting it again would deliver the event twice.
+        self._cached_available = False
         return Result(success=True, store=self.store_name)
-
-    async def _emit_logout(self) -> None:
-        from unifideck.core.types.events import Events
-
-        await self._emit(Events.STORE_LOGOUT, store=self.store_name)
 
     async def get_library(self, *, force: bool = False) -> list[Game] | None:
         """Owned + installed titles, read entirely from client-local state."""
@@ -261,6 +337,7 @@ class BattlenetStore(StoreBase):
         games = library_mod.build_library(
             catalog, facts, installed, launcher_path=self._launcher_path(),
         )
+        self._record_families(games)
         logger.info(
             "[Battlenet] library: %d titles (%d installed, force=%s)",
             len(games),
@@ -268,6 +345,20 @@ class BattlenetStore(StoreBase):
             force,
         )
         return games
+
+    def _record_families(self, games: list[Game]) -> None:
+        """Persist each title's ``--exec`` family code to the id map.
+
+        The launcher runs out-of-process under the system Python and cannot
+        reach the catalog, so a family it is never told is a family it can
+        never use — and Battle.net's failure mode for a missing or obsolete
+        family is *silent*. Doing this at sync (rather than at install) is
+        what makes a title launchable without a prior install, and is the
+        only writer that sees the whole library.
+        """
+        changed = library_mod.record_families(self.id_map, games)
+        if changed:
+            logger.info("[Battlenet] recorded family codes for %d title(s)", changed)
 
     def _collect_installed(self) -> dict[str, Any]:
         """Install state across every prefix we have recorded."""
@@ -289,6 +380,21 @@ class BattlenetStore(StoreBase):
         to bring the client up.
         """
         del kwargs
+        # The install run opens the client on the game's page via
+        # ``--exec="launch <FAMILY>"``, so a missing family fails the install
+        # the same way it fails a launch — and silently. Resolve it here
+        # rather than letting the launcher discover the gap.
+        if not await self._ensure_family(game_id):
+            return InstallResult(
+                success=False,
+                game_id=game_id,
+                store=self.store_name,
+                error=(
+                    "Unifideck doesn't know Battle.net's code for this game — "
+                    "re-sync your library"
+                ),
+                error_code="family_unknown",
+            )
         if not await self.ensure_template():
             return InstallResult(
                 success=False,
@@ -314,6 +420,32 @@ class BattlenetStore(StoreBase):
             install_path=str(prefix),
             metadata={"phase": "manual", "prefix": str(prefix)},
         )
+
+    async def _ensure_family(self, game_id: str) -> bool:
+        """True once a family code for ``game_id`` is in the id map.
+
+        Normally already there — :meth:`get_library` records the whole
+        library on every sync. This covers the install-without-a-recent-sync
+        case by re-reading the catalog for just this title, which costs one
+        catalog parse rather than a full library build.
+        """
+        if self.id_map.resolve_family(game_id):
+            return True
+        drive_c = self._auth_drive_c
+        if drive_c is None:
+            return False
+        import asyncio
+
+        catalog = await asyncio.to_thread(read_catalog, drive_c)
+        family = library_mod.family_from_catalog(catalog, game_id)
+        if family is None:
+            logger.error("[Battlenet] no family code in the catalog for %s", game_id)
+            return False
+        self.id_map.merge(game_id, family=family)
+        logger.info(
+            "[Battlenet] resolved family %s for %s at install time", family, game_id,
+        )
+        return True
 
     async def uninstall_game(self, game_id: str, **kwargs: Any) -> Result:
         """Remove the game by removing its prefix — the install lives inside."""

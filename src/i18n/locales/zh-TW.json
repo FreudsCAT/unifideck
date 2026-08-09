@@ -113,10 +113,10 @@
     "etaLabel": "剩餘時間: {{eta}}",
     "preparingMessage": "正在初始化容器並同步雲端存檔...",
     "preparingLabel": "正在設定遊戲...",
-    "installingViaUpcLabel": "正在透過 Ubisoft Connect 安裝",
+    "installingViaClientLabel": "正在透過 {{client}} 安裝",
     "extractingMessage": "正在解壓縮檔案...",
     "verifyingMessage": "正在驗證檔案... {{pct}}%",
-    "installingViaUpcMessage": "請依照 Ubisoft Connect 視窗的提示完成安裝..."
+    "installingViaClientMessage": "請依照 {{client}} 視窗的提示完成安裝..."
   },
   "cloudSave": {
     "title": "雲端存檔衝突",

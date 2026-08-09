@@ -113,10 +113,10 @@
     "etaLabel": "Kalan Süre: {{eta}}",
     "preparingMessage": "Ön ek hazırlanıyor ve bulut kayıtları eşitleniyor...",
     "preparingLabel": "Oyun hazırlanıyor...",
-    "installingViaUpcLabel": "Ubisoft Connect ile yükleniyor",
+    "installingViaClientLabel": "{{client}} ile yükleniyor",
     "extractingMessage": "Dosyalar çıkarılıyor...",
     "verifyingMessage": "Dosyalar doğrulanıyor... {{pct}}%",
-    "installingViaUpcMessage": "Kurulumu tamamlamak için Ubisoft Connect penceresini izleyin..."
+    "installingViaClientMessage": "Kurulumu tamamlamak için {{client}} penceresini izleyin..."
   },
   "cloudSave": {
     "title": "Bulut Kaydı Çakışması",

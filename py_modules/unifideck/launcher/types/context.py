@@ -13,6 +13,7 @@ KNOWN_STORES: tuple[str, ...] = (
     "amazon",
     "microsoft",
     "ubisoft",
+    "battlenet",
 )
 
 

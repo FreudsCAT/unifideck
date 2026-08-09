@@ -154,10 +154,14 @@ class DownloadRPCMixin:
         install-from-details flow. A miss returns ``None`` (the preflight
         degrades to the static floor); we deliberately do NOT shell out
         to the store CLI here, so a cold cache never delays or hangs the
-        install. Ubisoft is a manual UPC install with no real download,
-        so it's exempt.
+        install. The wrapper stores are manual vendor-client installs with
+        no download of ours to measure, so they're exempt — asking for a
+        size that cannot exist just makes the preflight fall back to its
+        static floor by the slowest possible route.
         """
-        if store == "ubisoft":
+        from unifideck.launcher.wrapper_stores import uses_manual_download_phase
+
+        if uses_manual_download_phase(store):
             return None
         from unifideck.services.size_cache import get_size_cache
         cache = get_size_cache(_size_cache_file(getattr(self, "config", None)))

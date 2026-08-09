@@ -231,6 +231,13 @@ _STATE_MEDIUM: tuple[SourceSpec, ...] = (
         writer="stores/ubisoft/config.py",
     ),
     SourceSpec(
+        key="battlenet_id_map",
+        what="Battle.net uid to family code, prefix and proven-launch state",
+        root="data", pattern="battlenet_id_map.json", arch_dir="data",
+        max_bytes=CAP_SMALL_JSON, scrub="json", priority=55, expect="battlenet",
+        writer="stores/battlenet/id_map.py",
+    ),
+    SourceSpec(
         key="steam_owned_titles", what="Titles already owned on Steam (dedup input)",
         root="data", pattern="steam_owned_titles.json", arch_dir="data",
         max_bytes=CAP_SMALL_JSON, scrub="json", priority=55, expect="sync",

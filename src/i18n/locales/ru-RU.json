@@ -113,10 +113,10 @@
     "etaLabel": "Осталось времени: {{eta}}",
     "preparingMessage": "Инициализация префикса и синхронизация облачных сохранений...",
     "preparingLabel": "Настройка игры...",
-    "installingViaUpcLabel": "Установка через Ubisoft Connect",
+    "installingViaClientLabel": "Установка через {{client}}",
     "extractingMessage": "Извлечение файлов...",
     "verifyingMessage": "Проверка файлов... {{pct}}%",
-    "installingViaUpcMessage": "Следуйте инструкциям в окне Ubisoft Connect, чтобы завершить установку..."
+    "installingViaClientMessage": "Следуйте инструкциям в окне {{client}}, чтобы завершить установку..."
   },
   "cloudSave": {
     "title": "Конфликт облачных сохранений",
