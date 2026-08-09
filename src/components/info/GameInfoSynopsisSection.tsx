@@ -30,7 +30,10 @@ export const GameInfoSynopsisSection: FC<Props> = ({ description }) => {
         whiteSpace: "pre-wrap",
       }}
       onFocus={(e: React.FocusEvent<HTMLDivElement>) => {
-        e.currentTarget.scrollIntoView({ behavior: "smooth", block: "center" });
+        e.currentTarget.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+        });
       }}
     >
       {description}

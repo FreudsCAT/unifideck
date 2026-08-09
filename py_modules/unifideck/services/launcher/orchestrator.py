@@ -39,12 +39,6 @@ async def launch_windows(
     try:
         # Phase 1: Prepare
         plan, _parsed_options = await svc._prepare_windows_plan(ctx, state)
-        # The Proton this plan was frozen with. ``setup_prefix`` may end up on
-        # a different one (its GE hang-recovery ladder), and the game must
-        # follow the prefix — see ``realign_plan_to_prefix_proton``.
-        plan_tool = getattr(state, "proton_tool_id", None)
-        plan_path = getattr(state, "proton_path", None)
-        plan_proton = (plan_path, plan_tool) if plan_path and plan_tool else None
 
         from unifideck.core.types.events import Events
         store = ctx.store
@@ -53,27 +47,17 @@ async def launch_windows(
         # Phase 1.5: Run the canonical prefix setup BEFORE the cloud sync-down.
         # ``setup_prefix`` is the SAME self-healing process install-time warmup
         # runs — createprefix + generic compat (winetricks + VC++ registry fix)
-        # with the managed-GE recovery ladder, and it PINS the Proton it
-        # succeeds with so a warmup that recovered to GE isn't undone here (the
-        # old split ran only createprefix here + compat later in ``dispatch``
-        # with no recovery, so launch re-picked the hanging global-default
-        # Proton, saw a "family change" against the GE-warmed prefix, and wiped
-        # + rebuilt it at Play time). Must precede sync-down: the save dir
-        # resolves out of ``drive_c`` (e.g. GOG's ``<?DOCUMENTS?>\\<title>``),
-        # which only exists after ``createprefix``. Idempotent — a no-op once
-        # the prefix is set up and the Proton matches the pin. ``session_env``
-        # is None: at launch Steam already provides the user session.
-        # ``proton=`` hands over the tool Phase 1 already resolved so the whole
-        # launch reads ``config.vdf`` once and the two resolutions cannot drift.
-        from unifideck.launcher.proton import setup_prefix
-        await setup_prefix(ctx, state, proton=plan_proton)
-        # A Wine prefix is single-Proton state: if the ladder moved, the game
-        # has to move with it, or it runs against a prefix another Proton
-        # built and stamped.
-        from .helpers import realign_plan_to_prefix_proton
-        plan = realign_plan_to_prefix_proton(
-            plan, ctx, state, plan_tool=plan_tool or "",
-        )
+        # with the managed-GE recovery ladder, which on a genuine hang pins the
+        # Proton it recovered to (the old split ran only createprefix here +
+        # compat later in ``dispatch`` with no recovery, so launch re-picked the
+        # hanging global-default Proton, saw a "family change" against the
+        # GE-warmed prefix, and wiped + rebuilt it at Play time). Must precede
+        # sync-down: the save dir resolves out of ``drive_c`` (e.g. GOG's
+        # ``<?DOCUMENTS?>\\<title>``), which only exists after ``createprefix``.
+        # Idempotent — a no-op once the prefix is set up. ``session_env`` is
+        # None: at launch Steam already provides the user session. The returned
+        # plan is authoritative for the launch (see the helper's docstring).
+        plan = await _setup_prefix_and_realign(svc, ctx, state)
 
         # Phase 2: Cloud Sync Down
         await svc._cloud_sync_phase(ctx, "down")
@@ -93,6 +77,42 @@ async def launch_windows(
     except Exception:
         logger.exception("[Orchestrator] Windows launch failed")
         raise  # Let the outer _handle_launcher_error catch and toast it
+
+
+async def _setup_prefix_and_realign(
+    svc: LauncherService,
+    ctx: LaunchContext,
+    state: RuntimeState,
+) -> ProtonLaunchPlan:
+    """Run the canonical prefix setup; return the plan the game must launch with.
+
+    ``setup_prefix`` both mutates ``state`` (it builds its own plans, possibly
+    under a borrowed Proton) and can conclude via its hang-recovery ladder that
+    a DIFFERENT Proton is the working one. Either way the Phase-1 plan is no
+    longer trustworthy, so rebuild it from the tool setup actually settled on.
+
+    Launching the stale plan is the bug this exists to prevent: the launcher
+    logged ``proton=GE-Proton11-3`` while umu ran the user's
+    Proton-Experimental, so every launch re-stamped the prefix
+    ("Upgrading prefix from X to Y" / "Prefix has an invalid version?!") and
+    erased the VC++ registry keys compat had just imported.
+    """
+    from unifideck.launcher.proton import setup_prefix
+
+    initial_tool = state.proton_tool_id
+    final_tool, _recovered = await setup_prefix(ctx, state)
+    tool = final_tool or initial_tool
+    if tool != initial_tool:
+        logger.info(
+            "[Orchestrator] prefix setup settled on proton=%s (launch resolved "
+            "%s) — rebuilding the plan so the game runs under it",
+            tool, initial_tool,
+        )
+    # Rebuild unconditionally: even when the tool is unchanged, ``state`` may
+    # still carry the borrowed Proton's path/wrapper, and plan and state must
+    # agree for cancellation and the dispatch log to mean anything.
+    rebuilt, _ = await svc._prepare_windows_plan(ctx, state, tool_id=tool)
+    return rebuilt
 
 
 async def _run_and_finalize(

@@ -45,6 +45,11 @@ export interface GameMetadata {
   deck_test_results: DeckTestResult[];
   genres: string[];
   homepage_url?: string;
+  /** Whether THIS store's copy of the game has native cloud saves.
+   *  ``null``/absent = unknown (no enriched entry), and the UI stays quiet
+   *  rather than claiming an absence. Known before the game is installed, so
+   *  it can inform which storefront's copy to download. */
+  cloud_saves?: boolean | null;
 }
 
 /** Universal `Game` representation aggregated from any store. */

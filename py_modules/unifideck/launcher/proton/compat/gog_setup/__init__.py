@@ -40,7 +40,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_MARKER_NAME = ".unifideck-gog-setup-done"
+# ``.v2`` invalidates markers written by the builds whose ``AUTH_CONFIG``
+# pointed at a ``gogdl/auth.json`` subdir that never existed: those runs logged
+# "cannot download redist (gogdl=True auth=False)", installed NOTHING, and then
+# wrote this marker anyway — latching the failure for the life of the prefix.
+# Every affected prefix retries its redistributables exactly once on the next
+# launch. Bump again if the redist step's contract changes.
+_MARKER_NAME = ".unifideck-gog-setup-done.v2"
 # Versioned marker for the script-registry step alone. Bumped to ``.v2`` when
 # the dual-WOW64-view write landed; existing prefixes (whose only marker is the
 # heavy ``_MARKER_NAME``) re-apply their registry script once so 32-bit GOG
@@ -84,11 +90,23 @@ async def apply_gog_setup(
 
     deps = get_dependencies(manifest)
     logger.info("[gog_setup] %s deps: %s", game_id, ", ".join(deps) or "none")
+    redists_ok = True
     if deps:
-        await ensure_redist_downloaded(plan, deps)
+        redists_ok = await ensure_redist_downloaded(plan, deps)
     await _run_setup_scripts(plan, game_id, manifest, install_path, language)
-    if deps:
-        await _install_redists(plan, deps)
+    if deps and redists_ok:
+        redists_ok = await _install_redists(plan, deps)
+    if not redists_ok:
+        # Do NOT write the marker: the game's declared redistributables
+        # (MSVC*, UE4REDIST, …) are what its launcher stub checks for, and a
+        # marker here would suppress the retry forever — which is exactly how
+        # every GOG prefix ended up with no redistributables at all. Still
+        # best-effort: the launch continues either way.
+        logger.warning(
+            "[gog_setup] redistributables incomplete for %s — leaving marker "
+            "unwritten so the next launch retries", game_id,
+        )
+        return
     _write_marker(marker)
     logger.info("[gog_setup] complete for %s", game_id)
 
@@ -113,13 +131,18 @@ async def _run_setup_scripts(
         )
 
 
-async def _install_redists(plan: ProtonLaunchPlan, deps: list[str]) -> None:
-    """Install downloaded redistributables from the redist manifest."""
+async def _install_redists(plan: ProtonLaunchPlan, deps: list[str]) -> bool:
+    """Install downloaded redistributables; False if the manifest is absent.
+
+    A missing manifest means the download never landed, so the caller must
+    not record the setup as done.
+    """
     redist_manifest = load_redist_manifest()
     if redist_manifest is None:
         logger.warning("[gog_setup] no redist manifest found")
-        return
+        return False
     await install_redistributables(plan, deps, redist_manifest)
+    return True
 
 
 async def _ensure_script_registry(

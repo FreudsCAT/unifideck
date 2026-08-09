@@ -202,6 +202,7 @@ class EpicAchievements:
         try:
             proc = await asyncio.create_subprocess_exec(
                 self._cli_path, "status",
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )

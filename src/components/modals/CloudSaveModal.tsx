@@ -18,7 +18,7 @@
  * override (the highest-priority resolution tier).
  */
 import { FC, useState } from "react";
-import { ConfirmModal, DialogButton } from "@decky/ui";
+import { ConfirmModal, DialogButton, Focusable } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import {
   FaCloud,
@@ -28,6 +28,7 @@ import {
   FaExclamationTriangle,
   FaFolderOpen,
   FaSyncAlt,
+  FaUndo,
 } from "react-icons/fa";
 import { rpcRoutes } from "../../api/rpc-routes";
 import { useRPCMutation } from "../../api/useRPC";
@@ -170,6 +171,18 @@ export const CloudSaveModal: FC<Props> = ({
     }
   };
 
+  // Empty path clears `games.<id>.save_path` backend-side, dropping back to
+  // strategy + prefix auto-detection.
+  const onResetPath = async () => {
+    const r = await setPath.mutate(store, gameId, "");
+    if (r !== null) {
+      toast.success(t("toasts.cloudSavePathReset"));
+      void live.refetch();
+    } else {
+      toast.error(t("toasts.cloudSavePathFailed"));
+    }
+  };
+
   // Both directions need a REAL resolved save location — without one (no
   // prefix yet) there's nowhere the game reads from, so we don't sync into a
   // staging dir. The unresolved banner guides the user to launch / set a path.
@@ -216,6 +229,10 @@ export const CloudSaveModal: FC<Props> = ({
       bAlertDialog
       strOKButtonText={t("play.cloudSave.close")}
       onOK={closeModal}
+      // Without onCancel, B does nothing and the window can only be dismissed
+      // with the on-screen Close button. Steam's own bAlertDialog call sites
+      // always pass both handlers.
+      onCancel={closeModal}
     >
       <div style={{ padding: "10px 0" }}>
         {!status.save_path_resolved && (
@@ -257,6 +274,57 @@ export const CloudSaveModal: FC<Props> = ({
             </DialogButton>
           </div>
         )}
+        {status.save_path_resolved && (
+          // A RESOLVED path can still be the WRONG path — auto-detection
+          // sometimes lands on the whole game folder. Previously the picker
+          // was reachable only from the unresolved banner above, so a
+          // mis-detected location had no route to a fix. Always offer it.
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              marginBottom: 14,
+              padding: 10,
+              borderRadius: 8,
+              background: "rgba(255,255,255,0.04)",
+            }}
+          >
+            <span style={{ fontSize: 12, color: "#bbb" }}>
+              {t("play.cloudSave.currentLocation")}
+            </span>
+            <span
+              style={{
+                fontSize: 12,
+                color: "#ddd",
+                wordBreak: "break-all",
+                lineHeight: "1.4",
+              }}
+            >
+              {status.save_path}
+            </span>
+            <Focusable
+              flow-children="row"
+              style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+            >
+              <DialogButton
+                onClick={() => setPicking(true)}
+                style={{ ...actionBtnStyle, minWidth: 0 }}
+              >
+                <FaFolderOpen /> {t("play.cloudSave.changeLocation")}
+              </DialogButton>
+              {status.save_path_is_override && (
+                <DialogButton
+                  disabled={setPath.loading}
+                  onClick={() => void onResetPath()}
+                  style={{ ...actionBtnStyle, minWidth: 0 }}
+                >
+                  <FaUndo /> {t("play.cloudSave.resetLocation")}
+                </DialogButton>
+              )}
+            </Focusable>
+          </div>
+        )}
         <div
           style={{
             display: "flex",
@@ -291,7 +359,13 @@ export const CloudSaveModal: FC<Props> = ({
             </span>
           </div>
         </div>
-        <div
+        {/* A bare flex div creates NO gamepad nav node, so Download/Upload
+            ended up as flat siblings of Close under the column-flow
+            DialogBody — left/right did nothing and DOWN moved between two
+            side-by-side buttons. Steam's own two-button dialog rows are
+            Focusables for exactly this reason. */}
+        <Focusable
+          flow-children="row"
           style={{
             display: "flex",
             gap: 10,
@@ -313,7 +387,7 @@ export const CloudSaveModal: FC<Props> = ({
           >
             <FaCloudUploadAlt /> {t("play.cloudSave.upload")}
           </DialogButton>
-        </div>
+        </Focusable>
         {syncing && (
           <div
             style={{

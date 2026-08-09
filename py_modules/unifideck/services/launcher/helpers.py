@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
     from unifideck.launcher.types.context import LaunchContext, RuntimeState
 
     from .service import LauncherService
@@ -245,10 +244,41 @@ async def _emit_cloud_unavailable_toast(
         logger.debug("[Helpers] cloud-unavailable toast failed: %s", e)
 
 
+def _resolve_launch_proton(
+    ctx: LaunchContext,
+    tool_id: str | None,
+    select_proton_version: Any,
+) -> tuple[Any, str]:
+    """The ``(path, tool_id)`` to build the launch plan with.
+
+    ``tool_id`` pins an explicit Proton — used to rebuild the plan after
+    ``setup_prefix`` concluded a different one is the working Proton, so the
+    game runs under whatever actually built its prefix. Falls back to normal
+    resolution if that id no longer resolves to a path.
+    """
+    from unifideck.launcher.proton import resolve_proton_path
+
+    if tool_id:
+        path = resolve_proton_path(tool_id)
+        if path is not None:
+            return path, tool_id
+        logger.warning(
+            "[Helpers] proton=%s did not resolve to a path — falling back to "
+            "normal selection for %s", tool_id, ctx.game_key,
+        )
+    resolved: tuple[Any, str] = select_proton_version(
+        steam_app_id=ctx.steam_app_id,
+        store_game_id=ctx.game_key,
+    )
+    return resolved
+
+
 async def prepare_windows_plan(
     svc: LauncherService,
     ctx: LaunchContext,
     state: RuntimeState,
+    *,
+    tool_id: str | None = None,
 ) -> tuple[Any, Any]:
     """Prepare the Proton launch plan for a Windows game.
 
@@ -273,9 +303,8 @@ async def prepare_windows_plan(
 
     try:
         python_bin = find_python_3_10_plus()
-        proton_path, proton_tool_id = select_proton_version(
-            steam_app_id=ctx.steam_app_id,
-            store_game_id=ctx.game_key,
+        proton_path, proton_tool_id = _resolve_launch_proton(
+            ctx, tool_id, select_proton_version,
         )
         def _on_process_start(proc: object) -> None:
             svc._active_subprocess = proc
@@ -296,48 +325,6 @@ async def prepare_windows_plan(
     except Exception:
         logger.exception("[Helpers] prepare_windows_plan failed")
         raise
-
-
-def realign_plan_to_prefix_proton(
-    plan: ProtonLaunchPlan,
-    ctx: LaunchContext,
-    state: RuntimeState,
-    *,
-    plan_tool: str,
-) -> ProtonLaunchPlan:
-    """Return a plan whose Proton matches the one that built the prefix.
-
-    ``launch_windows`` freezes ``plan.env["PROTONPATH"]`` in Phase 1, then runs
-    ``setup_prefix`` in Phase 1.5 — which may legitimately end up on a
-    different Proton (its GE hang-recovery ladder). Nothing used to reconcile
-    the two, so the game ran under the Phase-1 Proton inside a prefix another
-    Proton had created, compat-installed and version-stamped. A Wine prefix is
-    single-Proton state: the mismatch shows up as Proton's own "Prefix has an
-    invalid version?!" and, in the field, as a game that simply does not start.
-
-    A no-op in the overwhelmingly common case (``setup_prefix`` stayed on the
-    Proton the plan already had). ``ProtonLaunchPlan`` is frozen, so the
-    changed case has to build a new one; ``on_process_start`` is carried over
-    so Stop/cancel still reaches the game.
-    """
-    final_tool = getattr(state, "proton_tool_id", None)
-    final_path = getattr(state, "proton_path", None)
-    if not final_tool or not final_path or final_tool == plan_tool:
-        return plan
-    from unifideck.launcher.proton import proton_prepare
-
-    logger.info(
-        "[Helpers] realigned plan to proton=%s (it built the prefix; the "
-        "plan was prepared with %s)", final_tool, plan_tool,
-    )
-    return proton_prepare(
-        ctx,
-        state,
-        python_bin=plan.python_bin,
-        proton_path=final_path,
-        proton_tool_id=final_tool,
-        on_process_start=plan.on_process_start,
-    )
 
 
 async def cloud_sync_phase(
@@ -405,15 +392,15 @@ async def run_game_subprocess(
     """
     from unifideck.launcher.proton import dispatch
 
-    # PROTONPATH alongside the tool id: they are separate values (one from
-    # ``state``, one frozen into ``plan.env``) and the whole class of bug this
-    # log used to hide was them disagreeing. Printing both makes the log
-    # self-verifying instead of merely plausible.
+    # Report PROTONPATH, not ``state.proton_tool_id``: the state object is
+    # shared and ``setup_prefix`` mutates it while borrowing another Proton for
+    # the winetricks verb, so the tool id could name a Proton this launch never
+    # uses. PROTONPATH is what umu actually reads, so this line cannot drift
+    # from reality again (it previously logged "GE-Proton11-3" for launches umu
+    # ran under Proton-Experimental).
     logger.info(
-        "[Helpers] Dispatching Proton launch: store=%s game_id=%s proton=%s "
-        "PROTONPATH=%s",
-        ctx.store, ctx.game_id, state.proton_tool_id,
-        plan.env.get("PROTONPATH"),
+        "[Helpers] Dispatching Proton launch: store=%s game_id=%s proton=%s",
+        ctx.store, ctx.game_id, Path(plan.env["PROTONPATH"]).name,
     )
     try:
         rc = await dispatch(plan)

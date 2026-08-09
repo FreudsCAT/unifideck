@@ -15,21 +15,16 @@
 import { FC, useCallback, useEffect, useState } from "react";
 import { DialogButton, showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
-import { call } from "@decky/api";
-import {
-  FaCog,
-  FaGamepad,
-  FaPlay,
-  FaSyncAlt,
-  FaTimes,
-  FaTrash,
-} from "react-icons/fa";
+import { FaPlay, FaSyncAlt, FaTimes, FaTrash } from "react-icons/fa";
+import { SteamControllerIcon, SteamGearIcon } from "../shared";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useGameActions } from "../../hooks/useGameActions";
+import { useGameUpdate } from "../../hooks/useGameUpdate";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { openNativeAppManageMenu } from "../../utils/nativeAppMenu";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
+import { UpdateAvailableModal } from "../modals/UpdateAvailableModal";
 import { CloudSaveButton } from "./CloudSaveButton";
 import {
   PlayShell,
@@ -37,6 +32,9 @@ import {
   IconGroup,
   actionBtnStyle,
   iconBtnStyle,
+  actionBtnClass,
+  iconBtnClass,
+  controllerBtnClass,
 } from "./PlayMeta";
 
 interface Props {
@@ -87,10 +85,6 @@ function openAppSettings(appId: number): void {
   ).SteamClient?.Apps?.OpenAppSettingsDialog?.(appId, "general");
 }
 
-interface UpdateCheckResponse {
-  has_update?: boolean;
-}
-
 export const InstalledButtons: FC<Props> = ({
   appId,
   bridge = defaultBridge,
@@ -100,7 +94,13 @@ export const InstalledButtons: FC<Props> = ({
   const actions = useGameActions(bridge);
   const toast = useToast();
   const [isRunning, setIsRunning] = useState(false);
-  const [hasUpdate, setHasUpdate] = useState(false);
+  const gameStore = game?.store;
+  const gameId = game?.id;
+  // Read-only view of the backend sweep's result — already in memory, so
+  // this costs nothing and cannot delay the button the way the old
+  // inline `check_game_update` scan did (5-10 s for Epic, because
+  // legendary logs in and refreshes its asset manifest first).
+  const hasUpdate = useGameUpdate(gameStore, gameId);
 
   // Steam's Force-Compatibility is captured into Unifideck's own per-game
   // pin and cleared before RunGame — that happens inside actions.launch,
@@ -126,48 +126,11 @@ export const InstalledButtons: FC<Props> = ({
     };
   }, [appId]);
 
-  // Update check — one-shot on mount. The backend RPC takes
-  // (store, game_id) and returns { has_update } — passing the raw
-  // appId (the old call) threw "missing argument: game_id" on every
-  // page load and update detection never worked.
-  useEffect(() => {
-    if (!game) return;
-    let cancelled = false;
-    call<[string, string], UpdateCheckResponse>(
-      "check_game_update",
-      game.store,
-      game.id,
-    )
-      .then((res) => {
-        if (cancelled) return;
-        setHasUpdate(Boolean(res?.has_update));
-      })
-      .catch(() => {
-        /* non-critical */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [game]);
-
-  const onPlay = useCallback(() => {
-    if (!game) return;
-    void actions.launch(appId, `${game.store}:${game.store_game_id}`);
-  }, [actions, appId, game]);
-
-  const onStop = useCallback(() => {
-    actions.terminate(appId);
-  }, [actions, appId]);
-
   const onUpdate = useCallback(async () => {
     if (!game) return;
     try {
-      const res = await call<[number], { success: boolean; error?: string }>(
-        "update_game",
-        appId,
-      );
+      const res = await actions.update(appId, gameStore, gameId);
       if (res?.success) {
-        setHasUpdate(false);
         toast.success(t("toasts.updateQueued"));
       } else {
         toast.error(t("toasts.updateFailed"), res?.error ?? "");
@@ -175,7 +138,43 @@ export const InstalledButtons: FC<Props> = ({
     } catch (e) {
       toast.error(t("toasts.updateFailed"), String(e));
     }
-  }, [appId, game, t, toast]);
+  }, [actions, appId, game, gameId, gameStore, t, toast]);
+
+  const onResume = useCallback(() => {
+    if (!game) return;
+    void actions.launch(appId, `${game.store}:${game.store_game_id}`);
+  }, [actions, appId, game]);
+
+  // Launching a game with a pending update asks first rather than
+  // blocking: most single-player titles run fine a build behind, but an
+  // online game will simply refuse to connect, and nothing on the launch
+  // path used to tell the user that was why. Reads cached state only —
+  // no network call, so a game with no update launches straight through.
+  //
+  // Defence in depth: the button below already renders Update INSTEAD of
+  // Play whenever we know about one, so this normally never fires. It
+  // covers the window where the sweep's event lands between render and
+  // press — without it, that press would silently launch a stale build.
+  const onPlay = useCallback(() => {
+    if (!game) return;
+    const gameKey = `${game.store}:${game.store_game_id}`;
+    if (!hasUpdate) {
+      void actions.launch(appId, gameKey);
+      return;
+    }
+    showModal(
+      <UpdateAvailableModal
+        gameTitle={game.title}
+        onUpdate={onUpdate}
+        onPlayAnyway={() => void actions.launch(appId, gameKey)}
+        closeModal={() => {}}
+      />,
+    );
+  }, [actions, appId, game, hasUpdate, onUpdate]);
+
+  const onStop = useCallback(() => {
+    actions.terminate(appId);
+  }, [actions, appId]);
 
   const onUninstall = useCallback(() => {
     if (!game) return;
@@ -196,16 +195,20 @@ export const InstalledButtons: FC<Props> = ({
     if (isRunning) {
       return (
         <>
+          {/* Resume, not onPlay: the game is ALREADY running, so the
+              pending-update prompt would be nonsense here — there is
+              nothing left to decide, and updating over a running game
+              is not something we want to offer. */}
           <DialogButton
-            className="unifideck-resume-btn"
+            className={actionBtnClass("unifideck-resume-btn")}
             disabled={loading}
-            onClick={onPlay}
+            onClick={onResume}
             style={actionBtnStyle}
           >
             <FaPlay /> {t("play.resume")}
           </DialogButton>
           <DialogButton
-            className="unifideck-stop-btn"
+            className={iconBtnClass("unifideck-stop-btn")}
             onClick={onStop}
             style={iconBtnStyle}
             aria-label={t("play.stop")}
@@ -218,7 +221,7 @@ export const InstalledButtons: FC<Props> = ({
     if (hasUpdate) {
       return (
         <DialogButton
-          className="unifideck-update-btn"
+          className={actionBtnClass("unifideck-update-btn")}
           disabled={loading || actions.isWorking}
           onClick={onUpdate}
           style={actionBtnStyle}
@@ -229,7 +232,7 @@ export const InstalledButtons: FC<Props> = ({
     }
     return (
       <DialogButton
-        className="unifideck-play-btn"
+        className={actionBtnClass("unifideck-play-btn")}
         disabled={loading}
         onClick={onPlay}
         style={actionBtnStyle}
@@ -261,15 +264,15 @@ export const InstalledButtons: FC<Props> = ({
           />
         )}
         <DialogButton
-          className="unifideck-icon-btn"
+          className={controllerBtnClass()}
           style={iconBtnStyle}
           onClick={() => openControllerConfig(appId)}
           aria-label={t("playButton.controllerConfig")}
         >
-          <FaGamepad />
+          <SteamControllerIcon />
         </DialogButton>
         <DialogButton
-          className="unifideck-icon-btn"
+          className={iconBtnClass()}
           style={iconBtnStyle}
           onClick={(e) => {
             // Open Steam's native app menu (Manage / Properties / …),
@@ -280,10 +283,10 @@ export const InstalledButtons: FC<Props> = ({
           }}
           aria-label={t("playButton.appSettings")}
         >
-          <FaCog />
+          <SteamGearIcon />
         </DialogButton>
         <DialogButton
-          className="unifideck-icon-btn"
+          className={iconBtnClass()}
           style={iconBtnStyle}
           disabled={loading || actions.isWorking}
           onClick={onUninstall}

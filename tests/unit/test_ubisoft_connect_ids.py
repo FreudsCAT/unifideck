@@ -129,7 +129,7 @@ def test_handler_resolves_uplay_id_from_id_map(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(handler, "_ID_MAP_FILE", id_map_file)
+    monkeypatch.setattr(handler, "ID_MAP_FILE", id_map_file)
     # prefers connect id over launch_id
     assert handler._uplay_id_from_id_map(_SPACE) == "9001"
 
@@ -142,12 +142,12 @@ def test_handler_falls_back_to_launch_id(tmp_path, monkeypatch):
         json.dumps({_SPACE: {"launch_id": "100", "install_id": "50"}}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(handler, "_ID_MAP_FILE", id_map_file)
+    monkeypatch.setattr(handler, "ID_MAP_FILE", id_map_file)
     assert handler._uplay_id_from_id_map(_SPACE) == "100"
 
 
 def test_handler_returns_none_when_unknown(tmp_path, monkeypatch):
     from unifideck.launcher.proton.handlers import ubisoft as handler
 
-    monkeypatch.setattr(handler, "_ID_MAP_FILE", tmp_path / "missing.json")
+    monkeypatch.setattr(handler, "ID_MAP_FILE", tmp_path / "missing.json")
     assert handler._uplay_id_from_id_map(_SPACE) is None

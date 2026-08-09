@@ -388,7 +388,8 @@
     "cloudPullDone": "Sauvegarde cloud téléchargée",
     "cloudPullFailed": "Échec du téléchargement de la sauvegarde cloud",
     "cloudPushDone": "Sauvegarde locale téléversée",
-    "cloudPushFailed": "Échec du téléversement de la sauvegarde locale"
+    "cloudPushFailed": "Échec du téléversement de la sauvegarde locale",
+    "cloudSavePathReset": "Emplacement de sauvegarde rétabli en automatique"
   },
   "uninstallModal": {
     "title": "Confirmer la désinstallation",
@@ -399,6 +400,12 @@
     "warningBody": "Cela supprimera définitivement les données de sauvegarde situées dans le préfixe Wine. Assurez-vous d'avoir une sauvegarde.",
     "cancel": "Annuler",
     "uninstall": "Désinstaller"
+  },
+  "updateModal": {
+    "title": "Mise à jour disponible",
+    "description": "Une mise à jour est disponible pour {{title}}. Sans elle, les fonctionnalités en ligne risquent de ne pas fonctionner.",
+    "updateNow": "Mettre à jour",
+    "playAnyway": "Jouer quand même"
   },
   "languageSettings": {
     "title": "LANGUE",
@@ -560,7 +567,7 @@
     "simple": "Simple",
     "detailed": "Détaillée"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "Sélectionner la langue",
     "description": "Choisissez la langue à télécharger pour {{title}}",
     "label": "Langue",
@@ -697,7 +704,11 @@
       "statusSyncing": "Synchronisation des sauvegardes cloud…",
       "statusUnresolved": "Emplacement de sauvegarde introuvable — la synchronisation pourrait ne pas fonctionner pour ce jeu.",
       "unresolvedHint": "Lancez le jeu une fois pour que nous puissions détecter son dossier de sauvegarde, ou définissez l'emplacement manuellement.",
-      "upload": "Téléverser la sauvegarde locale"
+      "upload": "Téléverser la sauvegarde locale",
+      "currentLocation": "Emplacement de sauvegarde",
+      "changeLocation": "Changer l'emplacement",
+      "resetLocation": "Rétablir en automatique",
+      "statusInSync": "Sauvegardes cloud à jour"
     },
     "exe": {
       "browse": "Parcourir…",
@@ -719,7 +730,11 @@
     "neverPlayed": "Jamais joué",
     "hoursShort": "h",
     "minutesShort": "m",
-    "played": "Jouées"
+    "played": "Jouées",
+    "cloudSaves": "Sauvegardes cloud",
+    "cloudSupported": "Pris en charge",
+    "cloudNotSupported": "Non pris en charge",
+    "cloudUnknown": "Inconnu"
   },
   "downloads": {
     "title": "Téléchargements",
@@ -730,13 +745,20 @@
     "cancel": "Annuler",
     "removeFromQueue": "Supprimer",
     "play": "Jouer",
+    "update": "Mettre à jour",
     "outcome": {
       "queued": "En file d'attente",
       "downloading": "Téléchargement",
       "completed": "Terminé",
       "cancelled": "Annulé",
       "error": "Échoué"
-    }
+    },
+    "installedCount": "Installés ({{count}})",
+    "failed": "Échecs",
+    "clearFailed": "Effacer les échecs",
+    "uninstall": "Désinstaller",
+    "locationInternal": "Interne",
+    "locationExternal": "Externe"
   },
   "navigation": {
     "loading": "Chargement...",

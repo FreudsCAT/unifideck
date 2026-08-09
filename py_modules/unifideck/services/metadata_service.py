@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
@@ -36,6 +36,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 CACHE_NAMESPACE = "metadata"
+
+# Schema stamp for the unifiDB save-location block on a cached entry. Entries
+# without the current value are topped up in place by
+# ``_served_from_cache`` — see the note there. Bump only when the shape of
+# ``save_locations``/``cloud``/``save_source`` changes in a way that needs a
+# re-fetch; it does NOT invalidate the (expensive) Steam half of the entry.
+_SAVEDATA_SCHEMA_KEY = "_savedata_v"
+# v2: the unifiDB bucket lookup stripped leading articles while the catalog
+# buckets by the raw title, so every "The …" / "A …" title missed its shard
+# entirely and got stamped v1 with no save data (The Witcher 3 among them).
+# The bump makes those entries re-query now that the shard is right.
+_SAVEDATA_SCHEMA = 2
 DEFAULT_CACHE_TTL = 7 * 24 * 3600  # fallback if config missing
 
 # Per-game concurrency cap. Steam's ``appdetails`` rate limit is the
@@ -422,6 +434,47 @@ class MetadataService(_SteamMetadataMixin):
                 await progress.increment_steam(game.title)
                 await progress.increment_unifidb(game.title)
 
+    async def _served_from_cache(
+        self, game: Game, cached: dict[str, Any], cache_key: str,
+    ) -> dict[str, Any]:
+        """Return a cached entry, topping up the unifiDB half if it predates it.
+
+        ``fetch_unifidb`` used to drop the save-location block
+        (``save_locations`` / ``cloud`` / ``save_source``) before it reached
+        this cache. With a 30-day TTL, simply fixing that left every existing
+        user's entries save-data-less for up to a month — a normal library
+        sync reads the cache and returns early, so the cloud-save button, the
+        save-path resolver and the pre-install cloud indicator would all stay
+        broken with no signal to the user that a *force* sync was needed.
+
+        So entries written before the fix are stamped-checked and topped up
+        in place. Only the unifiDB source re-runs: its bucket files are
+        themselves cached (``unifidb_metadata``, 30 d), so the whole library
+        costs ~36 CDN reads rather than 1200 Steam API calls, and the Steam
+        half of the entry is left untouched.
+        """
+        if cached.get(_SAVEDATA_SCHEMA_KEY) == _SAVEDATA_SCHEMA:
+            return cached
+        try:
+            fresh = await metadata_sources.fetch_unifidb(game, config=self._config)
+        except Exception as e:  # pragma: no cover - best-effort top-up
+            logger.debug("[MetadataService] save-data top-up failed for %s: %s",
+                         cache_key, e)
+            return cached
+        topped = dict(cached)
+        for field in ("save_locations", "cloud", "save_source"):
+            value = fresh.get(field)
+            if value:
+                topped[field] = value
+        # Stamp regardless of whether the catalog had anything, so a game with
+        # genuinely no save data is not re-queried on every single enrich().
+        topped[_SAVEDATA_SCHEMA_KEY] = _SAVEDATA_SCHEMA
+        try:
+            self._cache.set(CACHE_NAMESPACE, cache_key, topped, flush=False)
+        except Exception as e:  # pragma: no cover - cache is best-effort
+            logger.debug("[MetadataService] save-data top-up write failed: %s", e)
+        return topped
+
     async def enrich(
         self,
         game: Game,
@@ -443,7 +496,7 @@ class MetadataService(_SteamMetadataMixin):
                     if cached.get("_negative"):
                         return {}
                     if cached:
-                        return cast("dict[str, Any]", cached)
+                        return await self._served_from_cache(game, cached, cache_key)
             except Exception as e:
                 logger.debug("[MetadataService] Cache read failed for %s: %s", cache_key, e)
 

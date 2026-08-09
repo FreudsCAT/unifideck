@@ -1,26 +1,22 @@
-"""compat/prefix_saves.py — bring prior saves into a freshly built prefix.
+"""compat/save_migration.py — bring a game's saves forward into a prefix.
 
-Split out of ``prefix_init`` (which sat exactly on the 550-line cap) as the
-one self-contained concern in it: everything here answers "the prefix was
-just created or wiped — where do this game's existing saves come from?".
-Two sources, in specificity order:
+Split out of ``compat/prefix_init.py``, which owns the prefix *lifecycle*
+(reset on a Proton change, createprefix, the umu subprocess ladder). This
+module owns the orthogonal concern of not losing user data across those
+events, and has two sources for it:
 
-* ``.save_backup`` — the copy ``prefix_init._reset_prefix`` takes of
-  ``drive_c/users`` right before a Proton-family reset, i.e. this prefix's
-  own data. Always wins when present.
-* a legacy shared umu prefix (``~/Games/umu/umu-0``) — pre-0.6 launches set
-  no ``WINEPREFIX``, so every game wrote into umu's default prefix. Migrated
-  once per prefix, marked, and the legacy tree is left alone so other games
-  can migrate from it too.
+1. **``.save_backup``** — ``prefix_init._reset_prefix`` copies
+   ``drive_c/users`` aside before wiping a prefix. Nothing used to put it
+   back, so a Proton-family change silently lost saves.
+2. **The legacy shared umu prefix** — pre-0.6 launches didn't set
+   ``WINEPREFIX``, so games ran in umu's default prefix
+   (``~/Games/umu/umu-0``). After upgrading, the new per-game prefix is empty
+   and the saves look lost.
 
-Every copy goes through :func:`_merge_users`, which is mtime-guarded and
-therefore safe to re-run: a save written after a reset is never clobbered by
-a stale backup. Best-effort throughout — per-file errors are logged and
-skipped, and the launch proceeds either way.
-
-Names keep their leading underscore: they are internal to the prefix-setup
-pair and ``prefix_init`` re-exports them, so existing importers (and
-``tests/unit/test_prefix_init.py``) are unaffected by the move.
+Every copy is a **non-destructive, mtime-guarded merge**: a file is written
+only when the destination is missing or older, so a save written after a reset
+is never clobbered by a stale backup and a repeat run is harmless. Everything
+here is best-effort — a failure logs and the launch proceeds.
 """
 from __future__ import annotations
 
@@ -150,7 +146,7 @@ def _migrate_legacy_prefix(plan: ProtonLaunchPlan, prefix_root: Path) -> None:
         marker.write_text("done", encoding="utf-8")
 
 
-async def _restore_or_migrate_saves(
+async def restore_or_migrate_saves(
     plan: ProtonLaunchPlan, prefix_root: Path,
 ) -> None:
     """After a fresh prefix is created, bring prior saves forward.

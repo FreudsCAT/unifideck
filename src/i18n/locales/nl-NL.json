@@ -388,7 +388,8 @@
     "cloudPullDone": "Cloudopslag gedownload",
     "cloudPullFailed": "Downloaden van cloudopslag mislukt",
     "cloudPushDone": "Lokale opslag geüpload",
-    "cloudPushFailed": "Uploaden van lokale opslag mislukt"
+    "cloudPushFailed": "Uploaden van lokale opslag mislukt",
+    "cloudSavePathReset": "Opslaglocatie teruggezet op automatisch"
   },
   "uninstallModal": {
     "title": "Deïnstallatie bevestigen",
@@ -399,6 +400,12 @@
     "warningBody": "Dit zal permanent spelbestanden verwijderen die zijn opgeslagen in de Wine-prefix. Zorg dat je een back-up hebt.",
     "cancel": "Annuleren",
     "uninstall": "Deïnstalleren"
+  },
+  "updateModal": {
+    "title": "Update beschikbaar",
+    "description": "Er is een update beschikbaar voor {{title}}. Zonder deze update werken online functies mogelijk niet.",
+    "updateNow": "Nu bijwerken",
+    "playAnyway": "Toch spelen"
   },
   "languageSettings": {
     "title": "TAAL",
@@ -560,7 +567,7 @@
     "simple": "Simpel",
     "detailed": "Gedetailleerd"
   },
-  "gogLanguageModal": {
+  "installLanguageModal": {
     "title": "Taal selecteren",
     "description": "Kies welke taal je wilt downloaden voor {{title}}",
     "label": "Taal",
@@ -697,7 +704,11 @@
       "statusSyncing": "Cloudopslag synchroniseren…",
       "statusUnresolved": "Opslaglocatie niet gevonden — synchronisatie werkt mogelijk niet voor deze game.",
       "unresolvedHint": "Start de game eenmaal op zodat we de opslagmap kunnen detecteren, of stel de locatie handmatig in.",
-      "upload": "Lokale opslag uploaden"
+      "upload": "Lokale opslag uploaden",
+      "currentLocation": "Opslaglocatie",
+      "changeLocation": "Locatie wijzigen",
+      "resetLocation": "Terug naar automatisch",
+      "statusInSync": "Cloudopslag up-to-date"
     },
     "exe": {
       "browse": "Bladeren…",
@@ -719,7 +730,11 @@
     "neverPlayed": "Nooit gespeeld",
     "hoursShort": "u",
     "minutesShort": "m",
-    "played": "Gespeeld"
+    "played": "Gespeeld",
+    "cloudSaves": "Cloudopslag",
+    "cloudSupported": "Ondersteund",
+    "cloudNotSupported": "Niet ondersteund",
+    "cloudUnknown": "Onbekend"
   },
   "downloads": {
     "title": "Downloads",
@@ -730,13 +745,20 @@
     "cancel": "Annuleren",
     "removeFromQueue": "Verwijderen",
     "play": "Spelen",
+    "update": "Bijwerken",
     "outcome": {
       "queued": "In wachtrij",
       "downloading": "Downloaden",
       "completed": "Voltooid",
       "cancelled": "Geannuleerd",
       "error": "Mislukt"
-    }
+    },
+    "installedCount": "Geïnstalleerd ({{count}})",
+    "failed": "Mislukt",
+    "clearFailed": "Mislukte wissen",
+    "uninstall": "Deïnstalleren",
+    "locationInternal": "Intern",
+    "locationExternal": "Extern"
   },
   "navigation": {
     "loading": "Laden...",

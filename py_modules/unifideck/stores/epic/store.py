@@ -50,16 +50,17 @@ from unifideck.services.shortcut import ShortcutService
 from unifideck.stores.shared.store_base import StoreBase
 from unifideck.utils.config_helpers import get_cfg
 
+from . import sdl
 from .achievements import EpicAchievements
 from .auth import EpicAuthFlow
 from .exe_resolver import EpicExeResolver
 from .install import (
     EpicInstaller,
     ProgressCallback,
-    _read_legendary_install_path,
 )
 from .library import EpicLibraryReader, merge_install_status
 from .sessions import EpicSessions
+from .uninstall import read_legendary_install_path
 from .updates import EpicUpdateChecker
 
 if TYPE_CHECKING:
@@ -360,6 +361,15 @@ class EpicStore(StoreBase):
             install_path, [game_id] if game_id else None,
         )
 
+    async def get_install_language_options(self, game_id: str) -> dict[str, str]:
+        """Return ``{sdl_tag: display_name}`` install-language choices.
+
+        Empty unless the title is one of legendary's Selective Downloads
+        titles offering more than the base game — see
+        :mod:`unifideck.stores.epic.sdl`.
+        """
+        return await sdl.resolve_language_options(game_id)
+
     async def install_game(self, game_id: str, base_path: str | None = None,
                            progress_cb: ProgressCallback | None = None, **kwargs: Any) -> InstallResult:
         """Install game."""
@@ -367,6 +377,7 @@ class EpicStore(StoreBase):
             game_id,
             base_path,
             progress_cb,
+            language=kwargs.get("language"),
         )
 
     async def uninstall_game(self, game_id: str, **kwargs: Any) -> Result:
@@ -404,4 +415,4 @@ class EpicStore(StoreBase):
         the App-Details "Installed size" needs this to find the real
         directory and measure it. Local file read, off the event loop.
         """
-        return await asyncio.to_thread(_read_legendary_install_path, game_id)
+        return await asyncio.to_thread(read_legendary_install_path, game_id)

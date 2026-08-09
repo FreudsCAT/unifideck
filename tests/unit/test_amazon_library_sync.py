@@ -23,7 +23,14 @@ from unifideck.core.types import Game
 from unifideck.stores.amazon.amazon_library import AmazonLibraryReader
 from unifideck.stores.amazon.amazon_store import AmazonStore
 
-_DEFAULT_NILE_DIR = str(Path("~/.config/nile").expanduser())
+def _default_nile_dir() -> str:
+    """nile's ambient default config dir, resolved against the CURRENT HOME.
+
+    Must be computed inside the test, not at import: the suite redirects
+    ``HOME`` per-test, so a module-level constant would bake in the real
+    home and no longer match what the code under test resolves.
+    """
+    return str(Path("~/.config/nile").expanduser())
 
 
 def _reader(config_dir: str) -> AmazonLibraryReader:
@@ -55,7 +62,7 @@ async def test_sync_library_runs_correct_nile_args(tmp_path):
 async def test_sync_library_adds_no_xdg_override_for_default_dir(monkeypatch):
     """Config dir == ambient default → nile's own default is left to stand."""
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    reader = _reader(_DEFAULT_NILE_DIR)
+    reader = _reader(_default_nile_dir())
     with patch(
         "asyncio.create_subprocess_exec", return_value=_proc(0),
     ) as mock_exec:
@@ -88,7 +95,7 @@ async def test_sync_library_scrubs_the_frozen_loaders_env(tmp_path, monkeypatch)
     """
     monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/_MEI123456")
     monkeypatch.setenv("PYTHONPATH", "/plugin/py_modules")
-    for config_dir in (_DEFAULT_NILE_DIR, str(tmp_path / "custom" / "nile")):
+    for config_dir in (_default_nile_dir(), str(tmp_path / "custom" / "nile")):
         reader = _reader(config_dir)
         with patch(
             "asyncio.create_subprocess_exec", return_value=_proc(0),

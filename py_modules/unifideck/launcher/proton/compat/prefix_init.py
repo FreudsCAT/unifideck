@@ -7,12 +7,15 @@ prefix-init block):
 1. **Proton-change reset.** Each prefix records the Proton tool that
    built it (``.unifideck_proton_version``). When the resolved Proton
    *family* changes (see :func:`_proton_family`) — the user switched
-   Force Compatibility, unselected it, or moved between Experimental ↔
-   GE ↔ an official Proton — the old Wine prefix is incompatible, so we
-   back up its user data, wipe it + the setup markers, and toast
+   Force Compatibility, unselected it (falling back to the latest
+   GE-Proton), or moved between Experimental ↔ GE ↔ an official Proton
+   — the old Wine prefix is incompatible, so we back up its user data,
+   wipe it + the setup markers, and toast
    ``protonUpgrade``/``resettingPrefix``. A same-family bump (e.g.
    GE-Proton10-10 → 10-34) keeps the prefix (Proton upgrades it in
    place) and just toasts ``protonSwitchedTo``.
+   **Stores that install the game INSIDE the prefix are never reset** —
+   see :func:`_prefix_owns_game_install`.
 
 2. **First-time init.** If the prefix has no ``system.reg`` it isn't a
    usable Wine prefix yet, so we run ``umu-run createprefix`` (with
@@ -39,8 +42,8 @@ from typing import TYPE_CHECKING
 
 from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.proton.compat.ge_fallback import fallback_to_ge_proton
-from unifideck.launcher.proton.compat.prefix_saves import (
-    _restore_or_migrate_saves,
+from unifideck.launcher.proton.compat.save_migration import (
+    restore_or_migrate_saves,
 )
 from unifideck.launcher.proton.infrastructure.container_escape import (
     spawn_escaped,
@@ -72,6 +75,23 @@ _CREATEPREFIX_BACKOFF_SECONDS = 5
 # Proton-Experimental build spinning wineserver forever) must be killed
 # rather than orphaned to run indefinitely.
 _UMU_STEP_TIMEOUT_SECONDS = 120.0
+
+
+def _prefix_owns_game_install(plan: ProtonLaunchPlan) -> bool:
+    """True when the game's own files live INSIDE the prefix.
+
+    Ubisoft is the one store where they do: UPC runs in-prefix and installs
+    titles to ``drive_c/Program Files (x86)/Ubisoft/Ubisoft Game
+    Launcher/games/``. Every other store downloads outside the prefix, so a
+    reset there costs a rebuild; here it costs the user their game.
+
+    Confirmed live 2026-08-01: launching Rayman Origins resolved
+    ``proton_experimental``, ``prefix_setup`` borrowed managed GE-Proton for
+    umu's winetricks verb, this module saw experimental -> ge-proton and wiped
+    the prefix — deleting the install. The borrow was for a step
+    ``apply_prefix_compat`` skips for Ubisoft anyway.
+    """
+    return getattr(plan.context, "store", "") == "ubisoft"
 
 
 def _proton_family(tool_id: str) -> str:
@@ -150,17 +170,46 @@ def _read_previous_proton(prefix_root: Path) -> str | None:
         return None
 
 
+def _should_reset_for_proton(
+    plan: ProtonLaunchPlan, previous: str, current: str,
+) -> bool:
+    """Whether this Proton change warrants wiping the prefix. Logs why not.
+
+    Only a *family* change makes the old Wine prefix incompatible; a
+    same-family bump is upgraded in place by Proton itself. And even a family
+    change is not worth a reset when the prefix holds the game install — see
+    :func:`_prefix_owns_game_install`. Proton's ``wineboot -u`` migrates the
+    prefix on the next umu run either way, which is what Steam does for a real
+    app; a rebuilt prefix is recoverable, a deleted install is not.
+    """
+    if _proton_family(previous) == _proton_family(current):
+        logger.info(
+            "[prefix_init] minor Proton change %s -> %s; keeping prefix",
+            previous, current,
+        )
+        return False
+    if _prefix_owns_game_install(plan):
+        logger.warning(
+            "[prefix_init] Proton family change %s -> %s for %s, but the "
+            "prefix holds the game install — NOT resetting; Proton will "
+            "upgrade it in place",
+            previous, current, plan.context.game_key,
+        )
+        return False
+    logger.info(
+        "[prefix_init] Proton family change %s -> %s; resetting prefix",
+        previous, current,
+    )
+    return True
+
+
 def _handle_proton_change(
     plan: ProtonLaunchPlan, prefix_root: Path, current: str,
 ) -> None:
     """Reset (major change) or notify (minor change); update the marker."""
     previous = _read_previous_proton(prefix_root)
     if previous and previous != current:
-        if _proton_family(previous) != _proton_family(current):
-            logger.info(
-                "[prefix_init] Proton family change %s -> %s; resetting prefix",
-                previous, current,
-            )
+        if _should_reset_for_proton(plan, previous, current):
             launcher_toast(
                 "toasts.launcher.resettingPrefix",
                 i18n_title_key="toasts.launcher.protonUpgrade",
@@ -169,17 +218,20 @@ def _handle_proton_change(
                 severity="warning",
             )
             _reset_prefix(prefix_root)
+            # NOT stamped here: the rebuild still has to succeed. See
+            # _stamp_proton_marker, which ensure_prefix_initialized calls once
+            # _ensure_created has produced a system.reg.
         else:
-            logger.info(
-                "[prefix_init] minor Proton change %s -> %s; keeping prefix",
-                previous, current,
-            )
             launcher_toast(
                 "toasts.launcher.protonSwitchedTo",
                 i18n_title_key="toasts.launcher.protonUpgrade",
                 i18n_params={"version": current},
                 game_title=plan.context.game_key,
             )
+            # Kept the prefix (same family, or the install lives inside it),
+            # so it is intact and the marker moves forward immediately —
+            # otherwise the switch is announced on every single launch.
+            _stamp_proton_marker(prefix_root, current)
 
 
 def _reset_prefix(prefix_root: Path) -> None:
@@ -241,8 +293,6 @@ def _clear_stale_compat_markers(prefix_root: Path) -> None:
                 logger.info("[prefix_init] cleared stale compat marker %s", marker.name)
 
 
-# Save restore/migration lives in ``prefix_saves``; re-exported here so
-# the names stay reachable at their historical import path.
 
 async def _ensure_created(plan: ProtonLaunchPlan, prefix_root: Path) -> None:
     """Run ``createprefix`` when the prefix has no ``system.reg`` yet."""
@@ -279,7 +329,7 @@ async def _ensure_created(plan: ProtonLaunchPlan, prefix_root: Path) -> None:
     env["PROTON_VERB"] = "run"
 
     if await _run_createprefix_with_retry(plan, env, prefix_root):
-        await _restore_or_migrate_saves(plan, prefix_root)
+        await restore_or_migrate_saves(plan, prefix_root)
         launcher_toast(
             "toasts.launcher.prefixInitialized",
             i18n_title_key="toasts.launcher.setupCompleteTitle",
@@ -298,7 +348,7 @@ async def _ensure_created(plan: ProtonLaunchPlan, prefix_root: Path) -> None:
     await _run_umu(plan, env, "wineboot", "--init")
     if (resolve_registry_prefix(prefix_root) / "system.reg").is_file():
         logger.info("[prefix_init] wineboot fallback initialised the prefix")
-        await _restore_or_migrate_saves(plan, prefix_root)
+        await restore_or_migrate_saves(plan, prefix_root)
         return
 
     logger.warning(

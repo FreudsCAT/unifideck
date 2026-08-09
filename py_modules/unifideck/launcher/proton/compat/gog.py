@@ -26,6 +26,8 @@ from unifideck.launcher.proton.infrastructure.umu_runtime import (
     run_umu_with_retry,
 )
 
+from .gog_setup.common import AUTH_CONFIG
+
 if TYPE_CHECKING:
     from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 
@@ -43,7 +45,12 @@ logger = logging.getLogger(__name__)
 # ("no GOG tokens — Comet online features off") — GOG games ran offline
 # with no achievement capture. The cloud-save save-sync refreshes this file
 # before launch, so it's fresh by the time Comet starts.
-_GOGDL_AUTH_FILE = Path("~/.config/unifideck/gogdl_auth.json").expanduser()
+#
+# Imported from ``gog_setup.common`` rather than re-declared: the redist
+# downloader there had drifted back to the dead subdir path and silently
+# skipped every GOG redistributable install. One definition, no third copy.
+# ``common`` is stdlib-only at import time, so this stays launcher-safe.
+_GOGDL_AUTH_FILE = AUTH_CONFIG
 # A launched exe that exits faster than this is treated as a possible
 # broken launcher stub (real launchers/games run far longer).
 EARLY_EXIT_SECONDS = 15
