@@ -34,6 +34,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from unifideck.stores.battlenet.product_db import ProductInstall
+from unifideck.stores.shared.wine_path import wine_path_to_linux
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,11 @@ class InstalledGame:
     version: str | None = None
     total_bytes: int | None = None
     is_ready: bool = False
+    # Linux-side paths, resolved from the Wine-side ones above. Populated by
+    # `resolve_host_paths`, which needs the prefix and so cannot be done at
+    # parse time.
+    host_install_path: str | None = None
+    host_exe_path: str | None = None
 
 
 def _entry_to_game(entry: object) -> InstalledGame | None:
@@ -148,6 +154,40 @@ def merge_install_state(
     return merged
 
 
-def read_installed(drive_c: Path, products: dict[str, ProductInstall]) -> dict[str, InstalledGame]:
-    """Full installed-state read for one prefix."""
-    return merge_install_state(read_aggregate(drive_c), products)
+def resolve_host_paths(
+    games: dict[str, InstalledGame],
+    prefix: Path,
+) -> dict[str, InstalledGame]:
+    """Translate the Wine-side paths into Linux ones for a given prefix.
+
+    ``product.db`` records ``C:/Program Files (x86)/Hearthstone`` and
+    ``aggregate.json`` records the exe the same way; both are useless to
+    Steam or to a size walk until converted. A path that will not convert
+    stays ``None`` rather than being guessed — for a non-C: drive that means
+    the game is on removable media whose ``dosdevices`` link is missing, and
+    inventing a path would point install detection somewhere the game is not.
+    """
+    resolved: dict[str, InstalledGame] = {}
+    for code, game in games.items():
+        install = (
+            wine_path_to_linux(game.install_path, str(prefix))
+            if game.install_path
+            else None
+        )
+        exe = (
+            wine_path_to_linux(game.exe_windows_path, str(prefix))
+            if game.exe_windows_path
+            else None
+        )
+        resolved[code] = replace(game, host_install_path=install, host_exe_path=exe)
+    return resolved
+
+
+def read_installed(
+    drive_c: Path,
+    products: dict[str, ProductInstall],
+    prefix: Path | None = None,
+) -> dict[str, InstalledGame]:
+    """Full installed-state read for one prefix, host paths included."""
+    merged = merge_install_state(read_aggregate(drive_c), products)
+    return resolve_host_paths(merged, prefix) if prefix is not None else merged

@@ -30,11 +30,11 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from unifideck.stores.shared.install_base import detect_sdcard_install_base
 from unifideck.utils.config_helpers import get_cfg
 
 if TYPE_CHECKING:
@@ -53,50 +53,15 @@ _DEFAULT_DEFAULT_INSTALL_BASE = "~/Games/Ubisoft"
 def _detect_sdcard_install_base(media_base: Path | None = None) -> str:
     """Best-effort default SD / removable-media install base for Ubisoft.
 
-    SteamOS mounts the Deck's internal microSD at ``/run/media/mmcblk0p1`` —
-    a device node that does NOT exist on desktops or other handhelds — so a
-    hardcoded path is wrong off-Deck. Instead pick the first writable
-    *mounted* directory under ``/run/media``, handling both SteamOS's flat
-    ``/run/media/<label>`` layout and udisks2's nested
-    ``/run/media/<user>/<label>`` layout, and append ``Games/Ubisoft``.
+    Delegates to :mod:`stores.shared.install_base`, which Battle.net shares.
+    Kept as a thin wrapper so the Ubisoft default and its ``media_base``
+    test seam stay where callers expect them.
 
-    Falls back to the historical Deck path when nothing is mounted — that's
-    harmless: the path simply won't exist, and live install detection
-    re-scans removable media at scan time via
-    ``_DetectionHelpers._append_mounted_media_roots``. This value only seeds
-    the static default scan root and the uninstall safe-delete guard.
-
-    ``media_base`` is injectable for tests; production uses ``/run/media``.
+    This value only seeds the static default scan root and the uninstall
+    safe-delete guard; live install detection re-scans removable media at
+    scan time via ``_DetectionHelpers._append_mounted_media_roots``.
     """
-    if media_base is None:
-        media_base = Path("/run/media")
-    with contextlib.suppress(OSError):
-        for entry in sorted(media_base.iterdir()):
-            if entry.is_symlink() or not entry.is_dir():
-                continue
-            # Flat layout: /run/media/<label> is itself the mountpoint.
-            if os.path.ismount(entry) and os.access(entry, os.W_OK):
-                return str(entry / "Games" / "Ubisoft")
-            # Nested layout: /run/media/<user>/<label>.
-            nested = _first_writable_mount(entry)
-            if nested is not None:
-                return str(nested / "Games" / "Ubisoft")
-    return "/run/media/mmcblk0p1/Games/Ubisoft"
-
-
-def _first_writable_mount(parent: Path) -> Path | None:
-    """First writable mountpoint directly under ``parent`` (the udisks2 nested
-    ``/run/media/<user>/<label>`` layout), or None when there's none."""
-    with contextlib.suppress(OSError):
-        for sub in sorted(parent.iterdir()):
-            if (
-                not sub.is_symlink()
-                and sub.is_dir()
-                and os.path.ismount(sub)
-                and os.access(sub, os.W_OK)
-            ):
-                return sub
-    return None
+    return detect_sdcard_install_base("Ubisoft", media_base)
 
 
 _DEFAULT_SDCARD_INSTALL_BASE = _detect_sdcard_install_base()

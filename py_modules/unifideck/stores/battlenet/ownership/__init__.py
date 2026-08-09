@@ -23,6 +23,7 @@ from .installed import (
     parse_aggregate,
     read_aggregate,
     read_installed,
+    resolve_host_paths,
 )
 from .licenses import AccountLicences, parse_licences, read_licences
 from .pub_catalog import (
@@ -59,4 +60,5 @@ __all__ = [
     "read_catalog",
     "read_installed",
     "read_licences",
+    "resolve_host_paths",
 ]
