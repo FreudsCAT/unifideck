@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from unifideck.core import stale_installs
 from unifideck.core.types import Game
-from unifideck.launcher.proton.wrapper_stores import uses_manual_download_phase
+from unifideck.launcher.wrapper_stores import uses_manual_download_phase
 
 from .models import MAX_FINISHED_HISTORY, DownloadItem, classify_download_error
 from .worker_helpers import apply_dict_progress, track_task

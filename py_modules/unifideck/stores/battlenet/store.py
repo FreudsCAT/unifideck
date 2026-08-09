@@ -29,6 +29,10 @@ from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types.domain import Game, StoreInfo
 from unifideck.core.types.results import AuthResult, InstallResult, Result
+from unifideck.stores.shared.auth_shortcut import (
+    AuthShortcutSpec,
+    build_context,
+)
 from unifideck.stores.shared.store_base import StoreBase
 
 from . import config as store_config
@@ -79,6 +83,55 @@ class BattlenetStore(StoreBase):
     def _auth_drive_c(self) -> Path | None:
         """drive_c of the prefix the user signed into, if it exists."""
         return paths.drive_c(self.prefixes.auth_prefix)
+
+    AUTH_SHORTCUT = AuthShortcutSpec(
+        store="battlenet",
+        store_game_id="battlenet:bnet-auth",
+        display_name="Battle.net",
+        action_env="UNIFIDECK_BATTLENET_ACTION",
+    )
+
+    async def get_auth_shortcut_context(self) -> dict[str, Any]:
+        """Payload the frontend needs to RunGame the sign-in shortcut.
+
+        Without this the client can only be opened in Desktop Mode: in
+        Gaming Mode a process with no Steam shortcut gets no gamescope
+        session and its window never renders.
+        """
+        return await build_context(
+            self._shortcut_service, self.AUTH_SHORTCUT, self._plugin_dir,
+        )
+
+    async def ensure_template(self) -> bool:
+        """Build the template prefix that per-game prefixes are cloned from.
+
+        Cloning the *auth* prefix would copy the user's session into every
+        game prefix; the template is a separate pristine install. It is
+        marked warmed only after the client has run once and applied its
+        self-update, because a stale template makes every game prefix open
+        with a blocking "Required Update" modal nobody can click in Gaming
+        Mode.
+        """
+        template = self.prefixes.template_prefix
+        if self.prefixes.template_ready():
+            return True
+        result = await bootstrap_client(
+            template,
+            installer_url=self.config.installer_url,
+            installer_cache=self.config.installer_path,
+            resolver=self._wine_env(),
+        )
+        if not result.success:
+            logger.error("[Battlenet] template bootstrap failed: %s", result.error)
+            return False
+        # The installer ships the current build, so the freshly installed
+        # client is by definition not stale.
+        build = None
+        versions = paths.client_version_dirs(template)
+        if versions:
+            build = versions[-1].name.rsplit(".", 1)[-1]
+        self.prefixes.mark_template_warmed(client_build=build)
+        return True
 
     def _wine_env(self) -> Any:
         """umu / Proton / display resolution for backend-side installs."""
@@ -236,6 +289,14 @@ class BattlenetStore(StoreBase):
         to bring the client up.
         """
         del kwargs
+        if not await self.ensure_template():
+            return InstallResult(
+                success=False,
+                game_id=game_id,
+                store=self.store_name,
+                error="Could not prepare the Battle.net client template",
+                error_code="template_not_ready",
+            )
         prefix = await self.prefixes.create_game_prefix(game_id)
         if prefix is None:
             return InstallResult(

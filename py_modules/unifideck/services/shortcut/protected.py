@@ -24,6 +24,7 @@ from __future__ import annotations
 # scattering string literals across reconcile code.
 PROTECTED_IDS: frozenset[str] = frozenset({
     "ubisoft:upc-auth",
+    "battlenet:bnet-auth",
     "epic:epic-auth",
     "gog:gog-auth",
     "amazon:amazon-auth",

@@ -52,7 +52,7 @@ from unifideck.launcher.proton.infrastructure.umu_runtime import (
     open_game_log,
     repair_incomplete_umu_runtime,
 )
-from unifideck.launcher.proton.wrapper_stores import (
+from unifideck.launcher.wrapper_stores import (
     prefix_owns_game_install,
 )
 

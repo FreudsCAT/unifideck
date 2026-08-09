@@ -34,7 +34,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from unifideck.launcher.proton.wrapper_stores import prefix_owns_game_install
+from unifideck.launcher.wrapper_stores import prefix_owns_game_install
 
 if TYPE_CHECKING:
     from unifideck.launcher.types.context import LaunchContext, RuntimeState

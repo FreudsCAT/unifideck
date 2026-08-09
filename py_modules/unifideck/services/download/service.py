@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import Result
-from unifideck.launcher.proton.wrapper_stores import uses_manual_download_phase
+from unifideck.launcher.wrapper_stores import uses_manual_download_phase
 
 from .models import MAX_FINISHED_HISTORY, DownloadItem
 from .persistence import load_queue, save_queue

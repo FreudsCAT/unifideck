@@ -32,7 +32,7 @@ from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 from unifideck.launcher.proton.infrastructure.prefix_layout import (
     normalize_prefix_root,
 )
-from unifideck.launcher.proton.wrapper_stores import skips_generic_compat
+from unifideck.launcher.wrapper_stores import skips_generic_compat
 
 from .vcruntime import apply_vcruntime_fix, vcruntime_fix_pending
 from .winetricks import apply_winetricks, winetricks_pending

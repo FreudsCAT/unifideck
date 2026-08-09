@@ -1,6 +1,6 @@
 """Which stores are launcher-wrapper stores, and what that implies.
 
-py_modules/unifideck/launcher/proton/wrapper_stores.py
+py_modules/unifideck/launcher/wrapper_stores.py
 
 A *wrapper store* runs a vendor's own Windows client inside the prefix and
 lets that client do the downloading and launching. Ubisoft (UPC) was the
@@ -23,8 +23,12 @@ return the same set, but they answer different questions and will diverge:
 EA App, for instance, installs some titles to ``Program Files`` *outside*
 the prefix, so it would be a wrapper store that does not own its installs.
 
-Stdlib-only and dependency-free: this is imported from the launcher, which
-runs under the system Python (3.10-3.14), not Decky's bundled 3.11.
+Stdlib-only and dependency-free, and deliberately **outside** the ``proton``
+package: ``launcher/types/context`` needs it, and importing it from under
+``proton`` pulled in ``proton/__init__`` -> handlers -> ``types/context``,
+a cycle. It is also consumed from ``services/``, so a neutral home is
+right. This is imported by the launcher, which runs under the system
+Python (3.10-3.14), not Decky's bundled 3.11.
 """
 
 from __future__ import annotations

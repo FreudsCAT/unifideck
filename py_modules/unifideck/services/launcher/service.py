@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from unifideck.core.types import Result
 from unifideck.launcher.rpc import emit_stage
 from unifideck.launcher.types.context import LaunchContext, RuntimeState
+from unifideck.launcher.wrapper_stores import is_wrapper_store
 
 if TYPE_CHECKING:
     from unifideck.auth.edge_browser import EdgeBrowser
@@ -223,76 +224,68 @@ class LauncherService:
         Extracted from ``launch`` (lot 13a) to keep that method's
         fan-out under the gate.
         """
-        if ctx.auth_store == "ubisoft":
-            if ctx.action == "install":
-                return await self._launch_ubisoft_install(ctx)
-            return await self._launch_ubisoft_auth(ctx)
+        if is_wrapper_store(ctx.auth_store):
+            return await self._launch_wrapper_client(ctx)
         from unifideck.launcher.flows.auth import handle_store_auth
         return await handle_store_auth(ctx, self._edge_browser)
 
-    async def _launch_ubisoft_auth(self, ctx: LaunchContext) -> Result:
-        """Open Ubisoft Connect in the auth prefix via Proton for sign-in.
+    async def _launch_wrapper_client(self, ctx: LaunchContext) -> Result:
+        """Open a wrapper store's vendor client, for sign-in or install.
 
-        Builds the same Proton plan a game uses — the prefix resolves to
-        ``.upc-auth`` via the ``UNIFIDECK_UBISOFT_PREFIX_NAME`` launch
-        option — then runs UPC bare and blocks until the user closes it.
-        Auth success itself is reported separately by the plugin's
-        session monitor (which watches the prefix for captured
-        credentials), so a clean UPC exit is treated as success here
-        regardless of its return code.
+        Wrapper stores have no browser OAuth: the user signs in inside the
+        vendor client, which must run through Proton *inside the
+        RunGame-launched gamescope session* or its window never renders in
+        Gaming Mode.
+
+        Success is reported on a clean exit regardless of return code. The
+        real signals live elsewhere — the session monitor observes captured
+        credentials, and the download worker watches the prefix for
+        installed files.
         """
-        from unifideck.launcher.proton.handlers.ubisoft import (
-            ubisoft_auth_launch,
-        )
         from unifideck.services.launcher.helpers import prepare_windows_plan
 
+        handler = self._wrapper_handler(ctx.auth_store, ctx.action)
+        if handler is None:
+            return Result(
+                success=False,
+                store=ctx.auth_store,
+                error=f"no wrapper handler for {ctx.auth_store}/{ctx.action}",
+            )
         state = self._build_runtime_state(ctx)
         try:
             plan, _ = await prepare_windows_plan(self, ctx, state)
-            rc = await ubisoft_auth_launch(plan)
+            rc = await handler(plan)
         finally:
             self._active_subprocess = None
         return Result(
             success=True,
-            store="ubisoft",
+            store=ctx.auth_store,
             metadata={
                 "elapsed": self._elapsed_since_launch(),
                 "rc": str(rc),
             },
         )
 
-    async def _launch_ubisoft_install(self, ctx: LaunchContext) -> Result:
-        """Open Ubisoft Connect to install a game, via Proton/RunGame.
+    @staticmethod
+    def _wrapper_handler(store: str | None, action: str | None) -> Any:
+        """The launcher handler for one wrapper store's auth/install run."""
+        if store == "ubisoft":
+            from unifideck.launcher.proton.handlers.ubisoft import (
+                ubisoft_auth_launch,
+                ubisoft_install_launch,
+            )
 
-        Same Proton plan as a game launch — the prefix resolves to the
-        per-game prefix recorded in ``ubisoft_id_map.json`` (by
-        ``ctx.game_id``) during the backend's bootstrap. Runs UPC pointed
-        at the title's install deeplink and blocks until the user closes
-        it. Because this runs inside the RunGame-launched gamescope
-        session, the UPC window renders in Gaming Mode (unlike the old
-        backend-subprocess spawn). The plugin's download worker watches
-        the prefix for the installed files and finalises the queue item;
-        the UPC exit code is not the success signal here.
-        """
-        from unifideck.launcher.proton.handlers.ubisoft import (
-            ubisoft_install_launch,
-        )
-        from unifideck.services.launcher.helpers import prepare_windows_plan
+            return ubisoft_install_launch if action == "install" else ubisoft_auth_launch
+        if store == "battlenet":
+            from unifideck.launcher.proton.handlers.battlenet import (
+                battlenet_auth_launch,
+                battlenet_install_launch,
+            )
 
-        state = self._build_runtime_state(ctx)
-        try:
-            plan, _ = await prepare_windows_plan(self, ctx, state)
-            rc = await ubisoft_install_launch(plan)
-        finally:
-            self._active_subprocess = None
-        return Result(
-            success=True,
-            store="ubisoft",
-            metadata={
-                "elapsed": self._elapsed_since_launch(),
-                "rc": str(rc),
-            },
-        )
+            return (
+                battlenet_install_launch if action == "install" else battlenet_auth_launch
+            )
+        return None
 
     async def _dispatch_launch_kind(
         self, ctx: LaunchContext, state: RuntimeState,

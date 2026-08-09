@@ -22,10 +22,11 @@ from pathlib import Path
 
 import pytest
 
-from unifideck.launcher.proton import wrapper_stores as ws
+from unifideck.launcher import wrapper_stores as ws
 
 REPO = Path(__file__).parent.parent.parent
-PROTON = REPO / "py_modules/unifideck/launcher/proton"
+LAUNCHER = REPO / "py_modules/unifideck/launcher"
+PROTON = LAUNCHER / "proton"
 
 
 @pytest.mark.parametrize("store", sorted(ws.WRAPPER_STORES))
@@ -69,7 +70,7 @@ def test_predicates_are_separate_functions_not_one_alias() -> None:
 
 def test_module_is_stdlib_only() -> None:
     """Imported from the launcher, which runs under system Python 3.10-3.14."""
-    source = (PROTON / "wrapper_stores.py").read_text()
+    source = (LAUNCHER / "wrapper_stores.py").read_text()
     imports = [
         line for line in source.splitlines()
         if line.startswith(("import ", "from ")) and "__future__" not in line
