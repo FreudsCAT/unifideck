@@ -25,7 +25,7 @@ import json
 import logging
 import os
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -175,6 +175,20 @@ class BattlenetIdMap:
         stay testable and the module has no time dependency.
         """
         self.merge(uid, family=family, last_launch_family=family, launch_ok_at=when)
+
+    def clear_prefix(self, uid: str) -> None:
+        """Forget where a game's prefix was, keeping the rest of the record.
+
+        Used when an abandoned prefix is deleted. :meth:`merge` cannot do
+        this — it drops ``None`` values so a partial update never wipes a
+        field it was not given — and :meth:`forget` would take the family
+        code and launch history with it.
+        """
+        record = self._records.get(uid)
+        if record is None or record.prefix_path is None:
+            return
+        self._records[uid] = replace(record, prefix_path=None)
+        self._save()
 
     def forget(self, uid: str) -> None:
         """Drop a record — used on uninstall. Does not touch the prefix."""

@@ -123,6 +123,30 @@ def test_prefix_path_is_recorded_not_reconstructed(tmp_path: Path) -> None:
     assert idmap.resolve_prefix("unknown") is None
 
 
+def test_clear_prefix_forgets_only_the_location(tmp_path: Path) -> None:
+    """A reclaimed prefix must not take the family code with it.
+
+    ``merge`` cannot express this — it drops ``None`` so a partial update
+    never wipes a field it wasn't given — and ``forget`` would lose the
+    family code and launch history that are still true.
+    """
+    path = tmp_path / "map.json"
+    idmap = BattlenetIdMap(path)
+    idmap.merge("wow", family="WoW", prefix_path="/p/wow", launch_ok_at=5.0)
+
+    idmap.clear_prefix("wow")
+
+    assert idmap.resolve_prefix("wow") is None
+    assert idmap.resolve_family("wow") == "WoW"
+    assert BattlenetIdMap(path).get("wow").launch_ok_at == 5.0
+
+
+def test_clear_prefix_on_an_unknown_game_is_a_no_op(tmp_path: Path) -> None:
+    idmap = BattlenetIdMap(tmp_path / "map.json")
+    idmap.clear_prefix("never-seen")
+    assert idmap.get("never-seen") is None
+
+
 def test_merge_preserves_unrelated_fields(tmp_path: Path) -> None:
     idmap = BattlenetIdMap(tmp_path / "map.json")
     idmap.merge("wow", family="WoW", prefix_path="/p/wow")

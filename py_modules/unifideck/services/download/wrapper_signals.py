@@ -15,7 +15,9 @@ The two call *shapes* still differ and that is deliberate: Ubisoft's signal
 is an ``on_ready`` callback threaded into ``install_game`` and fired once
 the installer has bootstrapped the prefix, while Battle.net's is emitted by
 the worker after ``install_game`` returns. ``make_launch_signal`` exists to
-adapt the shared emitter to the callback shape.
+adapt the shared emitter to the callback shape, and :func:`takes_on_ready`
+lets the worker pick between them from this table rather than by branching
+on a store name — the difference is a row, like everything else here.
 """
 
 from __future__ import annotations
@@ -35,10 +37,21 @@ _LAUNCH_EVENTS: dict[str, str] = {
     "battlenet": "BATTLENET_INSTALL_LAUNCH_REQUESTED",
 }
 
+# Stores whose ``install_game`` accepts an ``on_ready`` callback. Ubisoft's
+# installer blocks for the whole manual UI install, so it must signal from
+# inside; Battle.net's returns as soon as the prefix is placed, so the
+# worker signals after it.
+_ON_READY_STORES: frozenset[str] = frozenset({"ubisoft"})
+
 
 def has_launch_signal(store: str) -> bool:
     """Whether this store asks the frontend to open its client."""
     return store in _LAUNCH_EVENTS
+
+
+def takes_on_ready(store: str) -> bool:
+    """Whether ``install_game`` signals from inside via ``on_ready``."""
+    return store in _ON_READY_STORES
 
 
 async def signal_install_launch(bus: Any, store: str, game_id: str) -> None:

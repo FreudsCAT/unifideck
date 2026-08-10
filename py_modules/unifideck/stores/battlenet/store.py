@@ -40,6 +40,7 @@ from . import config as store_config
 from . import library as library_mod
 from . import paths
 from .id_map import BattlenetIdMap
+from .install import BattlenetInstaller
 from .ownership import read_catalog
 from .prefix import BattlenetPrefixManager, inspect_prefix
 
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
     from unifideck.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
+
 
 class BattlenetStore(StoreBase):
     """Blizzard Battle.net, driven through the vendor client in a prefix."""
@@ -73,6 +75,7 @@ class BattlenetStore(StoreBase):
         self.config = store_config.from_config_manager(config)
         self.prefixes = BattlenetPrefixManager(self.config.prefixes_dir_path)
         self.id_map = BattlenetIdMap(self.config.id_map_path)
+        self._installer = BattlenetInstaller(self.prefixes, self.id_map)
         # Injected post-discovery by services/bootstrap/store_injector.py.
         self._shortcut_service: Any | None = None
         # Strong refs to the background template warm, so the GC cannot
@@ -301,7 +304,9 @@ class BattlenetStore(StoreBase):
             merged.update(library_mod.read_install_state(drive_c, prefix))
         return merged
 
-    async def install_game(self, game_id: str, **kwargs: Any) -> InstallResult:
+    async def install_game(
+        self, game_id: str, *, install_path: str | None = None, **kwargs: Any,
+    ) -> InstallResult:
         """Hand the install to the client; completion is polled elsewhere.
 
         ``--exec="install <FAMILY>"`` does **not** start a download — that
@@ -309,80 +314,14 @@ class BattlenetStore(StoreBase):
         code. The install is a user click inside the client, exactly as it
         is for Ubisoft, so this prepares the prefix and signals the frontend
         to bring the client up.
+
+        ``install_path`` is the storage location the user picked. The game
+        installs *inside* the prefix, so placing the prefix there is the only
+        thing that puts the game on that disk — and the only way the client's
+        own free-space check reads the right volume.
         """
         del kwargs
-        # The install run opens the client on the game's page via
-        # ``--exec="launch <FAMILY>"``, so a missing family fails the install
-        # the same way it fails a launch — and silently. Resolve it here
-        # rather than letting the launcher discover the gap.
-        if not await self._ensure_family(game_id):
-            return InstallResult(
-                success=False,
-                game_id=game_id,
-                store=self.store_name,
-                error=(
-                    "Unifideck doesn't know Battle.net's code for this game — "
-                    "re-sync your library"
-                ),
-                error_code="family_unknown",
-            )
-        if not self.prefixes.auth_ready():
-            return InstallResult(
-                success=False,
-                game_id=game_id,
-                store=self.store_name,
-                error=(
-                    "Sign in to Battle.net first — the game prefix inherits "
-                    "your signed-in session"
-                ),
-                error_code="not_signed_in",
-            )
-        prefix = await self.prefixes.create_game_prefix(game_id)
-        if prefix is None:
-            return InstallResult(
-                success=False,
-                game_id=game_id,
-                store=self.store_name,
-                error=(
-                    "Could not prepare the game's Battle.net prefix — close "
-                    "the Battle.net window and try again"
-                ),
-                error_code="prefix_clone_failed",
-            )
-        self.id_map.merge(game_id, prefix_path=str(prefix))
-        return InstallResult(
-            success=True,
-            game_id=game_id,
-            store=self.store_name,
-            install_path=str(prefix),
-            metadata={"phase": "manual", "prefix": str(prefix)},
-        )
-
-    async def _ensure_family(self, game_id: str) -> bool:
-        """True once a family code for ``game_id`` is in the id map.
-
-        Normally already there — :meth:`get_library` records the whole
-        library on every sync. This covers the install-without-a-recent-sync
-        case by re-reading the catalog for just this title, which costs one
-        catalog parse rather than a full library build.
-        """
-        if self.id_map.resolve_family(game_id):
-            return True
-        drive_c = self._auth_drive_c
-        if drive_c is None:
-            return False
-        import asyncio
-
-        catalog = await asyncio.to_thread(read_catalog, drive_c)
-        family = library_mod.family_from_catalog(catalog, game_id)
-        if family is None:
-            logger.error("[Battlenet] no family code in the catalog for %s", game_id)
-            return False
-        self.id_map.merge(game_id, family=family)
-        logger.info(
-            "[Battlenet] resolved family %s for %s at install time", family, game_id,
-        )
-        return True
+        return await self._installer.install(game_id, install_path)
 
     async def uninstall_game(self, game_id: str, **kwargs: Any) -> Result:
         """Remove the game by removing its prefix — the install lives inside."""

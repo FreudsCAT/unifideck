@@ -1,0 +1,310 @@
+"""Battle.net installs land on the disk the user picked.
+
+The bug this pins was reported as a disk-space error, not a wrong path. The
+Battle.net client's installer refused an 83.40 GB download for *The Outer
+Worlds 2* with "Insufficient disk space" while the SD card the user had
+selected in Unifideck had 164 GB free — because the prefix was still being
+created on the 45 GB internal drive, and the game installs *inside* the
+prefix, so that is the volume Wine reported as ``C:``.
+
+The dangerous half is the reclaim: the prefix and the game are the same
+directory tree, so an over-eager cleanup deletes a download rather than a
+scratch folder. Those refusals are the assertions worth keeping.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import sqlite3
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from unifideck.stores.battlenet import BattlenetStore
+from unifideck.stores.battlenet import paths as bpaths
+from unifideck.stores.battlenet.ownership.installed import AGGREGATE_RELATIVE
+from unifideck.stores.battlenet.prefix import MARKER_FILENAME, DERIVED_MARKER
+from unifideck.stores.battlenet.product_db.reader import PRODUCT_DB_RELATIVE
+from unifideck.stores.shared import prefix_clone as pc
+
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "battlenet"
+UID = "ark"
+FAMILY = "ARK"
+
+
+class _Bus:
+    async def emit(self, *_a: Any, **_k: Any) -> None:
+        return None
+
+
+class _Cache:
+    def get(self, *_a: Any, **_k: Any) -> None:
+        return None
+
+    def clear(self, *_a: Any, **_k: Any) -> None:
+        return None
+
+
+class _Config:
+    def __init__(self, data_dir: Path, prefixes_dir: Path) -> None:
+        self._values = {
+            "data_dir": str(data_dir),
+            "prefixes_dir": str(prefixes_dir),
+            "installer_cache_dir": str(data_dir / "installer-cache"),
+        }
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._values if key == "stores.battlenet" else default
+
+
+def _install_client(prefix: Path) -> None:
+    client = prefix / "drive_c" / bpaths.CLIENT_DIR
+    client.mkdir(parents=True, exist_ok=True)
+    (client / bpaths.CLIENT_EXE).write_bytes(b"MZ")
+    (client / bpaths.LAUNCHER_EXE).write_bytes(b"MZ")
+
+
+def _mark(prefix: Path) -> None:
+    pc.write_marker(
+        prefix, MARKER_FILENAME,
+        pc.PrefixMarker(store="battlenet", created_at=1.0, client_build="17651"),
+    )
+
+
+@pytest.fixture
+def store(tmp_path: Path) -> BattlenetStore:
+    """A signed-in store with a ready auth prefix and template."""
+    prefixes = tmp_path / "prefixes"
+    prefixes.mkdir(parents=True)
+    st = BattlenetStore(
+        _Bus(), _Cache(), plugin_dir="/plugin",
+        config=_Config(tmp_path, prefixes),
+    )
+    auth = st.prefixes.auth_prefix
+    auth.mkdir(parents=True, exist_ok=True)
+    _install_client(auth)
+    db = auth / "drive_c/users/steamuser/AppData/Local/Battle.net/CachedData.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE key_value_store (key TEXT, value TEXT)")
+    con.execute(
+        "INSERT INTO key_value_store VALUES ('features_cached_data_points', ?)",
+        (json.dumps({"licenses": [1105059], "account_id": 1}),),
+    )
+    con.commit()
+    con.close()
+
+    template = st.prefixes.template_prefix
+    template.mkdir(parents=True, exist_ok=True)
+    _install_client(template)
+    _mark(template)
+    (template / DERIVED_MARKER).write_text("")
+
+    st.id_map.merge(UID, family=FAMILY)
+    return st
+
+
+def _make_prefix(path: Path, *, marked: bool = True) -> Path:
+    """An existing per-game prefix, client installed."""
+    path.mkdir(parents=True, exist_ok=True)
+    _install_client(path)
+    if marked:
+        _mark(path)
+    return path
+
+
+def _install_a_game(prefix: Path) -> None:
+    """Give a prefix the client state that proves a real install lives here."""
+    drive_c = prefix / "drive_c"
+    for relative, source in (
+        (AGGREGATE_RELATIVE, "aggregate_installed.json"),
+        (PRODUCT_DB_RELATIVE, "product_db_installed.bin"),
+    ):
+        target = drive_c / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((FIXTURES / source).read_bytes())
+
+
+# --------------------------------------------------------------------------
+# placement
+# --------------------------------------------------------------------------
+
+
+def test_install_lands_on_the_picked_storage(store: BattlenetStore, tmp_path: Path) -> None:
+    """The whole bug: the pick has to reach the prefix, or nothing moves."""
+    base = tmp_path / "sd" / "Games"
+
+    result = asyncio.run(store.install_game(UID, install_path=str(base)))
+
+    assert result.success, result.error
+    expected = base / "prefixes" / "battlenet" / UID
+    assert Path(result.install_path) == expected
+    assert expected.is_dir()
+    # Recorded, never reconstructed — the launcher reads this back.
+    assert store.id_map.resolve_prefix(UID) == expected
+
+
+def test_install_without_a_pick_uses_the_internal_default(
+    store: BattlenetStore,
+) -> None:
+    result = asyncio.run(store.install_game(UID))
+
+    assert result.success, result.error
+    assert Path(result.install_path) == store.prefixes.game_prefix(UID)
+
+
+def test_the_prefix_is_recorded_before_the_clone_runs(
+    store: BattlenetStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An interrupted rsync must leave a reachable prefix, not an orphan.
+
+    Rebuilding the path from the uid is what wedged a Ubisoft prefix in a
+    permanent reset loop, so the id map has to know the location before
+    anything can fail.
+    """
+    base = tmp_path / "sd" / "Games"
+    seen: list[Path | None] = []
+
+    async def _fail(uid: str, destination: Path | None = None) -> None:
+        seen.append(store.id_map.resolve_prefix(uid))
+        return None
+
+    monkeypatch.setattr(store.prefixes, "create_game_prefix", _fail)
+
+    result = asyncio.run(store.install_game(UID, install_path=str(base)))
+
+    assert result.success is False
+    assert result.error_code == "prefix_clone_failed"
+    assert seen == [base / "prefixes" / "battlenet" / UID]
+
+
+# --------------------------------------------------------------------------
+# reinstall — always fresh, but never through a real install
+# --------------------------------------------------------------------------
+
+
+def test_reinstalling_elsewhere_reclaims_the_old_prefix(
+    store: BattlenetStore, tmp_path: Path,
+) -> None:
+    old = _make_prefix(store.prefixes.game_prefix(UID))
+    store.id_map.merge(UID, prefix_path=str(old))
+    base = tmp_path / "sd" / "Games"
+
+    result = asyncio.run(store.install_game(UID, install_path=str(base)))
+
+    assert result.success, result.error
+    assert not old.exists(), "the abandoned internal prefix should be reclaimed"
+    assert Path(result.install_path) == base / "prefixes" / "battlenet" / UID
+
+
+def test_an_unmarked_prefix_is_never_deleted(
+    store: BattlenetStore, tmp_path: Path,
+) -> None:
+    """No marker, no proof we made it — so it is not ours to remove."""
+    old = _make_prefix(tmp_path / "somewhere" / "else", marked=False)
+    (old / "user-data.txt").write_text("precious")
+    store.id_map.merge(UID, prefix_path=str(old))
+
+    result = asyncio.run(
+        store.install_game(UID, install_path=str(tmp_path / "sd" / "Games")),
+    )
+
+    assert result.success, result.error
+    assert (old / "user-data.txt").read_text() == "precious"
+
+
+# --------------------------------------------------------------------------
+# the shared tiers are not game prefixes
+# --------------------------------------------------------------------------
+
+
+def test_the_auth_and_template_prefixes_survive_an_install(
+    store: BattlenetStore, tmp_path: Path,
+) -> None:
+    """The template carries our marker too, so the marker alone cannot save it."""
+    store.id_map.merge(UID, prefix_path=str(store.prefixes.template_prefix))
+
+    result = asyncio.run(
+        store.install_game(UID, install_path=str(tmp_path / "sd" / "Games")),
+    )
+
+    assert result.success, result.error
+    assert store.prefixes.template_prefix.is_dir()
+    assert bpaths.client_installed(store.prefixes.template_prefix)
+    assert bpaths.client_installed(store.prefixes.auth_prefix)
+
+
+def test_remove_game_prefix_refuses_the_shared_tiers(
+    store: BattlenetStore,
+) -> None:
+    assert store.prefixes.remove_game_prefix(store.prefixes.auth_prefix) is False
+    assert store.prefixes.remove_game_prefix(store.prefixes.template_prefix) is False
+    assert store.prefixes.auth_prefix.is_dir()
+    assert store.prefixes.template_prefix.is_dir()
+
+
+# --------------------------------------------------------------------------
+# abandoned cleanup
+# --------------------------------------------------------------------------
+
+
+def test_a_failed_install_reclaims_its_partial_prefix(
+    store: BattlenetStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A half-written clone must not squat on the disk the user picked."""
+    base = tmp_path / "sd" / "Games"
+    target = base / "prefixes" / "battlenet" / UID
+
+    async def _half_write(uid: str, destination: Path | None = None) -> None:
+        _make_prefix(Path(destination or target))
+        return None
+
+    monkeypatch.setattr(store.prefixes, "create_game_prefix", _half_write)
+
+    result = asyncio.run(store.install_game(UID, install_path=str(base)))
+
+    assert result.success is False
+    assert not target.exists()
+    assert store.id_map.resolve_prefix(UID) is None
+    # The family code survives — only the location is forgotten.
+    assert store.id_map.resolve_family(UID) == FAMILY
+
+
+def test_a_failed_install_keeps_a_prefix_that_holds_a_game(
+    store: BattlenetStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The prefix IS the install, so cleanup here would delete a real game."""
+    base = tmp_path / "sd" / "Games"
+    target = base / "prefixes" / "battlenet" / UID
+
+    async def _leave_a_game(uid: str, destination: Path | None = None) -> None:
+        _install_a_game(_make_prefix(Path(destination or target)))
+        return None
+
+    monkeypatch.setattr(store.prefixes, "create_game_prefix", _leave_a_game)
+
+    result = asyncio.run(store.install_game(UID, install_path=str(base)))
+
+    assert result.success is False
+    assert target.is_dir(), "a prefix holding a game must never be reclaimed"
+    assert store.id_map.resolve_prefix(UID) == target
+
+
+# --------------------------------------------------------------------------
+# across the process boundary
+# --------------------------------------------------------------------------
+
+
+def test_the_launcher_resolves_the_relocated_prefix(
+    store: BattlenetStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The launcher is a separate process reading the id map off disk."""
+    from unifideck.launcher.proton.handlers import battlenet_client as client
+
+    base = tmp_path / "sd" / "Games"
+    asyncio.run(store.install_game(UID, install_path=str(base)))
+    monkeypatch.setattr(client, "ID_MAP_PATH", store.id_map.path)
+
+    assert client.resolve_prefix(UID) == base / "prefixes" / "battlenet" / UID

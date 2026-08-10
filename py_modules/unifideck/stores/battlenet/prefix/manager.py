@@ -251,11 +251,20 @@ class BattlenetPrefixManager:
     # -- per-game prefixes -------------------------------------------------
 
     async def create_game_prefix(self, uid: str, destination: Path | None = None) -> Path | None:
-        """Clone the auth-derived template into a new per-game prefix."""
+        """Clone the auth-derived template into a new per-game prefix.
+
+        ``destination`` is the user's picked storage location, resolved by
+        ``stores/shared/prefix_placement``. The game installs inside this
+        prefix, so this call is what puts it on the chosen disk.
+        """
         if not await self.ensure_template():
             return None
         target = Path(destination) if destination else self.game_prefix(uid)
-        if target.exists():
+        # Only a *usable* existing prefix is reused. A half-written one — an
+        # interrupted clone to removable media — would otherwise be returned
+        # as-is and fail at launch on a missing client exe; falling through
+        # lets the additive (no ``--delete``) rsync finish the job.
+        if inspect_prefix(target).usable:
             logger.info("[Battlenet] prefix already exists for %s: %s", uid, target)
             return target
 
@@ -300,6 +309,16 @@ class BattlenetPrefixManager:
         have explicit user intent, and the marker check is the backstop.
         """
         path = Path(prefix)
+        # The marker cannot tell a game clone from the shared tiers: the
+        # template carries one too (``clone_template`` stamps its
+        # destination). Harmless while every caller read its path back from
+        # the id map, but placement now *computes* paths, so name them.
+        if path in (self.auth_prefix, self.template_prefix):
+            logger.error(
+                "[Battlenet] refusing to delete the shared %s prefix at %s",
+                "auth" if path == self.auth_prefix else "template", path,
+            )
+            return False
         if not path.is_dir():
             return True
         if not is_owned_by(path, MARKER_FILENAME, STORE_ID):

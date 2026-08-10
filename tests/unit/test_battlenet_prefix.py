@@ -246,6 +246,54 @@ def test_existing_prefix_is_returned_not_reclobbered(tmp_path: Path) -> None:
     assert (existing / "drive_c" / "precious.txt").is_file()
 
 
+def test_a_prefix_is_created_at_the_requested_destination(tmp_path: Path) -> None:
+    """Placement is how a game reaches the SD card — the install lives inside."""
+    _make_auth(tmp_path)
+    _make_template(tmp_path)
+    mgr = BattlenetPrefixManager(tmp_path)
+    elsewhere = tmp_path / "sd" / "Games" / "prefixes" / "battlenet" / "hs_beta"
+
+    created = asyncio.run(mgr.create_game_prefix("hs_beta", elsewhere))
+
+    assert created == elsewhere
+    assert inspect_prefix(elsewhere).usable
+    assert not mgr.game_prefix("hs_beta").exists()
+
+
+def test_a_half_written_prefix_is_completed_not_returned(tmp_path: Path) -> None:
+    """An interrupted clone to removable media leaves no client behind.
+
+    Returning it as-is fails later at launch on a missing exe; the clone is
+    additive (no ``--delete``), so falling through finishes the job.
+    """
+    _make_auth(tmp_path)
+    _make_template(tmp_path)
+    mgr = BattlenetPrefixManager(tmp_path)
+    partial = mgr.game_prefix("hs_beta")
+    (partial / "drive_c").mkdir(parents=True)
+
+    created = asyncio.run(mgr.create_game_prefix("hs_beta"))
+
+    assert created == partial
+    assert inspect_prefix(partial).usable
+
+
+def test_never_deletes_the_auth_or_template_prefix(tmp_path: Path) -> None:
+    """The template carries our marker too, so the marker alone cannot save it.
+
+    Harmless while every caller read its path back from the id map; prefix
+    placement now *computes* paths, so the shared tiers are named explicitly.
+    """
+    _make_auth(tmp_path)
+    _make_template(tmp_path)
+    mgr = BattlenetPrefixManager(tmp_path)
+
+    assert mgr.remove_game_prefix(mgr.template_prefix) is False
+    assert mgr.remove_game_prefix(mgr.auth_prefix) is False
+    assert inspect_prefix(mgr.template_prefix).usable
+    assert inspect_prefix(mgr.auth_prefix).usable
+
+
 def test_never_deletes_an_unmarked_prefix(tmp_path: Path) -> None:
     """A prefix under our directory is not proof we made it."""
     mgr = BattlenetPrefixManager(tmp_path)

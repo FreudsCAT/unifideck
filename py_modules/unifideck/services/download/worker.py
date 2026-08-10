@@ -22,11 +22,18 @@ from typing import TYPE_CHECKING, Any
 
 from unifideck.core import stale_installs
 from unifideck.core.types import Game
-from unifideck.launcher.wrapper_stores import uses_manual_download_phase
+from unifideck.launcher.wrapper_stores import (
+    is_wrapper_store,
+    uses_manual_download_phase,
+)
 
 from .models import MAX_FINISHED_HISTORY, DownloadItem, classify_download_error
 from .worker_helpers import apply_dict_progress, track_task
-from .wrapper_signals import make_launch_signal, signal_install_launch
+from .wrapper_signals import (
+    make_launch_signal,
+    signal_install_launch,
+    takes_on_ready,
+)
 
 if TYPE_CHECKING:
     from unifideck.core.types import InstallResult
@@ -232,10 +239,10 @@ class _WorkerMixin:
     ) -> InstallResult:
         """Call the correct store entry point for *item*.
 
-        Updates use the store's genuine ``update_game`` command;
-        otherwise per-store install signatures differ — Ubisoft is
-        keyword-only, while Epic/Amazon/GOG take ``base_path``
-        positionally.
+        Updates use the store's genuine ``update_game`` command; otherwise
+        per-store install signatures differ — the wrapper stores are
+        keyword-only (see :meth:`_dispatch_wrapper_install`), while
+        Epic/Amazon/GOG take ``base_path`` positionally.
         """
         if item.is_update:
             logger.info("[DownloadWorker] starting update for %s", key)
@@ -252,21 +259,8 @@ class _WorkerMixin:
         await asyncio.to_thread(
             stale_installs.reconcile_for_install, item.store, item.game_id,
         )
-        if item.store == "ubisoft":
-            return await store.install_game(
-                item.game_id,
-                progress_cb=progress_cb,
-                install_path=item.install_path or None,
-                on_ready=make_launch_signal(self._bus, item),
-            )
-        if item.store == "battlenet":
-            # Kept separate from Ubisoft rather than merged: the signal
-            # factories differ, and a shared shape would be a lie once EA
-            # App adds a third.
-            result = await store.install_game(item.game_id)
-            if result.success:
-                await signal_install_launch(self._bus, item.store, item.game_id)
-            return result
+        if is_wrapper_store(item.store):
+            return await self._dispatch_wrapper_install(item, store, progress_cb)
         # GOG and Epic honour a user-picked install language (GOG via
         # gogdl's --lang, Epic via a legendary SDL install tag); the
         # other stores don't accept the kwarg, so only pass it to those.
@@ -282,6 +276,34 @@ class _WorkerMixin:
             progress_cb=progress_cb,
             **extra,
         )
+
+    async def _dispatch_wrapper_install(
+        self, item: DownloadItem, store: StoreBase, progress_cb: Any,
+    ) -> InstallResult:
+        """Install through a vendor client running inside the prefix.
+
+        ``install_path`` is not optional plumbing for these stores: their
+        games live *inside* the prefix, so it is what decides which disk the
+        game lands on and which volume's free space the vendor client
+        reports. Battle.net shipped without it being passed and its installer
+        refused an 83 GB download quoting the internal drive while the SD
+        card the user picked had 164 GB free.
+
+        The only per-store difference left is *when* the frontend is asked to
+        open the client, and ``takes_on_ready`` reads that off the table in
+        ``wrapper_signals`` rather than branching on a store name.
+        """
+        kwargs: dict[str, Any] = {
+            "progress_cb": progress_cb,
+            "install_path": item.install_path or None,
+        }
+        if takes_on_ready(item.store):
+            kwargs["on_ready"] = make_launch_signal(self._bus, item)
+            return await store.install_game(item.game_id, **kwargs)
+        result = await store.install_game(item.game_id, **kwargs)
+        if result.success:
+            await signal_install_launch(self._bus, item.store, item.game_id)
+        return result
 
     async def _on_install_success(
         self, item: DownloadItem, result: InstallResult, store: StoreBase, key: str,

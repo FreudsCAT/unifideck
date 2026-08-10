@@ -431,7 +431,7 @@ def test_install_resolves_a_family_from_the_catalog_when_sync_has_not_run(
     """
     _sign_in(store, [1105059])
     monkeypatch.setattr(
-        "unifideck.stores.battlenet.store.read_catalog", lambda _dc: _catalog(),
+        "unifideck.stores.battlenet.install.read_catalog", lambda _dc: _catalog(),
     )
     uid = _catalog().entry_for("ARK").uid_for()
     assert store.id_map.resolve_family(uid) is None
