@@ -180,7 +180,9 @@ def _arm(monkeypatch: pytest.MonkeyPatch, *, ready: bool, game: str | None) -> N
     async def fake_wait_game(p: Any, before: set, t: float, poll: float = 3.0) -> str | None:
         return game
 
-    async def fake_wait_exit(p: Any, pid: str, poll: float = 10.0) -> None:
+    async def fake_wait_exit(
+        p: Any, pid: str, *, before: set, poll: float = 10.0,
+    ) -> None:
         return None
 
     monkeypatch.setattr(handler.watch, "wait_for_client_ready", fake_wait_ready)
@@ -377,3 +379,290 @@ def test_another_prefix_client_is_not_ours(monkeypatch) -> None:
     _FakeProc([other]).install(monkeypatch, w)
     assert w.client_ready(PREFIX) is False
     assert w.client_running(PREFIX) is False
+
+
+# --------------------------------------------------------------------------
+# only Windows images are processes; the umu chain is not
+# --------------------------------------------------------------------------
+#
+# WINEPREFIX is inherited by every Linux-side wrapper umu spawns, and
+# EXCLUDED_IMAGES lists only Windows names — so srt-bwrap and friends read
+# as game processes. Measured on-device: phase C's OWN srt-bwrap (pid 13227)
+# was logged as "game process appeared after 0s", which both defeats the
+# silent-failure detector and leaves phase E watching a pid that is not the
+# game, so Steam shows the shortcut running forever.
+
+_BWRAP = ("13227", "/home/deck/.local/share/umu/pressure-vessel/bin/srt-bwrap\x00", PREFIX)
+_PVADVERB = ("13309", "/usr/lib/pressure-vessel/from-host/bin/pv-adverb\x00", PREFIX)
+_UMURUN = ("12633", "/usr/bin/python3.13\x00/plugin/bin/umu/umu-run\x00", PREFIX)
+_D2R = ("14001", "C:\\Program Files (x86)\\Diablo II Resurrected\\D2R.exe\x00", PREFIX)
+_D2R_LAUNCHER = (
+    "13990",
+    "C:\\Program Files (x86)\\Diablo II Resurrected\\"
+    "Diablo II Resurrected Launcher.exe\x00",
+    PREFIX,
+)
+_AGENT = ("12838", "C:\\ProgramData\\Battle.net\\Agent\\Agent.exe\x00", PREFIX)
+_SERVICES = ("12740", "C:\\windows\\system32\\services.exe\x00", PREFIX)
+_GPU = ("12940", f"{_EXE}\x00--type=gpu-process\x00", PREFIX)
+_UTILITY = ("12949", f"{_EXE}\x00--type=utility\x00", PREFIX)
+_EXEC = ("13334", f"{_EXE}\x00--exec=launch OSI\x00", PREFIX)
+
+
+def test_linux_wrappers_are_not_game_processes(monkeypatch) -> None:
+    """The pid-13227 bug: phase C's own srt-bwrap read as the game."""
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    _FakeProc([_BWRAP, _PVADVERB, _UMURUN]).install(monkeypatch, w)
+    assert w.game_pids(PREFIX) == set()
+
+
+def test_real_game_images_are_game_processes(monkeypatch) -> None:
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    _FakeProc([_BWRAP, _D2R, _D2R_LAUNCHER]).install(monkeypatch, w)
+    assert w.game_pids(PREFIX) == {_D2R[0], _D2R_LAUNCHER[0]}
+
+
+def test_the_exec_invocation_is_not_a_game_process(monkeypatch) -> None:
+    """Phase C's Windows leaf is the client itself, already excluded."""
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    _FakeProc([_EXEC, _AGENT, _SERVICES]).install(monkeypatch, w)
+    assert w.game_pids(PREFIX) == set()
+
+
+def test_wine_pids_counts_everything_including_infrastructure(monkeypatch) -> None:
+    """What client_running cannot answer: is the prefix occupied at all."""
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    _FakeProc([_AGENT, _SERVICES, _BWRAP]).install(monkeypatch, w)
+    assert set(w.wine_pids(PREFIX)) == {_AGENT[0], _SERVICES[0]}
+    assert w.client_running(PREFIX) is False
+
+
+def test_lowest_pid_is_chosen_numerically(monkeypatch) -> None:
+    """sorted() on pid strings puts "10000" before "9999"."""
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    low = ("9999", _D2R[1], PREFIX)
+    high = ("10000", _D2R[1], PREFIX)
+    _FakeProc([high, low]).install(monkeypatch, w)
+    pid = asyncio.run(w.wait_for_game(PREFIX, set(), 1.0, poll=0.01))
+    assert pid == "9999"
+
+
+# --------------------------------------------------------------------------
+# teardown reaches the whole client, not just its main process
+# --------------------------------------------------------------------------
+
+
+def test_cef_children_alone_still_count_as_a_running_client(monkeypatch) -> None:
+    """The stacking bug: gpu/utility children matched neither predicate.
+
+    So stop_client signalled zero, the dead session stayed in the prefix,
+    and because client_ready was False the next launch started a SECOND
+    client on top of it. Two stacked sessions were measured on-device.
+    """
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    _FakeProc([_GPU, _UTILITY]).install(monkeypatch, w)
+    assert w.client_running(PREFIX) is True
+    assert w.client_ready(PREFIX) is False
+
+
+def _spy_kill(monkeypatch, watch_mod) -> list[tuple[int, int]]:
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(watch_mod.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    return sent
+
+
+def test_stop_client_signals_cef_children_and_spares_the_agent(monkeypatch) -> None:
+    """Agent.exe must survive: this also runs from the INSTALL teardown."""
+    import signal as sig
+
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    _FakeProc([_MAIN, _GPU, _UTILITY, _AGENT, _SERVICES]).install(monkeypatch, w)
+    sent = _spy_kill(monkeypatch, w)
+
+    assert w.stop_client(PREFIX, timeout=0.0) == 3
+    signalled = {pid for pid, _ in sent}
+    assert signalled == {int(_MAIN[0]), int(_GPU[0]), int(_UTILITY[0])}
+    assert int(_AGENT[0]) not in signalled
+    assert int(_SERVICES[0]) not in signalled
+    assert sig.SIGTERM in {s for _, s in sent}
+
+
+def test_stop_stale_session_clears_everything_and_reaps(monkeypatch) -> None:
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+    from unifideck.launcher.proton.infrastructure import wineserver_reap as wr
+
+    _FakeProc([_GPU, _AGENT, _SERVICES]).install(monkeypatch, w)
+    sent = _spy_kill(monkeypatch, w)
+    reaped: list[object] = []
+    monkeypatch.setattr(wr, "reap_prefix_wineserver", lambda p: reaped.append(p))
+
+    assert w.stop_stale_session(PREFIX, timeout=0.0) == 3
+    assert {pid for pid, _ in sent} == {
+        int(_GPU[0]), int(_AGENT[0]), int(_SERVICES[0]),
+    }
+    assert reaped == [Path(PREFIX)]
+
+
+def test_stop_stale_session_is_a_noop_on_a_cold_prefix(monkeypatch) -> None:
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    _FakeProc([]).install(monkeypatch, w)
+    sent = _spy_kill(monkeypatch, w)
+    assert w.stop_stale_session(PREFIX, timeout=0.0) == 0
+    assert sent == []
+
+
+# --------------------------------------------------------------------------
+# phase E follows the launcher -> game hand-off
+# --------------------------------------------------------------------------
+
+
+def test_wait_for_exit_survives_the_launcher_handoff(monkeypatch) -> None:
+    """D2R: the launcher exits once D2R.exe is up, and is NOT the game.
+
+    Watching only the first pid ended the wait seconds in, so Steam marked
+    the shortcut stopped while the game was still running.
+    """
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    states = [
+        [_D2R_LAUNCHER, _D2R],  # hand-off in progress
+        [_D2R],                 # launcher gone, game up
+        [],                     # game exited
+    ]
+
+    def _advance(prefix):
+        entries = states[0] if len(states) == 1 else states.pop(0)
+        return {pid for pid, _, _ in entries}
+
+    monkeypatch.setattr(w, "game_pids", _advance)
+    monkeypatch.setattr(w, "_game_still_running", lambda p, pid: False)
+
+    asyncio.run(w.wait_for_exit(PREFIX, _D2R_LAUNCHER[0], before=set(), poll=0.01))
+    assert states == [[]]
+
+
+def test_wait_for_exit_ignores_processes_that_predate_the_launch(monkeypatch) -> None:
+    """`before` keeps a pre-existing game from holding the wait open."""
+    from unifideck.launcher.proton.handlers import battlenet_watch as w
+
+    monkeypatch.setattr(w, "game_pids", lambda p: {"999"})
+    monkeypatch.setattr(w, "_game_still_running", lambda p, pid: False)
+
+    asyncio.run(w.wait_for_exit(PREFIX, "4242", before={"999"}, poll=0.01))
+
+
+# --------------------------------------------------------------------------
+# phase C must not reap the client's wineserver
+# --------------------------------------------------------------------------
+
+
+def test_phase_c_opts_out_of_the_wineserver_reap(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regression pin for the whole stalled-install bug.
+
+    The reap is prefix-scoped, and phase C shares its prefix with the
+    client phase A started. With the default (True), the EXEC_TIMEOUT
+    cancellation SIGKILLed that client 60s into every launch and the
+    Battle.net Agent died mid-download — measured on-device, the Agent's
+    log going silent at the reap's exact timestamp, download frozen at 27%.
+    """
+    seen: dict[str, Any] = {}
+
+    async def fake_run(argv, **kwargs):
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(handler, "run_umu_with_retry", fake_run)
+    asyncio.run(handler._issue_exec(plan, Path("/c/Battle.net.exe"), "launch Fen"))
+
+    assert seen["reap_wineserver"] is False
+    assert seen["max_attempts"] == 1
+
+
+def test_auth_launch_opts_out_of_the_wineserver_reap(
+    plan: _Plan, stub: dict, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stop from the UI must unwind through stop_client's SIGTERM.
+
+    A SIGKILL loses the token the client rotated into CachedData.db.
+    """
+    seen: dict[str, Any] = {}
+
+    async def fake_run(argv, **kwargs):
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(handler, "run_umu_with_retry", fake_run)
+    monkeypatch.setattr(handler.watch, "stop_client", lambda p: 0)
+    assert asyncio.run(handler.battlenet_auth_launch(plan)) == 0
+    assert seen["reap_wineserver"] is False
+
+
+# --------------------------------------------------------------------------
+# a stale session is cleared before phase A
+# --------------------------------------------------------------------------
+
+
+def _arm_stale(
+    monkeypatch: pytest.MonkeyPatch, *, wine: list[str], ready: bool,
+) -> list[str]:
+    cleared: list[str] = []
+    monkeypatch.setattr(handler.watch, "wine_pids", lambda p: wine)
+    monkeypatch.setattr(
+        handler.watch, "stop_stale_session", lambda p: cleared.append(str(p)),
+    )
+
+    async def fake_wait_ready(p: Any, t: float, poll: float = 2.0) -> bool:
+        return ready
+
+    monkeypatch.setattr(handler.watch, "wait_for_client_ready", fake_wait_ready)
+    return cleared
+
+
+def test_a_stale_session_is_cleared_before_phase_a(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wine processes but no client that ever becomes ready → clear it.
+
+    Phase A runs waitforexitandrun, which blocks on the prefix's existing
+    wineserver, so a dead session wedges the next launch rather than just
+    sitting there.
+    """
+    cleared = _arm_stale(monkeypatch, wine=["12838", "12740"], ready=False)
+    asyncio.run(handler._clear_stale_session(plan))
+    assert cleared == [str(plan.prefix_path)]
+
+
+def test_a_client_that_is_still_starting_is_left_alone(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Slow to come up is not the same as stale."""
+    cleared = _arm_stale(monkeypatch, wine=["12838"], ready=True)
+    asyncio.run(handler._clear_stale_session(plan))
+    assert cleared == []
+
+
+def test_a_cold_prefix_costs_nothing(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No Wine processes → no grace period, no teardown."""
+    waited: list[float] = []
+    cleared = _arm_stale(monkeypatch, wine=[], ready=False)
+
+    async def _record(p: Any, t: float, poll: float = 2.0) -> bool:
+        waited.append(t)
+        return False
+
+    monkeypatch.setattr(handler.watch, "wait_for_client_ready", _record)
+    asyncio.run(handler._clear_stale_session(plan))
+    assert cleared == []
+    assert waited == []

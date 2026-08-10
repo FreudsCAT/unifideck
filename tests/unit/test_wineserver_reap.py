@@ -85,8 +85,10 @@ def test_reap_noop_when_nothing_holds_dir(tmp_path, monkeypatch):
 
 
 def test_reap_does_not_touch_other_prefix_server_dir(tmp_path, monkeypatch):
-    # A holder on prefix B's server dir must survive a reap of prefix A —
-    # this is the "don't kill the game the user is running" guarantee.
+    # A holder on prefix B's server dir must survive a reap of prefix A.
+    # This is the ONLY isolation the reap offers: a *different* prefix is
+    # never touched. Within one prefix it kills everything — see
+    # test_reap_kills_a_live_holder_on_the_same_prefix.
     wine_tmp = tmp_path / ".wine-test"
     monkeypatch.setattr(wr, "_WINE_TMP", wine_tmp)
 
@@ -126,3 +128,37 @@ def test_sweep_reaps_and_cleans_stale_dirs(tmp_path, monkeypatch):
     assert reaped == 0  # nothing was holding it
     # The abandoned lock dir is cleaned up.
     assert not stale_dir.exists()
+
+
+def test_reap_kills_a_live_holder_on_the_same_prefix(tmp_path, monkeypatch):
+    """Same prefix → it dies, live or orphaned, whoever started it.
+
+    The executable form of the module's scope rule. An earlier docstring
+    promised the reap "never touches a wineserver for a game the user is
+    actually running", reasoning that a running game has its own prefix.
+    That is false whenever one prefix hosts two umu runs — Battle.net,
+    where phase C's timeout SIGKILLed the client phase A had started and
+    froze the download. Callers that do not own the prefix must opt out
+    via ``run_umu_with_retry(reap_wineserver=False)``.
+    """
+    wine_tmp = tmp_path / ".wine-test"
+    monkeypatch.setattr(wr, "_WINE_TMP", wine_tmp)
+
+    prefix = tmp_path / "prefixes" / "shared"
+    prefix.mkdir(parents=True)
+    server_name = wr.server_dir_for_prefix(prefix)
+    assert server_name is not None
+
+    # Two holders, as a Battle.net prefix really has: the client and its
+    # Agent, both bound to the one wineserver.
+    holders = [_spawn_holding(wine_tmp / server_name) for _ in range(2)]
+    for _ in range(50):
+        if len(wr._pids_holding_server_dir(server_name)) >= 2:
+            break
+        time.sleep(0.02)
+
+    assert wr.reap_prefix_wineserver(prefix) >= 2
+
+    for holder in holders:
+        holder.wait(timeout=3)
+        assert holder.returncode in (-signal.SIGKILL, -9)

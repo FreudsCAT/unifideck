@@ -63,6 +63,9 @@ GAME_APPEAR_TIMEOUT = 180.0
 # The exec invocation does not exit promptly even on success, so it is
 # fire-and-bounded-wait rather than awaited to completion.
 EXEC_TIMEOUT = 60.0
+# How long a client-less Wine session gets to produce a renderer before we
+# call it stale. Short: a healthy client never reaches this path.
+STALE_SESSION_GRACE = 20.0
 
 
 def _fail(
@@ -100,16 +103,49 @@ async def _start_client_detached(plan: ProtonLaunchPlan, launcher_exe: Path) -> 
 
 
 async def _issue_exec(plan: ProtonLaunchPlan, client_exe: Path, command: str) -> None:
-    """Phase C. PROTON_VERB=run, one argument, return code ignored."""
+    """Phase C. PROTON_VERB=run, one argument, return code ignored.
+
+    ``reap_wineserver=False`` is load-bearing. This run shares its prefix
+    with the client phase A started and does not own that wineserver, so
+    the :data:`EXEC_TIMEOUT` cancellation must reap only its own process
+    group. It did not: the prefix-scoped reap SIGKILLed the live client
+    60 s into every launch, killing the Battle.net Agent mid-download.
+    Measured on-device — every Diablo II install stalled inside a minute,
+    frozen at 27%, with the Agent's log going silent at the reap's exact
+    timestamp. See ``infrastructure/wineserver_reap`` for the scope rule.
+    """
     env = dict(plan.env)
     env["PROTON_VERB"] = "run"
     argv = [str(plan.python_bin), str(plan.umu_wrapper), str(client_exe), f"--exec={command}"]
     logger.info("[battlenet] phase C: --exec=%s (PROTON_VERB=run)", command)
     with contextlib.suppress(TimeoutError, asyncio.CancelledError):
         await asyncio.wait_for(
-            run_umu_with_retry(argv, env=env, max_attempts=1),
+            run_umu_with_retry(argv, env=env, max_attempts=1, reap_wineserver=False),
             timeout=EXEC_TIMEOUT,
         )
+
+
+async def _clear_stale_session(plan: ProtonLaunchPlan) -> None:
+    """Clear a Wine session that has no usable client left.
+
+    Phase A runs ``waitforexitandrun``, which blocks on the prefix's
+    existing wineserver — so a dead session does not just sit there, it
+    wedges the next launch. Sessions were being left behind because
+    teardown only recognised the client's main process, so once that died
+    its CEF children and Wine infrastructure survived unsignalled and the
+    next launch stacked a second client on top. Two were measured on-device.
+
+    Costs nothing on a cold prefix (no Wine processes) or a healthy one
+    (the caller's readiness check returns first). The grace period is paid
+    only when a session exists but is not becoming ready — which is also
+    what distinguishes "stale" from "still starting up".
+    """
+    if not watch.wine_pids(plan.prefix_path):
+        return
+    if await watch.wait_for_client_ready(plan.prefix_path, STALE_SESSION_GRACE):
+        return
+    logger.warning("[battlenet] stale Wine session in %s — clearing", plan.prefix_path)
+    await asyncio.to_thread(watch.stop_stale_session, plan.prefix_path)
 
 
 async def _bring_up_client(plan: ProtonLaunchPlan) -> Path:
@@ -129,6 +165,7 @@ async def _bring_up_client(plan: ProtonLaunchPlan) -> Path:
         )
 
     if not watch.client_ready(plan.prefix_path):
+        await _clear_stale_session(plan)
         await _start_client_detached(plan, launcher_exe)
         launcher_toast(
             "toasts.launcher.battlenetStartingClientMessage",
@@ -165,10 +202,10 @@ async def battlenet_launch(plan: ProtonLaunchPlan) -> int:
         game_title=resolve_title(plan.context.game_key),
     )
     client_exe = await _bring_up_client(plan)
-    pid = await _issue_and_confirm(plan, client_exe, uid, family)
+    pid, before = await _issue_and_confirm(plan, client_exe, uid, family)
 
     async with _client_teardown(plan):
-        await watch.wait_for_exit(plan.prefix_path, pid)
+        await watch.wait_for_exit(plan.prefix_path, pid, before=before)
     plan.state.game_exit_code = 0
     return 0
 
@@ -196,12 +233,14 @@ async def _client_teardown(plan: ProtonLaunchPlan) -> AsyncGenerator[None]:
 
 async def _issue_and_confirm(
     plan: ProtonLaunchPlan, client_exe: Path, uid: str, family: str,
-) -> str:
+) -> tuple[str, set[str]]:
     """Phases C + D: send the launch, then prove a game process appeared.
 
-    Returns the new pid. Raises when nothing started, because the client
-    accepts an obsolete family code and does nothing — no error, no dialog,
-    no exit code — so only a new process is evidence.
+    Returns ``(pid, before)`` — the new pid, and the pre-launch snapshot
+    phase E needs to follow a launcher-to-game hand-off. Raises when
+    nothing started, because the client accepts an obsolete family code
+    and does nothing — no error, no dialog, no exit code — so only a new
+    process is evidence.
     """
     before = watch.game_pids(plan.prefix_path)
     await _issue_exec(plan, client_exe, f"launch {family}")
@@ -222,7 +261,7 @@ async def _issue_and_confirm(
     # rename detectable.
     with contextlib.suppress(Exception):
         record_launch_ok(uid, family, time.time())
-    return pid
+    return pid, before
 
 
 async def _install_client_here(plan: ProtonLaunchPlan) -> bool:
@@ -297,8 +336,15 @@ async def battlenet_auth_launch(plan: ProtonLaunchPlan) -> int:
         i18n_title_key="toasts.launcher.signingInBattlenet",
     )
     argv = [str(plan.python_bin), str(plan.umu_wrapper), str(launcher_exe)]
+    # reap_wineserver=False so a stop from the UI unwinds through
+    # _client_teardown's SIGTERM instead of SIGKILLing the client outright:
+    # the token the client rotated during sign-in lives in CachedData.db and
+    # is lost if it never gets to flush. See watch.stop_client.
     async with _client_teardown(plan):
-        rc = await run_umu_with_retry(argv, env=plan.env, on_start=plan.on_process_start)
+        rc = await run_umu_with_retry(
+            argv, env=plan.env, on_start=plan.on_process_start,
+            reap_wineserver=False,
+        )
     plan.state.game_exit_code = rc
     return rc
 

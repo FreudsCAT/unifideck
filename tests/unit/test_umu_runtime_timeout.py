@@ -137,3 +137,100 @@ def test_kill_process_group_swallows_already_dead_process():
 
     # Must not raise even though the group is already gone.
     ur._kill_process_group(SimpleNamespace(pid=proc.pid))
+
+
+# --------------------------------------------------------------------------
+# the wineserver reap is prefix-scoped, so it is opt-out
+# --------------------------------------------------------------------------
+#
+# Regression (Battle.net installs stalled inside a minute): the reap kills
+# every holder of a prefix's wineserver, not just this run's tree. Phase C
+# sends an ``--exec`` to a client ANOTHER run started in the same prefix and
+# is bounded by a 60 s timer that always fires — so every launch SIGKILLed
+# the live client, and the Battle.net Agent died mid-download. Measured
+# on-device: the Agent's log went silent at the reap's exact timestamp,
+# twice, with the download frozen at 27%.
+
+
+def _spy_reap(monkeypatch) -> list[object]:
+    seen: list[object] = []
+    monkeypatch.setattr(ur, "_reap_prefix_wineserver", lambda env: seen.append(env))
+    return seen
+
+
+async def _run_until_spawned(argv, pid_file, **kwargs):
+    """Start a run, wait for the child to exist, then cancel it."""
+    task = asyncio.ensure_future(ur.run_umu_with_retry(argv, **kwargs))
+    while not pid_file.exists():
+        await asyncio.sleep(0.02)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    return int(pid_file.read_text().strip())
+
+
+async def _assert_gone(pid: int) -> None:
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        await asyncio.sleep(0.02)
+    pytest.fail(f"pid {pid} survived the killpg")
+
+
+async def test_cancel_skips_the_wineserver_reap_when_opted_out(tmp_path, monkeypatch):
+    """The fix: phase C's cancel must not touch the client's wineserver.
+
+    The killpg still has to run — opting out of the reap must not leak
+    this run's own detached pressure-vessel tree.
+    """
+    seen = _spy_reap(monkeypatch)
+    pid_file = tmp_path / "pid"
+    argv = ["/bin/bash", "-c", f"echo $$ > {pid_file}; exec sleep 100"]
+
+    pid = await _run_until_spawned(
+        argv, pid_file, env={"WINEPREFIX": str(tmp_path)}, reap_wineserver=False,
+    )
+
+    assert seen == []
+    await _assert_gone(pid)
+
+
+async def test_cancel_reaps_the_wineserver_by_default(tmp_path, monkeypatch):
+    """Guards the default: flipping it would re-open the warmup wedge.
+
+    Every other caller is one umu run per prefix, where an orphaned
+    wineserver deadlocks the retry against the same lock.
+    """
+    seen = _spy_reap(monkeypatch)
+    pid_file = tmp_path / "pid"
+    argv = ["/bin/bash", "-c", f"echo $$ > {pid_file}; exec sleep 100"]
+
+    await _run_until_spawned(argv, pid_file, env={"WINEPREFIX": str(tmp_path)})
+
+    assert seen == [{"WINEPREFIX": str(tmp_path)}]
+
+
+async def test_timeout_path_also_honours_the_opt_out(tmp_path, monkeypatch):
+    """_reap_umu_tree has two call sites; both must respect the flag."""
+    seen = _spy_reap(monkeypatch)
+    argv = ["/bin/bash", "-c", "exec sleep 100"]
+
+    rc = await ur.run_umu_with_retry(
+        argv, env={"WINEPREFIX": str(tmp_path)}, timeout=0.2, reap_wineserver=False,
+    )
+
+    assert rc == ur.UMU_TIMEOUT_RC
+    assert seen == []
+
+
+async def test_timeout_path_reaps_by_default(tmp_path, monkeypatch):
+    seen = _spy_reap(monkeypatch)
+    argv = ["/bin/bash", "-c", "exec sleep 100"]
+
+    await ur.run_umu_with_retry(
+        argv, env={"WINEPREFIX": str(tmp_path)}, timeout=0.2,
+    )
+
+    assert seen == [{"WINEPREFIX": str(tmp_path)}]

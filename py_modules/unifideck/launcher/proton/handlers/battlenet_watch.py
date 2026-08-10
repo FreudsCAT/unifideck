@@ -27,6 +27,7 @@ import asyncio
 import contextlib
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -58,9 +59,16 @@ EXCLUDED_IMAGES: frozenset[str] = frozenset({
     "steam.exe",
 })
 
-# The main client process carries this flag; its CEF children carry --type=.
-_FROM_LAUNCHER = "--from-launcher"
+# The client's CEF children carry --type=; the main process carries none.
 _RENDERER = "--type=renderer"
+_WINEPREFIX = "WINEPREFIX="
+
+# The client's own images, for teardown. Distinct from EXCLUDED_IMAGES,
+# which additionally covers Wine infrastructure we must never signal.
+_CLIENT_IMAGES: frozenset[str] = frozenset({
+    "battle.net.exe",
+    "battle.net launcher.exe",
+})
 
 
 def _normalise_prefix(prefix: str | Path) -> str:
@@ -98,29 +106,52 @@ def _pids() -> list[str]:
         return []
 
 
-def scan(prefix: str | Path) -> list[tuple[str, str]]:
-    """``(pid, image_name)`` for every Wine process in this prefix.
+def _wineprefix_of(pid: str) -> str | None:
+    """Normalised ``WINEPREFIX`` of ``pid``, or None if it has none.
+
+    Read as an exact ``WINEPREFIX=`` entry, never as a substring of the
+    whole environ blob: ``STEAM_COMPAT_DATA_PATH`` and ``PROTONPATH``
+    carry the same path and would match a naive ``in environ`` test.
+    """
+    environ = _proc_field(pid, "environ")
+    if _WINEPREFIX not in environ:
+        return None
+    for entry in environ.split("\x00"):
+        if entry.startswith(_WINEPREFIX):
+            return _normalise_prefix(entry.partition("=")[2])
+    return None
+
+
+def _scan_raw(prefix: str | Path) -> list[tuple[str, str, str]]:
+    """``(pid, image, cmdline)`` for every **Windows** process in this prefix.
 
     Scoped by ``WINEPREFIX`` so a client running for another Blizzard game
     is never mistaken for this one's.
+
+    Restricted to ``.exe`` images on purpose. ``WINEPREFIX`` is inherited
+    by the whole Linux-side umu chain — ``srt-bwrap``, ``pv-adverb``,
+    ``umu-run``, the Proton ``python3`` — and :data:`EXCLUDED_IMAGES`
+    lists only Windows names, so those wrappers used to read as game
+    processes. Measured on-device: phase C's own ``srt-bwrap`` (pid
+    13227) was reported as "game process appeared after 0s", which
+    defeats the silent-failure detector phase D exists for and leaves
+    phase E watching a pid that is not the game.
     """
     target = _normalise_prefix(prefix)
-    found: list[tuple[str, str]] = []
+    found: list[tuple[str, str, str]] = []
     for pid in _pids():
-        environ = _proc_field(pid, "environ")
-        if "WINEPREFIX=" not in environ:
+        if _wineprefix_of(pid) != target:
             continue
-        value = ""
-        for entry in environ.split("\x00"):
-            if entry.startswith("WINEPREFIX="):
-                value = entry.partition("=")[2]
-                break
-        if _normalise_prefix(value) != target:
-            continue
-        image = _image_name(_proc_field(pid, "cmdline"))
-        if image:
-            found.append((pid, image))
+        cmdline = _proc_field(pid, "cmdline")
+        image = _image_name(cmdline)
+        if image.endswith(".exe"):
+            found.append((pid, image, cmdline))
     return found
+
+
+def scan(prefix: str | Path) -> list[tuple[str, str]]:
+    """``(pid, image_name)`` for every Windows process in this prefix."""
+    return [(pid, image) for pid, image, _ in _scan_raw(prefix)]
 
 
 def _client_pids(prefix: str | Path) -> tuple[list[str], list[str]]:
@@ -128,18 +159,19 @@ def _client_pids(prefix: str | Path) -> tuple[list[str], list[str]]:
 
     One scan answering both questions, because they are asked together and
     ``/proc`` is the expensive part.
+
+    *Every* client image counts, whatever its ``--type=``. This used to
+    require ``--from-launcher`` or ``--type=renderer``, which meant that
+    once the main process died the surviving ``--type=gpu-process`` and
+    ``--type=utility`` children matched nothing: :func:`stop_client`
+    signalled zero, the dead session stayed in the prefix, and because
+    ``client_ready`` was then False the next launch started a *second*
+    full client on top of it. Two stacked sessions were measured on-device.
     """
-    target = _normalise_prefix(prefix)
     everything: list[str] = []
     renderers: list[str] = []
-    for pid in _pids():
-        cmdline = _proc_field(pid, "cmdline")
-        if _RENDERER not in cmdline and _FROM_LAUNCHER not in cmdline:
-            continue
-        if _image_name(cmdline) != "battle.net.exe":
-            continue
-        environ = _proc_field(pid, "environ")
-        if f"WINEPREFIX={target}" not in environ and target not in environ:
+    for pid, image, cmdline in _scan_raw(prefix):
+        if image != "battle.net.exe":
             continue
         everything.append(pid)
         if _RENDERER in cmdline:
@@ -182,6 +214,16 @@ def game_pids(prefix: str | Path) -> set[str]:
     return {pid for pid, image in scan(prefix) if image not in EXCLUDED_IMAGES}
 
 
+def wine_pids(prefix: str | Path) -> list[str]:
+    """Every Windows process in this prefix, infrastructure included.
+
+    The liveness question :func:`client_running` cannot answer: a prefix
+    holding only ``Agent.exe`` and ``services.exe`` has no client left,
+    but its wineserver still blocks the next phase A's ``wineserver -w``.
+    """
+    return [pid for pid, _ in scan(prefix)]
+
+
 async def wait_for_client_ready(
     prefix: str | Path, deadline_seconds: float, poll: float = 2.0,
 ) -> bool:
@@ -216,7 +258,9 @@ async def wait_for_game(
     while waited < timeout:
         appeared = game_pids(prefix) - before
         if appeared:
-            pid = sorted(appeared)[0]
+            # Numeric, not lexicographic: sorted() on pid *strings* puts
+            # "10000" before "9999".
+            pid = min(appeared, key=int)
             logger.info("[battlenet] game process %s appeared after %.0fs", pid, waited)
             return pid
         await asyncio.sleep(poll)
@@ -229,15 +273,32 @@ def _game_still_running(prefix: str | Path, pid: str) -> bool:
     return Path(f"/proc/{pid}").exists() and pid in game_pids(prefix)
 
 
-async def wait_for_exit(prefix: str | Path, pid: str, poll: float = 10.0) -> None:
-    """Block until the game process goes away.
+def _any_game_running(prefix: str | Path, pid: str, before: set[str]) -> bool:
+    """Whether ``pid`` — or any game process that replaced it — is alive.
+
+    Following one pid is not enough. Blizzard titles hand off: for Diablo
+    II: Resurrected the client starts ``Diablo II Resurrected Launcher.exe``,
+    which exits once ``D2R.exe`` is up. Watching only the first pid ends
+    the wait seconds in, so Steam marks the shortcut stopped while the
+    game is still running.
+
+    ``before`` is the phase-D snapshot, so a process that predates this
+    launch never counts as our game.
+    """
+    return _game_still_running(prefix, pid) or bool(game_pids(prefix) - before)
+
+
+async def wait_for_exit(
+    prefix: str | Path, pid: str, *, before: set[str], poll: float = 10.0,
+) -> None:
+    """Block until the game — and anything it handed off to — goes away.
 
     Polls rather than waits on an event: the game is not our child (the
     client spawned it inside the prefix), so there is no handle to await
     and nothing in-process will ever signal us. ``asyncio.Event`` would
     have nobody to set it.
     """
-    while _game_still_running(prefix, pid):  # noqa: ASYNC110 — external OS state
+    while _any_game_running(prefix, pid, before):  # noqa: ASYNC110 — external OS state
         await asyncio.sleep(poll)
 
 
@@ -258,14 +319,23 @@ async def wait_while_client_running(prefix: str | Path, poll: float = 10.0) -> N
         await asyncio.sleep(poll)
 
 
-def stop_client(prefix: str | Path, *, timeout: float = 15.0) -> int:
-    """Terminate the client running in ``prefix``. Returns how many were signalled.
+def _signal_all(pids: list[str], sig: int) -> None:
+    """Signal each pid individually. Never ``killpg``.
 
-    Scoped to this prefix by ``WINEPREFIX`` and signalled per-pid — never
-    ``killpg``. The process group here contains our own launcher (and, when
-    Steam wraps us, more besides), and group-killing a store's processes is
-    exactly how the legendary cancel path once took down its own subprocess
-    tree.
+    The process group here contains our own launcher (and, when Steam
+    wraps us, more besides), and group-killing a store's processes is
+    exactly how the legendary cancel path once took down its own
+    subprocess tree.
+    """
+    for pid in pids:
+        with contextlib.suppress(OSError, ValueError):
+            os.kill(int(pid), sig)
+
+
+def _terminate(
+    pids: list[str], survivors_of: Callable[[], list[str]], timeout: float,
+) -> int:
+    """SIGTERM ``pids``, then SIGKILL whatever ``survivors_of`` still reports.
 
     SIGTERM first so the client can flush its session — the token it
     rotated during this run lives in ``CachedData.db`` and a SIGKILL can
@@ -274,24 +344,59 @@ def stop_client(prefix: str | Path, *, timeout: float = 15.0) -> int:
     import signal
     import time
 
+    if not pids:
+        return 0
+    _signal_all(pids, signal.SIGTERM)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not survivors_of():
+            logger.info("[battlenet] %d process(es) stopped cleanly", len(pids))
+            return len(pids)
+        time.sleep(0.5)
+
+    survivors = survivors_of()
+    for pid in survivors:
+        logger.warning("[battlenet] pid %s ignored SIGTERM — killing", pid)
+    _signal_all(survivors, signal.SIGKILL)
+    return len(pids)
+
+
+def stop_client(prefix: str | Path, *, timeout: float = 15.0) -> int:
+    """Terminate the client running in ``prefix``. Returns how many were signalled.
+
+    Scoped to this prefix by ``WINEPREFIX``, and to the **client's own
+    images** — never the whole Wine session. ``Agent.exe`` is deliberately
+    spared: this runs from ``_client_teardown``, which also wraps the
+    install flow, and killing the Agent mid-download is the exact failure
+    this module was fixed for. Use :func:`stop_stale_session` when the
+    intent really is to clear the prefix.
+    """
     pids, _ = _client_pids(prefix)
     if not pids:
         return 0
     logger.info("[battlenet] stopping %d client process(es) in %s", len(pids), prefix)
-    for pid in pids:
-        with contextlib.suppress(OSError, ValueError):
-            os.kill(int(pid), signal.SIGTERM)
+    return _terminate(pids, lambda: _client_pids(prefix)[0], timeout)
 
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not _client_pids(prefix)[0]:
-            logger.info("[battlenet] client stopped cleanly")
-            return len(pids)
-        time.sleep(0.5)
 
-    survivors, _ = _client_pids(prefix)
-    for pid in survivors:
-        logger.warning("[battlenet] client pid %s ignored SIGTERM — killing", pid)
-        with contextlib.suppress(OSError, ValueError):
-            os.kill(int(pid), signal.SIGKILL)
-    return len(pids)
+def stop_stale_session(prefix: str | Path, *, timeout: float = 15.0) -> int:
+    """Clear an entire dead Wine session out of ``prefix``.
+
+    For the case :func:`stop_client` must not handle: a session with no
+    usable client left, whose surviving Wine infrastructure still holds
+    the wineserver that phase A's ``waitforexitandrun`` would block on.
+    Signals every Windows image, then reaps the wineserver itself — by
+    then we own the prefix, which is what that reap requires.
+    """
+    pids = wine_pids(prefix)
+    if not pids:
+        return 0
+    logger.warning(
+        "[battlenet] clearing stale session: %d process(es) in %s", len(pids), prefix,
+    )
+    stopped = _terminate(pids, lambda: wine_pids(prefix), timeout)
+    with contextlib.suppress(Exception):
+        from unifideck.launcher.proton.infrastructure.wineserver_reap import (
+            reap_prefix_wineserver,
+        )
+        reap_prefix_wineserver(Path(prefix))
+    return stopped
