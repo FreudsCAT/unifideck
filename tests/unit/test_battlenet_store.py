@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,11 @@ from unifideck.stores.battlenet.ownership import (
     InstalledGame,
     merge_fragments,
 )
+from _wine_session import token_of, write_registry
+
+from unifideck.launcher import wrapper_session as ws
+from unifideck.stores.battlenet.prefix import MARKER_FILENAME
+from unifideck.stores.shared import prefix_clone as pc
 from unifideck.stores.shared.store_base import StoreBase
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "battlenet"
@@ -35,9 +41,18 @@ LAUNCHER = "/plugin/bin/unifideck-launcher"
 class _Bus:
     def __init__(self) -> None:
         self.events: list[tuple[Any, dict]] = []
+        self.subscriptions: list[str] = []
 
     async def emit(self, event: Any, **kwargs: Any) -> None:
         self.events.append((event, kwargs))
+
+    def on(self, event: Any, handler: Any) -> None:
+        """Record what ``auto_wire`` subscribed.
+
+        Without this the bus silently absorbed the subscription, so a store
+        that stopped wiring its session capture would still pass every test.
+        """
+        self.subscriptions.append(getattr(event, "value", str(event)))
 
 
 class _Cache:
@@ -442,3 +457,166 @@ def test_install_resolves_a_family_from_the_catalog_when_sync_has_not_run(
 
     assert result.error_code == "not_signed_in"
     assert store.id_map.resolve_family(uid) == "ARK"
+
+
+# --------------------------------------------------------------------------
+# session lifecycle
+# --------------------------------------------------------------------------
+#
+# Battle.net shipped the three prefix tiers without the lifecycle that keeps
+# them current. Measured on-device 2026-08-11: `.bnet-auth` and `.template`
+# byte-identical and frozen at 08:57, while the game prefix's client had
+# rewritten every session file at 21:15 — twelve hours of token rotation that
+# never came back, so the user saw BLZBNTBGS80000023 on every install.
+
+
+def _write_session(
+    prefix: Path, *, mtime: float, vault: bytes = b"vault", token: str = "tok",
+) -> None:
+    """Put a signed-in session into ``prefix`` at a fixed mtime.
+
+    Includes the registry token: the login token is a Wine registry key, so a
+    files-only prefix reads as signed OUT however complete its AppData looks.
+    """
+    write_registry(prefix, stamp=int(mtime), token=token)
+    local = prefix / "drive_c/users/steamuser/AppData/Local/Battle.net"
+    vault_path = local / "Account/309859116/account.db"
+    vault_path.parent.mkdir(parents=True, exist_ok=True)
+    vault_path.write_bytes(vault)
+    os.utime(vault_path, (mtime, mtime))
+    config = prefix / "drive_c/users/steamuser/AppData/Roaming/Battle.net/Battle.net.config"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"Client": {"GaClientId": "GUID-A"}}))
+
+
+def _owned_prefix(store: BattlenetStore, path: Path) -> Path:
+    """A prefix marked as ours, so the destructive guards allow it."""
+    (path / "drive_c").mkdir(parents=True, exist_ok=True)
+    pc.write_marker(
+        path, MARKER_FILENAME,
+        pc.PrefixMarker(store="battlenet", created_at=1.0),
+    )
+    return path
+
+
+def test_the_launcher_is_told_where_the_shared_prefixes_are(
+    store: BattlenetStore,
+) -> None:
+    """The launcher runs under the system Python and cannot read our config.
+
+    ``prefixes_dir`` is user-configurable, so a path it is never told is a
+    path it can never use — the same reason family codes go to the id map.
+    """
+    assert ws.auth_prefix("battlenet") == store.prefixes.auth_prefix
+    assert ws.template_prefix("battlenet") == store.prefixes.template_prefix
+
+
+def test_game_stopped_captures_the_rotated_session(store: BattlenetStore) -> None:
+    """The one hook that always fires.
+
+    A launch runs in the launcher subprocess, which the Steam stop button and
+    the QAM "X" both SIGKILL, so its own capture cannot be relied on.
+    """
+    _write_session(
+        store.prefixes.auth_prefix, mtime=1000.0, vault=b"stale", token="stale",
+    )
+    game = _owned_prefix(store, store.prefixes.game_prefix("osi"))
+    _write_session(game, mtime=2000.0, vault=b"rotated", token="rotated")
+    store.id_map.merge("osi", prefix_path=str(game))
+
+    asyncio.run(store._capture_wrapper_session_on_stop(store="battlenet", game_id="osi"))
+    assert token_of(store.prefixes.auth_prefix) == "rotated"
+
+    vault = store.prefixes.auth_prefix / (
+        "drive_c/users/steamuser/AppData/Local/Battle.net/Account/309859116/account.db"
+    )
+    assert vault.read_bytes() == b"rotated"
+
+
+def test_game_stopped_ignores_other_stores(store: BattlenetStore) -> None:
+    _write_session(store.prefixes.auth_prefix, mtime=1000.0, vault=b"stale")
+    game = _owned_prefix(store, store.prefixes.game_prefix("osi"))
+    _write_session(game, mtime=2000.0, vault=b"rotated")
+    store.id_map.merge("osi", prefix_path=str(game))
+
+    asyncio.run(store._capture_wrapper_session_on_stop(store="ubisoft", game_id="osi"))
+
+    vault = store.prefixes.auth_prefix / (
+        "drive_c/users/steamuser/AppData/Local/Battle.net/Account/309859116/account.db"
+    )
+    assert vault.read_bytes() == b"stale"
+
+
+def test_uninstall_captures_the_session_before_deleting_the_prefix(
+    store: BattlenetStore,
+) -> None:
+    """The prefix usually holds a NEWER token than auth.
+
+    The vendor rotates on every run, so deleting a played game's prefix
+    uncaptured strands auth on a server-stale token and the next install opens
+    signed-out. Ubisoft earned this one as a measured incident.
+    """
+    _write_session(store.prefixes.auth_prefix, mtime=1000.0, vault=b"stale")
+    game = _owned_prefix(store, store.prefixes.game_prefix("osi"))
+    _write_session(game, mtime=2000.0, vault=b"rotated")
+    store.id_map.merge("osi", prefix_path=str(game))
+
+    result = asyncio.run(store.uninstall_game("osi"))
+
+    assert result.success is True
+    assert not game.is_dir()
+    vault = store.prefixes.auth_prefix / (
+        "drive_c/users/steamuser/AppData/Local/Battle.net/Account/309859116/account.db"
+    )
+    assert vault.read_bytes() == b"rotated"
+
+
+def test_logout_purges_the_session_from_every_game_prefix(
+    store: BattlenetStore,
+) -> None:
+    """Without this the next launch quietly signs the user back in."""
+    _sign_in(store, [1])
+    game = _owned_prefix(store, store.prefixes.game_prefix("osi"))
+    _write_session(game, mtime=2000.0)
+    store.id_map.merge("osi", prefix_path=str(game))
+
+    assert asyncio.run(store.logout()).success is True
+
+    spec = ws.SPECS["battlenet"]
+    assert ws.has_session(spec, game) is False
+
+
+def test_logout_still_leaves_the_games_alone(store: BattlenetStore) -> None:
+    """Purging a session must never reach the install inside the prefix."""
+    _sign_in(store, [1])
+    game = _owned_prefix(store, store.prefixes.game_prefix("osi"))
+    _write_session(game, mtime=2000.0)
+    payload = game / "drive_c" / "games" / "Overwatch" / "data.bin"
+    payload.parent.mkdir(parents=True)
+    payload.write_bytes(b"90GB")
+    store.id_map.merge("osi", prefix_path=str(game))
+
+    asyncio.run(store.logout())
+
+    assert payload.exists()
+    assert game.is_dir()
+
+
+def test_the_session_capture_is_actually_subscribed_to_the_bus(
+    tmp_path: Path,
+) -> None:
+    """Pins the wiring, not just the handler body.
+
+    The handler is only reachable because ``__init__`` calls ``auto_wire``. A
+    store that dropped that call would keep passing a test that invokes the
+    method directly, while in production the rotated token would once again
+    never come back.
+    """
+    prefixes = tmp_path / "prefixes"
+    prefixes.mkdir(parents=True)
+    bus = _Bus()
+    BattlenetStore(
+        bus, _Cache(), plugin_dir="/plugin",
+        config=_Config(tmp_path, prefixes),
+    )
+    assert "game_stopped" in bus.subscriptions

@@ -357,6 +357,8 @@
       "battlenetInstallingClientMessage": "Configurando o cliente do Battle.net — isso pode levar alguns minutos.",
       "battlenetClientNotReady": "Battle.net Didn't Start",
       "battlenetClientNotReadyMessage": "The Battle.net client did not finish starting. It may be applying an update — try again in a moment.",
+      "battlenetClientBusyElsewhere": "Battle.net Is Busy",
+      "battlenetClientBusyElsewhereMessage": "Battle.net is already running for another game — it may be downloading. Close it there, then start {{gameTitle}} again.",
       "battlenetFamilyMissing": "Can't Launch This Game",
       "battlenetFamilyMissingMessage": "Unifideck doesn't know Battle.net's code for {{gameTitle}}. Re-sync your library to refresh it.",
       "battlenetLaunchNotObserved": "Game Didn't Start",

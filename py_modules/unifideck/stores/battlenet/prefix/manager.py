@@ -14,20 +14,36 @@ session out of it. The result was a client that demanded a fresh sign-in for
 every single game, and the obvious repair — copying the session across
 afterwards — was measured on-device and *does not work*:
 
-    attempt 1: copy the DPAPI token (``UnifiedAuth``), ``EncryptionKey``,
-               ``Identity``, ``CachedData.db``, ``BrowserCaches/`` and the
-               config's ``SavedAccountNames``/``AutoLogin``
+    attempt 1: copy the token vault, ``CachedData.db``, ``BrowserCaches/``
+               and the config's ``SavedAccountNames``/``AutoLogin``
                -> client logged ``browser state changed: LoginCredential``,
                   i.e. it still put up a password form.
 
     attempt 2: additionally copy ``Client.GaClientId``
                -> no ``LoginCredential`` at all, signed straight in.
 
+(``UnifiedAuth``, ``EncryptionKey`` and ``Identity`` are **Wine registry
+keys**, under ``Software\\Blizzard Entertainment\\Battle.net\\`` in
+``user.reg`` — not files. Confirmed 2026-08-11 on client build 17651, after a
+files-only session copy produced ``ERROR_TOKEN_NOT_FOUND (49)`` and the
+client's own log said ``DeleteToken(): Deleting registry token``. That is also
+why the whole-prefix rsync below works where a curated file list does not: it
+carries ``user.reg``. ``launcher/wrapper_session_specs`` holds the verified
+layout.)
+
 The token is bound to the client instance that minted it, so a session only
 transplants when *every* piece of identity material agrees. Deriving the
 whole template from auth makes that true by construction rather than by a
-hand-maintained list of four files staying correct as Blizzard changes the
+hand-maintained list of files staying correct as Blizzard changes the
 client.
+
+Derivation alone is not enough, and that was the second half of the same
+bug. Blizzard rotates the token on every client run, so a template derived
+once is a snapshot that goes server-stale — measured here as ``.bnet-auth``
+and ``.template`` byte-identical and frozen at 08:57 while the game prefix's
+client had rewritten every session file at 21:15. The template's session is
+therefore *refreshed* from auth whenever auth is newer, which is also what
+makes re-signing-in heal every prefix instead of only the auth one.
 
 This is not a new idea — it is Ubisoft's ``shared-identity invariant``,
 stated in ``stores/ubisoft/prefix/helpers.py``: the template "is always an
@@ -59,11 +75,13 @@ path. Deleting a prefix here destroys the game inside it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from unifideck.launcher import wrapper_session
 from unifideck.stores.battlenet import paths
 from unifideck.stores.shared.prefix_clone import (
     clone_template,
@@ -164,6 +182,28 @@ class BattlenetPrefixManager:
             self.template_prefix / DERIVED_MARKER
         ).exists()
 
+    def _refresh_template_session(self) -> bool:
+        """Bring the template's session up to date with the auth prefix.
+
+        Cheap: only session material moves, so this is a handful of small
+        files rather than the 12 s / 1.6 GB the full derivation costs. A
+        failure is not fatal — the existing template is still usable, just
+        older, and failing the install instead would be strictly worse.
+        """
+        spec = wrapper_session.spec_for(STORE_ID)
+        if spec is None:
+            return False
+        try:
+            return wrapper_session.inject(
+                spec, self.auth_prefix, self.template_prefix,
+            )
+        except Exception:
+            logger.warning(
+                "[Battlenet] could not refresh the template's session — "
+                "keeping the existing one",
+            )
+            return False
+
     async def ensure_template(self) -> bool:
         """Make ``.template`` an rsync clone of the signed-in auth prefix.
 
@@ -176,8 +216,17 @@ class BattlenetPrefixManager:
         A template rather than cloning each game straight from auth, because
         the template is *quiesced*: it can be copied while the user has the
         Battle.net window open, which the live auth prefix cannot.
+
+        A ready template is **refreshed, not rebuilt**. This used to return
+        here unconditionally, which froze the template's session at whatever
+        it was on the day of the first install: re-signing-in fixed only
+        ``.bnet-auth``, every game prefix kept the dead token, and each
+        Install stamped that dead token back over any prefix whose client had
+        since refreshed itself.
         """
         if self.template_ready():
+            if self.auth_ready() and not self._auth_is_busy():
+                await asyncio.to_thread(self._refresh_template_session)
             return True
         if not self.auth_ready():
             logger.error(

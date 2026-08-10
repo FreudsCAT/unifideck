@@ -31,6 +31,9 @@ from typing import TYPE_CHECKING
 
 from unifideck.core.types.results import InstallResult
 from unifideck.stores.shared.prefix_placement import (
+    BeforeRemove as CaptureSession,
+)
+from unifideck.stores.shared.prefix_placement import (
     cleanup_abandoned_prefix,
     reset_for_fresh_install,
     resolve_prefix_target,
@@ -82,9 +85,13 @@ class BattlenetInstaller:
         self,
         prefixes: BattlenetPrefixManager,
         id_map: BattlenetIdMap,
+        capture_session: CaptureSession | None = None,
     ) -> None:
         self._prefixes = prefixes
         self._id_map = id_map
+        # Injected rather than imported so the installer keeps knowing nothing
+        # about the bus or the store; the store passes its own hook.
+        self._capture_session = capture_session
 
     async def install(
         self, game_id: str, install_path: str | None = None,
@@ -143,12 +150,16 @@ class BattlenetInstaller:
         )
         # Every Install rebuilds the prefix, so clear both the previously
         # recorded location (which differs once the user picks a new disk)
-        # and the target itself.
+        # and the target itself — capturing each one's session on the way out,
+        # because a prefix whose client has run holds a newer token than the
+        # auth prefix and deleting it uncaptured is what makes the next
+        # install open signed-out.
         await reset_for_fresh_install(
             self._id_map.resolve_prefix(game_id),
             target,
             self._prefixes.remove_game_prefix,
             label=LABEL,
+            before_remove=self._capture_session,
         )
         # Record BEFORE the clone: the launcher, install detection and
         # uninstall all read this path back rather than rebuilding it, so an

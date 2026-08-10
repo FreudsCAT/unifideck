@@ -16,11 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from _wine_session import write_registry
 
 from unifideck.stores.battlenet import BattlenetStore
 from unifideck.stores.battlenet import paths as bpaths
@@ -308,3 +311,64 @@ def test_the_launcher_resolves_the_relocated_prefix(
     monkeypatch.setattr(client, "ID_MAP_PATH", store.id_map.path)
 
     assert client.resolve_prefix(UID) == base / "prefixes" / "battlenet" / UID
+
+
+# --------------------------------------------------------------------------
+# the session survives the rebuild
+# --------------------------------------------------------------------------
+
+
+def _put_session(
+    prefix: Path, *, mtime: float, vault: bytes, token: str = "tok",
+) -> Path:
+    write_registry(prefix, stamp=int(mtime), token=token)
+    vault_path = (
+        prefix
+        / "drive_c/users/steamuser/AppData/Local/Battle.net/Account/1/account.db"
+    )
+    vault_path.parent.mkdir(parents=True, exist_ok=True)
+    vault_path.write_bytes(vault)
+    os.utime(vault_path, (mtime, mtime))
+    config = (
+        prefix
+        / "drive_c/users/steamuser/AppData/Roaming/Battle.net/Battle.net.config"
+    )
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"Client": {"GaClientId": "GUID-A"}}))
+    return vault_path
+
+
+def test_install_captures_the_session_before_wiping_the_old_prefix(
+    store: BattlenetStore,
+) -> None:
+    """Install rebuilds the prefix, so the reset is a session-loss window.
+
+    The prefix being deleted has had a client running in it, so it holds a
+    newer token than the auth prefix. Deleting it uncaptured is exactly what
+    made the *next* install open signed-out.
+    """
+    auth_vault = _put_session(store.prefixes.auth_prefix, mtime=1000.0, vault=b"stale")
+    old = _make_prefix(store.prefixes.game_prefix(UID))
+    _put_session(old, mtime=2000.0, vault=b"rotated")
+    store.id_map.merge(UID, prefix_path=str(old))
+
+    asyncio.run(store.install_game(UID))
+
+    assert auth_vault.read_bytes() == b"rotated"
+
+
+def test_a_relocated_install_captures_from_the_old_disk_first(
+    store: BattlenetStore, tmp_path: Path,
+) -> None:
+    """Picking a new disk abandons the old prefix — capture on the way out."""
+    auth_vault = _put_session(store.prefixes.auth_prefix, mtime=1000.0, vault=b"stale")
+    old = _make_prefix(store.prefixes.game_prefix(UID))
+    _put_session(old, mtime=2000.0, vault=b"rotated-on-internal")
+    store.id_map.merge(UID, prefix_path=str(old))
+
+    sdcard = tmp_path / "sdcard"
+    sdcard.mkdir()
+    asyncio.run(store.install_game(UID, install_path=str(sdcard)))
+
+    assert auth_vault.read_bytes() == b"rotated-on-internal"
+    assert not old.is_dir()

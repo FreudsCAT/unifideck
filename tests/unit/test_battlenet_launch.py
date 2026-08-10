@@ -25,6 +25,7 @@ import pytest
 from unifideck.launcher.proton.handlers import battlenet as handler
 from unifideck.launcher.proton.handlers import battlenet_client as client
 from unifideck.launcher.proton.handlers import battlenet_watch as watch
+from unifideck.launcher.proton.handlers import wrapper_clients as wc
 from unifideck.launcher.types.errors import GameFailedError
 
 
@@ -108,7 +109,7 @@ def test_a_real_game_image_is_not_excluded() -> None:
 def test_prefix_comparison_normalises_the_pfx_selflink(tmp_path: Path) -> None:
     """umu rewrites WINEPREFIX to <prefix>/pfx/ via a self-symlink."""
     (tmp_path / "pfx").symlink_to(".")
-    assert watch._normalise_prefix(tmp_path) == watch._normalise_prefix(tmp_path / "pfx")
+    assert wc.normalise_prefix(tmp_path) == wc.normalise_prefix(tmp_path / "pfx")
 
 
 @pytest.mark.parametrize(
@@ -120,7 +121,7 @@ def test_prefix_comparison_normalises_the_pfx_selflink(tmp_path: Path) -> None:
     ],
 )
 def test_image_name_extraction(cmdline: str, expected: str) -> None:
-    assert watch._image_name(cmdline) == expected
+    assert wc.image_name(cmdline) == expected
 
 
 # --------------------------------------------------------------------------
@@ -312,16 +313,21 @@ class _FakeProc:
         # (pid, cmdline, wineprefix)
         self._entries = entries
 
-    def install(self, monkeypatch, watch_mod) -> None:
+    def install(self, monkeypatch, _watch_mod=None) -> None:
+        """Patch the /proc readers in ``wrapper_clients``.
+
+        That is where they live since the cross-prefix scan needed them:
+        ``battlenet_watch`` calls through, so patching it would not be seen.
+        """
         order = [pid for pid, _, _ in self._entries]
         by_pid = {pid: (cmd, pfx) for pid, cmd, pfx in self._entries}
-        monkeypatch.setattr(watch_mod, "_pids", lambda: order)
+        monkeypatch.setattr(wc, "pids", lambda: order)
 
         def _field(pid: str, field: str) -> str:
             cmd, pfx = by_pid.get(pid, ("", ""))
             return cmd if field == "cmdline" else f"WINEPREFIX={pfx}\x00"
 
-        monkeypatch.setattr(watch_mod, "_proc_field", _field)
+        monkeypatch.setattr(wc, "proc_field", _field)
 
 
 PREFIX = "/prefixes/battlenet/D1"

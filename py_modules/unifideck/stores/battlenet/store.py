@@ -30,11 +30,13 @@ from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types.domain import Game, StoreInfo
 from unifideck.core.types.results import AuthResult, InstallResult, Result
+from unifideck.event_bus.event_bus_devex import auto_wire
 from unifideck.stores.shared.auth_shortcut import (
     AuthShortcutSpec,
     build_context,
 )
 from unifideck.stores.shared.store_base import StoreBase
+from unifideck.stores.shared.wrapper_session_hooks import WrapperSessionHooks
 
 from . import config as store_config
 from . import library as library_mod
@@ -51,8 +53,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class BattlenetStore(StoreBase):
+class BattlenetStore(WrapperSessionHooks, StoreBase):
     """Blizzard Battle.net, driven through the vendor client in a prefix."""
+
+    session_store_id = "battlenet"
 
     store_info = StoreInfo(
         name="battlenet",
@@ -75,12 +79,29 @@ class BattlenetStore(StoreBase):
         self.config = store_config.from_config_manager(config)
         self.prefixes = BattlenetPrefixManager(self.config.prefixes_dir_path)
         self.id_map = BattlenetIdMap(self.config.id_map_path)
-        self._installer = BattlenetInstaller(self.prefixes, self.id_map)
+        self._installer = BattlenetInstaller(
+            self.prefixes, self.id_map, self.capture_before_prefix_loss,
+        )
         # Injected post-discovery by services/bootstrap/store_injector.py.
         self._shortcut_service: Any | None = None
-        # Strong refs to the background template warm, so the GC cannot
-        # collect the task mid-install.
-        self._background_tasks: set[Any] = set()
+        # Tell the out-of-process launcher where the shared prefixes are: it
+        # runs under the system Python, cannot read our config, and needs the
+        # auth prefix to inject the live session before it starts a client.
+        self.publish_session_prefixes(self.prefixes.template_prefix)
+        # Subscribes ``GAME_STOPPED`` so the token the client rotates during a
+        # play session is captured back to the auth prefix.
+        auto_wire(self, bus)
+
+    # -- WrapperSessionHooks ----------------------------------------------
+
+    def session_auth_prefix(self) -> Path:
+        return self.prefixes.auth_prefix
+
+    def session_prefixes(self) -> list[Path]:
+        return list(self.id_map.all_prefix_paths())
+
+    def session_prefix_for(self, game_id: str) -> Path | None:
+        return self.id_map.resolve_prefix(game_id)
 
     # -- helpers -----------------------------------------------------------
 
@@ -230,7 +251,18 @@ class BattlenetStore(StoreBase):
         for this store the prefix *is* the install, so wiping prefixes here
         would delete the user's games. Signing the client out is a separate,
         explicitly-labelled action.
+
+        The *session* is a different matter from the prefix. Every game prefix
+        holds a working copy of it, so without a purge the next launch opens a
+        client that is still signed in and the sign-out silently did nothing.
+        Only session files are removed; the games are untouched.
         """
+        purged = await self.purge_session_everywhere()
+        if purged:
+            logger.info(
+                "[Battlenet] removed %d session file(s) from the template and "
+                "game prefixes", purged,
+            )
         try:
             self._cache.clear("battlenet")
         except Exception:
@@ -334,6 +366,11 @@ class BattlenetStore(StoreBase):
                 error="No recorded prefix for this game",
                 error_code="prefix_unknown",
             )
+        # Last chance to keep this prefix's session. The client rotates the
+        # token on every run, so a played game usually holds a NEWER one than
+        # the auth prefix; deleting it uncaptured strands auth on a stale
+        # token and the next install opens signed-out.
+        await self.capture_before_prefix_loss(prefix)
         if delete_prefix and not self.prefixes.remove_game_prefix(prefix):
             return Result(
                 success=False,

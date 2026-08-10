@@ -15,9 +15,13 @@ every install behind it.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from pathlib import Path
 
 import pytest
+
+from _wine_session import write_registry
 
 from unifideck.stores.battlenet import paths
 from unifideck.stores.battlenet.prefix import (
@@ -342,3 +346,107 @@ def test_an_already_derived_template_is_not_rebuilt(tmp_path: Path) -> None:
 def test_special_prefixes_are_dot_prefixed(tmp_path: Path, attr: str) -> None:
     """So a game uid can never collide with them."""
     assert getattr(BattlenetPrefixManager(tmp_path), attr).name.startswith(".")
+
+
+# --------------------------------------------------------------------------
+# template freshness
+# --------------------------------------------------------------------------
+#
+# Deriving the template once was only half the fix. Blizzard rotates the token
+# on every client run, so a snapshot goes server-stale: measured on-device,
+# `.bnet-auth` and `.template` were byte-identical and frozen at 08:57 while a
+# game prefix's client had rewritten everything at 21:15. Re-signing-in fixed
+# only the auth prefix, and each Install stamped the dead token back over any
+# prefix that had since refreshed itself.
+
+VAULT_REL = (
+    "drive_c/users/steamuser/AppData/Local/Battle.net/Account/1/account.db"
+)
+CONFIG_REL = (
+    "drive_c/users/steamuser/AppData/Roaming/Battle.net/Battle.net.config"
+)
+
+
+def _put_session(
+    prefix: Path, *, mtime: float, vault: bytes, token: str = "tok",
+) -> None:
+    write_registry(prefix, stamp=int(mtime), token=token)
+    vault_path = prefix / VAULT_REL
+    vault_path.parent.mkdir(parents=True, exist_ok=True)
+    vault_path.write_bytes(vault)
+    os.utime(vault_path, (mtime, mtime))
+    config = prefix / CONFIG_REL
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"Client": {"GaClientId": "GUID-A"}}))
+
+
+def test_a_ready_template_has_its_session_refreshed_from_auth(tmp_path: Path) -> None:
+    auth = _make_auth(tmp_path)
+    template = _make_template(tmp_path)
+    _put_session(auth, mtime=2000.0, vault=b"fresh")
+    _put_session(template, mtime=1000.0, vault=b"stale")
+
+    mgr = BattlenetPrefixManager(tmp_path)
+    assert asyncio.run(mgr.ensure_template()) is True
+    assert (template / VAULT_REL).read_bytes() == b"fresh"
+
+
+def test_refreshing_a_template_does_not_rebuild_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refresh is a few small files, not a 12 s / 1.6 GB recopy.
+
+    It also must not ``rmtree`` the template: an Install running at the same
+    time clones from it.
+    """
+    auth = _make_auth(tmp_path)
+    template = _make_template(tmp_path)
+    _put_session(auth, mtime=2000.0, vault=b"fresh")
+    _put_session(template, mtime=1000.0, vault=b"stale")
+    monkeypatch.setattr(
+        pc, "rsync_clone",
+        lambda *a, **k: pytest.fail("a ready template must not be re-cloned"),
+    )
+
+    mgr = BattlenetPrefixManager(tmp_path)
+    assert asyncio.run(mgr.ensure_template()) is True
+    assert (template / VAULT_REL).read_bytes() == b"fresh"
+
+
+def test_a_template_newer_than_auth_is_left_alone(tmp_path: Path) -> None:
+    """Never roll a session backwards."""
+    auth = _make_auth(tmp_path)
+    template = _make_template(tmp_path)
+    _put_session(auth, mtime=1000.0, vault=b"older")
+    _put_session(template, mtime=2000.0, vault=b"newer")
+
+    mgr = BattlenetPrefixManager(tmp_path)
+    assert asyncio.run(mgr.ensure_template()) is True
+    assert (template / VAULT_REL).read_bytes() == b"newer"
+
+
+def test_a_failed_refresh_still_reports_a_usable_template(tmp_path: Path) -> None:
+    """Older is fine; failing the install over it is not."""
+    _make_auth(tmp_path)
+    template = _make_template(tmp_path)
+    _put_session(template, mtime=1000.0, vault=b"stale")
+    # Auth has no session at all, so there is nothing to refresh from.
+
+    mgr = BattlenetPrefixManager(tmp_path)
+    assert asyncio.run(mgr.ensure_template()) is True
+    assert (template / VAULT_REL).read_bytes() == b"stale"
+
+
+def test_a_busy_auth_client_blocks_the_refresh_not_the_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Copying out from under a live client reads a torn vault."""
+    auth = _make_auth(tmp_path)
+    template = _make_template(tmp_path)
+    _put_session(auth, mtime=2000.0, vault=b"fresh")
+    _put_session(template, mtime=1000.0, vault=b"stale")
+    monkeypatch.setattr(BattlenetPrefixManager, "_auth_is_busy", lambda _self: True)
+
+    mgr = BattlenetPrefixManager(tmp_path)
+    assert asyncio.run(mgr.ensure_template()) is True
+    assert (template / VAULT_REL).read_bytes() == b"stale"

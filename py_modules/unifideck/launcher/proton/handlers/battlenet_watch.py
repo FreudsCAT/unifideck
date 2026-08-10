@@ -19,6 +19,11 @@ Two measured facts shape the probes:
   normalises it and creates ``pfx -> .`` as a self-symlink. Prefix matching
   must therefore normalise, or a client running for a sibling Blizzard game
   is mistaken for this one's.
+
+The ``/proc`` primitives themselves now live in ``wrapper_clients``: they are
+not Battle.net-specific, and the question that motivated moving them — "is a
+client already running in some *other* prefix" — cannot be asked from a
+module whose every function takes one prefix.
 """
 
 from __future__ import annotations
@@ -29,6 +34,9 @@ import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
+
+from .wrapper_clients import CLIENT_IMAGES
+from .wrapper_clients import scan_prefix as _scan_raw
 
 logger = logging.getLogger(__name__)
 
@@ -61,92 +69,12 @@ EXCLUDED_IMAGES: frozenset[str] = frozenset({
 
 # The client's CEF children carry --type=; the main process carries none.
 _RENDERER = "--type=renderer"
-_WINEPREFIX = "WINEPREFIX="
 
 # The client's own images, for teardown. Distinct from EXCLUDED_IMAGES,
-# which additionally covers Wine infrastructure we must never signal.
-_CLIENT_IMAGES: frozenset[str] = frozenset({
-    "battle.net.exe",
-    "battle.net launcher.exe",
-})
-
-
-def _normalise_prefix(prefix: str | Path) -> str:
-    """Canonical form for comparing WINEPREFIX values.
-
-    umu rewrites the value to ``<prefix>/pfx/`` and ``pfx`` is a symlink to
-    the prefix itself, so both spellings must compare equal.
-    """
-    try:
-        return str(Path(prefix).resolve()).rstrip("/")
-    except OSError:
-        return str(prefix).rstrip("/")
-
-
-def _proc_field(pid: str, field: str) -> str:
-    try:
-        with Path(f"/proc/{pid}/{field}").open("rb") as handle:
-            return handle.read().decode("utf-8", "replace")
-    except (OSError, ValueError):
-        return ""
-
-
-def _image_name(cmdline: str) -> str:
-    """Windows image name from a Wine process command line, lowercased."""
-    first = cmdline.split("\x00", 1)[0]
-    if not first:
-        return ""
-    return first.replace("\\", "/").rsplit("/", 1)[-1].strip().lower()
-
-
-def _pids() -> list[str]:
-    try:
-        return [p for p in os.listdir("/proc") if p.isdigit()]
-    except OSError:
-        return []
-
-
-def _wineprefix_of(pid: str) -> str | None:
-    """Normalised ``WINEPREFIX`` of ``pid``, or None if it has none.
-
-    Read as an exact ``WINEPREFIX=`` entry, never as a substring of the
-    whole environ blob: ``STEAM_COMPAT_DATA_PATH`` and ``PROTONPATH``
-    carry the same path and would match a naive ``in environ`` test.
-    """
-    environ = _proc_field(pid, "environ")
-    if _WINEPREFIX not in environ:
-        return None
-    for entry in environ.split("\x00"):
-        if entry.startswith(_WINEPREFIX):
-            return _normalise_prefix(entry.partition("=")[2])
-    return None
-
-
-def _scan_raw(prefix: str | Path) -> list[tuple[str, str, str]]:
-    """``(pid, image, cmdline)`` for every **Windows** process in this prefix.
-
-    Scoped by ``WINEPREFIX`` so a client running for another Blizzard game
-    is never mistaken for this one's.
-
-    Restricted to ``.exe`` images on purpose. ``WINEPREFIX`` is inherited
-    by the whole Linux-side umu chain — ``srt-bwrap``, ``pv-adverb``,
-    ``umu-run``, the Proton ``python3`` — and :data:`EXCLUDED_IMAGES`
-    lists only Windows names, so those wrappers used to read as game
-    processes. Measured on-device: phase C's own ``srt-bwrap`` (pid
-    13227) was reported as "game process appeared after 0s", which
-    defeats the silent-failure detector phase D exists for and leaves
-    phase E watching a pid that is not the game.
-    """
-    target = _normalise_prefix(prefix)
-    found: list[tuple[str, str, str]] = []
-    for pid in _pids():
-        if _wineprefix_of(pid) != target:
-            continue
-        cmdline = _proc_field(pid, "cmdline")
-        image = _image_name(cmdline)
-        if image.endswith(".exe"):
-            found.append((pid, image, cmdline))
-    return found
+# which additionally covers Wine infrastructure we must never signal, and
+# shared with ``wrapper_clients`` so the cross-prefix scan and the teardown
+# agree on what "the client" is.
+_CLIENT_IMAGES: frozenset[str] = CLIENT_IMAGES["battlenet"]
 
 
 def scan(prefix: str | Path) -> list[tuple[str, str]]:

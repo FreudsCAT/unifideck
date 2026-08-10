@@ -47,10 +47,11 @@ from unifideck.launcher.wrapper_stores import prefix_owns_game_install
 
 logger = logging.getLogger(__name__)
 
-# Both take an absolute prefix path and may be sync or async, so a store can
-# pass an existing method without wrapping it.
+# All three take an absolute prefix path and may be sync or async, so a store
+# can pass an existing method without wrapping it.
 Remover = Callable[[Path], Awaitable[bool] | bool]
 HoldsGame = Callable[[Path], Awaitable[bool] | bool]
+BeforeRemove = Callable[[Path], Awaitable[bool] | bool]
 
 # The directory a relocated prefix lives under, inside the picked base.
 PREFIXES_DIR_NAME = "prefixes"
@@ -117,12 +118,22 @@ async def reset_for_fresh_install(
     remover: Remover,
     *,
     label: str,
+    before_remove: BeforeRemove | None = None,
 ) -> None:
     """Delete any pre-existing per-game prefix so Install starts clean.
 
     Covers both the previously recorded location — an orphan from a prior
     install to a different disk, or a leftover from a prior uninstall — and
     the resolved target, deduped so the common case does one pass.
+
+    ``before_remove`` runs on each prefix while it still exists, and exists
+    for one reason: these prefixes hold the vendor client's signed-in session,
+    the vendor rotates its token on every run, and the prefix about to be
+    deleted usually holds a *newer* session than the store's auth prefix.
+    Deleting it without capturing that first strands auth on a server-stale
+    token, and the reported symptom is a login prompt on the very next
+    install. Failures are swallowed: a capture is an optimisation, and it must
+    never block the install the user asked for.
     """
     seen: set[Path] = set()
     for candidate in (old, new):
@@ -132,8 +143,16 @@ async def reset_for_fresh_install(
         if path in seen:
             continue
         seen.add(path)
-        if await asyncio.to_thread(path.is_dir):
-            await _remove_one(path, remover, label, "fresh-install reset")
+        if not await asyncio.to_thread(path.is_dir):
+            continue
+        if before_remove is not None:
+            try:
+                await _maybe_await(before_remove(path))
+            except Exception:
+                logger.exception(
+                    "[%s] pre-removal hook failed for %s", label, path,
+                )
+        await _remove_one(path, remover, label, "fresh-install reset")
 
 
 async def cleanup_abandoned_prefix(
