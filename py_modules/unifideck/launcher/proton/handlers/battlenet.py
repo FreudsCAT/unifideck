@@ -116,6 +116,9 @@ async def _bring_up_client(plan: ProtonLaunchPlan) -> Path:
     """Phases A + B. Returns the client exe once it will accept commands."""
     launcher_exe = find_launcher_exe(plan.prefix_path)
     client_exe = find_client_exe(plan.prefix_path)
+    if (launcher_exe is None or client_exe is None) and await _install_client_here(plan):
+        launcher_exe = find_launcher_exe(plan.prefix_path)
+        client_exe = find_client_exe(plan.prefix_path)
     if launcher_exe is None or client_exe is None:
         raise _fail(
             plan,
@@ -222,13 +225,65 @@ async def _issue_and_confirm(
     return pid
 
 
+async def _install_client_here(plan: ProtonLaunchPlan) -> bool:
+    """Install the Battle.net client into this prefix, with progress toasts.
+
+    Runs **here**, inside the RunGame session, rather than in the backend.
+    The rule is the one ``services/download/wrapper_signals.py`` already
+    states: the backend must not spawn the vendor client itself, because in
+    Gaming Mode a bare subprocess has no gamescope session and its window
+    never appears. It applies to the client's *installer* too — that is
+    exactly how this failed. Signing in from the desktop showed the wizard;
+    from Gaming Mode it rendered nowhere, and the sign-in RPC blocked on a
+    window nobody could see.
+
+    Stdlib-and-launcher imports only, deliberately verified to load under
+    the SYSTEM python (3.10-3.14) that runs this process.
+    """
+    logger.info("[battlenet] no client in %s — installing it", plan.prefix_path)
+    launcher_toast(
+        "toasts.launcher.battlenetInstallingClientMessage",
+        i18n_title_key="toasts.launcher.battlenetInstallingClient",
+    )
+    try:
+        from unifideck.stores.battlenet import config as store_config
+        from unifideck.stores.battlenet.prefix.client_install import bootstrap_client
+        from unifideck.stores.shared.wine_env import WineEnvResolver
+
+        cfg = store_config.from_config_manager(None)
+        result = await bootstrap_client(
+            plan.prefix_path,
+            installer_url=cfg.installer_url,
+            installer_cache=cfg.installer_path,
+            resolver=WineEnvResolver(
+                "battlenet", str(getattr(plan.context, "plugin_dir", "") or ""),
+            ),
+        )
+    except Exception:
+        # Report "the prefix has no client", which is true and actionable,
+        # rather than a traceback from the repair attempt. The caller falls
+        # through to its own typed failure and the user gets a toast.
+        logger.exception("[battlenet] client install raised")
+        return False
+    if not result.success:
+        logger.error("[battlenet] client install failed: %s", result.error)
+        return False
+    logger.info("[battlenet] client installed into %s", plan.prefix_path)
+    return True
+
+
 async def battlenet_auth_launch(plan: ProtonLaunchPlan) -> int:
     """Open the client so the user can sign in.
 
     Blocks until the user closes it, which is what stops the Steam shortcut
     exiting immediately and tearing the window down with it.
+
+    Installs the client first when the prefix has none. That is the normal
+    path after a fresh install or a full cleanup, not an edge case.
     """
     launcher_exe = find_launcher_exe(plan.prefix_path)
+    if launcher_exe is None and await _install_client_here(plan):
+        launcher_exe = find_launcher_exe(plan.prefix_path)
     if launcher_exe is None:
         raise _fail(
             plan,

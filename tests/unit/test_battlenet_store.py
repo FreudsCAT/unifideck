@@ -139,45 +139,48 @@ def test_empty_library_without_a_prefix_rather_than_an_error(store: BattlenetSto
     assert asyncio.run(store.get_library()) == []
 
 
-def test_start_auth_bootstraps_the_client_when_it_is_missing(
-    store: BattlenetStore, monkeypatch: pytest.MonkeyPatch,
+def test_start_auth_does_not_install_the_client_itself(
+    store: BattlenetStore,
 ) -> None:
-    """Nothing is bundled — signing in fetches and installs the client."""
-    calls: list[Path] = []
+    """The install moved behind RunGame — see the launcher handler.
 
-    async def fake_bootstrap(prefix: Path, **_kw: Any) -> Any:
-        from unifideck.stores.battlenet.prefix import BootstrapResult
-
-        calls.append(prefix)
-        return BootstrapResult(success=True)
-
-    monkeypatch.setattr(
-        "unifideck.stores.battlenet.store.bootstrap_client", fake_bootstrap,
-    )
+    ``AuthDispatcher.kickAndLaunch`` awaits this RPC before RunGame-ing the
+    auth shortcut, so installing here blocked the launcher from ever
+    starting. Measured: the wizard opened with no gamescope session, the RPC
+    never returned, and Sign In did nothing.
+    """
     result = asyncio.run(store.start_auth())
+
     assert result.success is True
-    assert calls == [store.prefixes.auth_prefix]
-
-
-def test_start_auth_surfaces_a_bootstrap_failure(
-    store: BattlenetStore, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fake_bootstrap(prefix: Path, **_kw: Any) -> Any:
-        from unifideck.stores.battlenet.prefix import BootstrapResult
-
-        return BootstrapResult(
-            success=False,
-            error="32-bit Vulkan drivers are missing",
-            error_code="missing_32bit_vulkan",
-        )
-
-    monkeypatch.setattr(
-        "unifideck.stores.battlenet.store.bootstrap_client", fake_bootstrap,
-    )
-    result = asyncio.run(store.start_auth())
-    assert result.success is False
-    assert result.error_code == "missing_32bit_vulkan"
+    assert result.metadata["pending"] is True
     assert result.metadata["needs_bootstrap"] is True
+    assert not store.prefixes.auth_prefix.exists(), (
+        "start_auth must not build the prefix"
+    )
+
+
+def test_start_auth_reports_no_bootstrap_needed_once_the_client_exists(
+    store: BattlenetStore,
+) -> None:
+    prefix = store.prefixes.auth_prefix
+    client = prefix / "drive_c" / bpaths.CLIENT_DIR
+    client.mkdir(parents=True)
+    (client / bpaths.CLIENT_EXE).write_bytes(b"MZ")
+    (client / bpaths.LAUNCHER_EXE).write_bytes(b"MZ")
+
+    result = asyncio.run(store.start_auth())
+
+    assert result.metadata["needs_bootstrap"] is False
+
+
+def test_start_auth_clears_the_signed_out_marker(store: BattlenetStore) -> None:
+    """Otherwise a successful sign-in still reads as disconnected."""
+    asyncio.run(store.logout())
+    assert store._signed_out_marker.exists()
+
+    asyncio.run(store.start_auth())
+
+    assert not store._signed_out_marker.exists()
 
 
 # --------------------------------------------------------------------------

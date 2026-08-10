@@ -353,6 +353,8 @@
       "startingBattlenetGame": "Starting {{gameTitle}} through Battle.net…",
       "battlenetStartingClient": "Opening Battle.net",
       "battlenetStartingClientMessage": "Waiting for the Battle.net client to be ready…",
+      "battlenetInstallingClient": "正在安装 Battle.net",
+      "battlenetInstallingClientMessage": "正在设置 Battle.net 客户端，可能需要几分钟。",
       "battlenetClientNotReady": "Battle.net Didn't Start",
       "battlenetClientNotReadyMessage": "The Battle.net client did not finish starting. It may be applying an update — try again in a moment.",
       "battlenetFamilyMissing": "Can't Launch This Game",

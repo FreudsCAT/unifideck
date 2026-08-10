@@ -45,6 +45,16 @@ DOWNLOAD_TIMEOUT_SECONDS = 300
 # The installer downloads the real client, so it needs a generous budget.
 INSTALL_TIMEOUT_SECONDS = 1800
 
+# Pre-answer the two bootstrapper screens that otherwise wait for a click.
+# Without them the wizard stops on the language screen forever — see
+# :func:`run_silent_install`. Verified on-device: with these it reaches
+# STATE_UPDATE_BOOTSTRAPPER and starts downloading; without, it never
+# leaves STATE_SELECT_LANGUAGE.
+INSTALLER_ARGS = (
+    "--lang=enUS",
+    "--installpath=C:\\Program Files (x86)\\Battle.net",
+)
+
 GAMEID = "umu-battlenet"
 
 
@@ -142,7 +152,29 @@ async def run_silent_install(
     prefix: Path,
     resolver: WineEnvResolver,
 ) -> bool:
-    """Run the installer inside ``prefix`` under umu. Never raises."""
+    """Run the installer inside ``prefix`` under umu. Never raises.
+
+    The arguments are load-bearing, not cosmetic. Launched bare, the
+    bootstrapper opens its wizard and *waits on the language screen* — in
+    Gaming Mode, behind everything, where nobody clicks it. Blizzard's own
+    log recorded the dead end three times in a row::
+
+        Bootstrapper State: STATE_SELECT_LANGUAGE
+        Active screen changed: language
+        <nothing, ever>
+
+    The user saw a Sign In button that did nothing while an invisible
+    wizard blocked for the full 30-minute timeout. With the arguments,
+    ``locale`` is pre-set and it goes straight through::
+
+        Configuration: locale=enUS region=US
+        Bootstrapper State: STATE_CHECK_ENVIRONMENT
+        Bootstrapper State: STATE_UPDATE_BOOTSTRAPPER
+        Downloading from version service: …/bts/versions
+
+    ``--installpath`` is passed for the same reason — it pre-answers the
+    other screen that can stall waiting for input.
+    """
     umu_run = resolver.find_umu_run()
     if not umu_run:
         logger.error("[Battlenet] umu-run not found — cannot install the client")
@@ -164,6 +196,7 @@ async def run_silent_install(
         proc = await asyncio.create_subprocess_exec(
             umu_run,
             str(installer),
+            *INSTALLER_ARGS,
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

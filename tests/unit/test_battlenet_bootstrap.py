@@ -257,3 +257,127 @@ def test_client_config_merge_preserves_saved_account(tmp_path: Path) -> None:
     data = json.loads(cfg.read_text())
     assert data["Client"]["SavedAccountNames"] == "me@example.com"
     assert data["Client"]["HardwareAcceleration"] == "false"
+
+
+# ── the installer must not open a wizard ──────────────────────────
+
+
+def test_installer_args_preanswer_the_blocking_screens() -> None:
+    """Launched bare, the bootstrapper waits on the language screen.
+
+    Measured on-device three times in a row — Blizzard's own setup log
+    stopped at ``Bootstrapper State: STATE_SELECT_LANGUAGE`` / ``Active
+    screen changed: language`` and never moved, while the user saw a Sign In
+    button that did nothing. With these arguments the same installer
+    reported ``locale=enUS`` and went straight to STATE_CHECK_ENVIRONMENT →
+    STATE_UPDATE_BOOTSTRAPPER → downloading.
+
+    Pinned as a test because the failure is invisible: the install simply
+    never finishes, and nothing in our own logs says why.
+    """
+    from unifideck.stores.battlenet.prefix.client_install import INSTALLER_ARGS
+
+    assert "--lang=enUS" in INSTALLER_ARGS, "language screen would block"
+    assert any(
+        a.startswith("--installpath=") for a in INSTALLER_ARGS
+    ), "install-path screen would block"
+
+
+@pytest.mark.asyncio
+async def test_the_installer_is_invoked_with_those_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin the wiring, not just the constant."""
+    from unifideck.stores.battlenet.prefix import client_install as ci
+
+    seen: list[tuple[str, ...]] = []
+
+    class _Proc:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_exec(*argv: str, **_kw: object) -> _Proc:
+        seen.append(argv)
+        return _Proc()
+
+    monkeypatch.setattr(ci.asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(ci.paths, "client_installed", lambda _p: True)
+
+    class _Resolver:
+        @staticmethod
+        def find_umu_run() -> str:
+            return "/bin/umu-run"
+
+        @staticmethod
+        def build_env(_prefix: object, _gameid: str) -> dict[str, str]:
+            return {"DISPLAY": ":0"}
+
+    ok = await ci.run_silent_install(
+        tmp_path / "Battle.net-Setup.exe", tmp_path / "pfx", _Resolver(),
+    )
+
+    assert ok is True
+    assert seen, "installer was never spawned"
+    for arg in ci.INSTALLER_ARGS:
+        assert arg in seen[0], f"{arg} missing from the installer command"
+
+
+# ── the install lives behind RunGame, not on the auth RPC ─────────
+
+
+@pytest.mark.asyncio
+async def test_start_auth_does_not_install_and_returns_pending(
+    tmp_path: Path,
+) -> None:
+    """The regression that produced a Sign In button doing nothing.
+
+    ``AuthDispatcher.kickAndLaunch`` awaits this RPC *before* it RunGame-s
+    the auth shortcut. Installing here blocked that call on a wizard with no
+    gamescope session to render into, so the RPC never returned, the shortcut
+    never launched, and ``bin/unifideck-launcher`` never ran at all.
+
+    It must therefore return promptly, and it must return ``pending`` — that
+    is the flag the dispatcher reads to decide to launch the shortcut.
+    """
+    from unifideck.stores.battlenet.store import BattlenetStore
+
+    class _Bus:
+        async def emit(self, *_a: object, **_k: object) -> None:
+            return None
+
+    class _Cache:
+        def get(self, *_a: object, **_k: object) -> None:
+            return None
+
+    class _Config:
+        def __init__(self, root: Path) -> None:
+            self._v = {
+                "data_dir": str(root),
+                "prefixes_dir": str(root / "prefixes"),
+                "installer_cache_dir": str(root / "cache"),
+            }
+
+        def get(self, key: str, default: object = None) -> object:
+            return self._v if key == "stores.battlenet" else default
+
+    store = BattlenetStore(
+        _Bus(), _Cache(), plugin_dir="/plugin", config=_Config(tmp_path),
+    )
+    # No auth prefix at all — the "fresh install / after full cleanup" case.
+    result = await store.start_auth()
+
+    assert result.success is True, "a missing client must not fail the RPC"
+    assert result.metadata["pending"] is True, "dispatcher needs this to RunGame"
+    assert result.metadata["needs_bootstrap"] is True
+    assert not (tmp_path / "prefixes" / ".bnet-auth").exists(), (
+        "start_auth must not build the prefix — the launcher does"
+    )
+
+
+def test_the_launcher_owns_the_client_install() -> None:
+    """The install helper must be reachable from the launcher handler."""
+    from unifideck.launcher.proton.handlers import battlenet as h
+
+    assert callable(h._install_client_here)
