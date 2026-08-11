@@ -160,6 +160,17 @@ def _index_by_uid(installed: dict[str, InstalledGame]) -> dict[str, InstalledGam
     return by_uid
 
 
+def install_state_by_uid(drive_c: Path, prefix: Path) -> dict[str, InstalledGame]:
+    """Install state for one prefix, keyed the way the rest of the code asks.
+
+    The install watcher needs to ask about *one* uid — "is the title the user
+    pressed Install on ready yet" — and must not re-derive the code→uid join
+    to do it. Getting that join wrong reports every installed game as not
+    installed, which is the regression ``_index_by_uid`` exists to prevent.
+    """
+    return _index_by_uid(read_install_state(drive_c, prefix))
+
+
 def build_library(
     catalog: MergedCatalog,
     facts: AccountFacts,

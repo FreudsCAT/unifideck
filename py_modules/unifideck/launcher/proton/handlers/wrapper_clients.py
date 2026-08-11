@@ -26,8 +26,12 @@ Stdlib-only; runs under the SYSTEM python (3.10-3.14).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import signal
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -41,6 +45,17 @@ _WINEPREFIX = "WINEPREFIX="
 CLIENT_IMAGES: dict[str, frozenset[str]] = {
     "battlenet": frozenset({"battle.net.exe", "battle.net launcher.exe"}),
     "ubisoft": frozenset({"upc.exe", "ubisoftconnect.exe"}),
+}
+
+# Images that mean "this store's install is still making progress", beyond the
+# client itself. Battle.net downloads through a separate ``Agent.exe`` that
+# keeps going after the user closes the client window — so a liveness question
+# asked only about ``CLIENT_IMAGES`` would call a live 12 GB download abandoned
+# and cancel it. Ubisoft Connect has no such helper; its entry is empty rather
+# than absent so the shape of the table says "asked and answered".
+INSTALL_WORKER_IMAGES: dict[str, frozenset[str]] = {
+    "battlenet": frozenset({"agent.exe"}),
+    "ubisoft": frozenset(),
 }
 
 
@@ -135,6 +150,101 @@ def client_running_in(store: str, prefix: str | Path) -> bool:
     if not images:
         return False
     return any(image in images for _, image, _ in scan_prefix(prefix))
+
+
+def install_active_in(store: str, prefix: str | Path) -> bool:
+    """True while ``store`` is still installing into ``prefix``.
+
+    Broader than :func:`client_running_in` by exactly the store's downloader
+    images. Feeds the install watchdogs, which can only ever *end* an install,
+    so the question has to be "is anything still working" rather than "is the
+    window up": Battle.net's ``Agent.exe`` finishes a download long after the
+    user has closed the client, and counting only the client would abandon it.
+    """
+    images = CLIENT_IMAGES.get(store, frozenset())
+    images |= INSTALL_WORKER_IMAGES.get(store, frozenset())
+    if not images:
+        return False
+    return any(image in images for _, image, _ in scan_prefix(prefix))
+
+
+def client_pids_in(store: str, prefix: str | Path) -> list[str]:
+    """PIDs of ``store``'s client processes inside ``prefix``.
+
+    The pid-level counterpart to :func:`client_running_in`, and the input to
+    :func:`kill_client`. Every client image counts whatever its ``--type=``:
+    Battle.net measured a case where signalling only the main process left the
+    surviving ``--type=gpu-process`` children behind, so the dead session stayed
+    in the prefix and the next launch stacked a second client on top of it.
+    """
+    images = CLIENT_IMAGES.get(store)
+    if not images:
+        return []
+    return [pid for pid, image, _ in scan_prefix(prefix) if image in images]
+
+
+def signal_all(pids: list[str], sig: int) -> None:
+    """Signal each pid individually. Never ``killpg``.
+
+    The process group here contains our own launcher (and, when Steam wraps
+    us, more besides), and group-killing a store's processes is exactly how
+    the legendary cancel path once took down its own subprocess tree.
+    """
+    for pid in pids:
+        with contextlib.suppress(OSError, ValueError):
+            os.kill(int(pid), sig)
+
+
+def terminate(
+    pids: list[str],
+    survivors_of: Callable[[], list[str]],
+    timeout: float,
+    *,
+    label: str = "wrapper",
+) -> int:
+    """SIGTERM ``pids``, then SIGKILL whatever ``survivors_of`` still reports.
+
+    SIGTERM first so the client can flush its session — the token it rotated
+    during this run lives in the vendor's own vault and a SIGKILL can lose it.
+    SIGKILL only for what is still alive at the deadline.
+    """
+    if not pids:
+        return 0
+    signal_all(pids, signal.SIGTERM)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not survivors_of():
+            logger.info("[%s] %d process(es) stopped cleanly", label, len(pids))
+            return len(pids)
+        time.sleep(0.5)
+
+    survivors = survivors_of()
+    for pid in survivors:
+        logger.warning("[%s] pid %s ignored SIGTERM — killing", label, pid)
+    signal_all(survivors, signal.SIGKILL)
+    return len(pids)
+
+
+def kill_client(
+    store: str, prefix: str | Path, *, timeout: float = 15.0,
+) -> int:
+    """Close ``store``'s vendor client in ``prefix``. Returns how many were signalled.
+
+    Scoped by ``WINEPREFIX`` and to the client's **own** images, so it never
+    touches the game or Wine's infrastructure. Reading ``/proc`` works across
+    gamescope sessions, which a window-manager approach does not — the reason
+    Ubisoft previously reached for a global ``pkill -f upc.exe``. That global
+    form also closed a client belonging to a *different* game; this one cannot.
+    """
+    pids = client_pids_in(store, prefix)
+    if not pids:
+        return 0
+    logger.info(
+        "[%s] stopping %d client process(es) in %s", store, len(pids), prefix,
+    )
+    return terminate(
+        pids, lambda: client_pids_in(store, prefix), timeout, label=store,
+    )
 
 
 def live_client_prefixes(

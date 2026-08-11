@@ -23,6 +23,7 @@ import {
   meetsGreatOnDeckCriteria,
 } from "../protondb-cache";
 import { getCompatByShortcutAppId, loadFacets } from "../library-facets";
+import { invalidateGameSize } from "../game-size-cache";
 import type { SteamAppOverview } from "../../types/steam";
 
 export type StoreSlug =
@@ -478,5 +479,8 @@ export function startUnifideckCacheAutoload(): void {
       store: store as Exclude<StoreSlug, "steam">,
       isInstalled: installed,
     });
+    // The bytes on disk just changed by an entire game. Every cached size
+    // for this app is now wrong in one direction or the other.
+    invalidateGameSize(appId);
   });
 }

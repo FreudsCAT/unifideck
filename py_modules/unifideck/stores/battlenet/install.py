@@ -1,35 +1,42 @@
-"""Battle.net install orchestration — prefix placement, not downloading.
+"""Battle.net install orchestration — place the prefix, then watch the client.
 
 py_modules/unifideck/stores/battlenet/install.py
 
 Nothing here downloads a game. Battle.net is a wrapper store: the vendor
 client inside the prefix owns the download, and the install is a user click
-in its window. What this module owns is everything that has to be true
-*before* that click, which is essentially one thing — **the prefix is in the
-right place**.
+in its window. This module owns the two ends of that — what has to be true
+before the click, and knowing when the click's work is done.
 
-That matters more than it sounds. The game installs inside the prefix, so
-the prefix's location is the game's location, and Wine derives ``C:``'s free
-space from the filesystem under ``drive_c``. Battle.net originally ignored
-the storage location the user picked, and the symptom was not a game in the
-wrong folder: the client refused an 83 GB install for lack of space, quoting
-the 45 GB internal drive, while the SD card the user had chosen had 164 GB
-free.
+**Placement** is the "before". The game installs inside the prefix, so the
+prefix's location is the game's location, and Wine derives ``C:``'s free space
+from the filesystem under ``drive_c``. Battle.net originally ignored the
+storage location the user picked, and the symptom was not a game in the wrong
+folder: the client refused an 83 GB install for lack of space, quoting the
+45 GB internal drive, while the SD card the user had chosen had 164 GB free.
+
+**Waiting** is the "after", and used to be missing entirely. ``install``
+returned success the moment the prefix was cloned, so the download worker
+marked the game installed and the tile showed a Play button before the user had
+even opened the client. It now blocks on the shared wrapper-store watcher —
+the same one Ubisoft uses — and returns the real install directory.
 
 Split out of ``store.py`` when that file hit its size cap. The seam is the
-one Ubisoft already uses (``stores/ubisoft/installer/``), and the placement
-policy itself is shared by both stores in
-``stores/shared/prefix_placement``.
+one Ubisoft already uses (``stores/ubisoft/installer/``); the placement policy
+lives in ``stores/shared/prefix_placement`` and the watching in
+``stores/shared/wrapper_install``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types.results import InstallResult
+from unifideck.launcher.proton.handlers.wrapper_clients import kill_client
 from unifideck.stores.shared.prefix_placement import (
     BeforeRemove as CaptureSession,
 )
@@ -38,9 +45,11 @@ from unifideck.stores.shared.prefix_placement import (
     reset_for_fresh_install,
     resolve_prefix_target,
 )
+from unifideck.stores.shared.wrapper_install import watch_manual_install
 
 from . import library as library_mod
 from . import paths
+from .install_watch import BattlenetInstallProbe
 from .ownership import read_catalog
 
 if TYPE_CHECKING:
@@ -51,6 +60,21 @@ logger = logging.getLogger(__name__)
 
 STORE_ID = "battlenet"
 LABEL = "Battlenet"
+
+ProgressCb = Callable[[dict[str, Any]], Awaitable[None]] | None
+OnReady = Callable[[], Awaitable[None]] | None
+
+# Bound on the cancel-path client stop. Runs synchronously during the
+# ``CancelledError`` unwind, so it must stay short.
+_CANCEL_STOP_TIMEOUT_S = 5.0
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedInstall:
+    """A prefix ready for the client to install into."""
+
+    prefix: Path
+    is_update: bool = False
 
 
 def holds_ready_install(prefix: Path) -> bool:
@@ -94,15 +118,39 @@ class BattlenetInstaller:
         self._capture_session = capture_session
 
     async def install(
-        self, game_id: str, install_path: str | None = None,
+        self,
+        game_id: str,
+        install_path: str | None = None,
+        *,
+        progress_cb: ProgressCb = None,
+        on_ready: OnReady = None,
     ) -> InstallResult:
-        """Place the prefix so the client can install into it.
+        """Place the prefix, open the client, and wait for the game to land.
 
-        ``--exec="install <FAMILY>"`` does **not** start a download — that
-        was measured against the current client with a known-good family
-        code. The install is a user click inside the client, exactly as it
-        is for Ubisoft, so this prepares the prefix and the caller signals
-        the frontend to bring the client up.
+        Blocks for the whole install. That is the wrapper-store contract: the
+        download worker marks the game installed when this returns, so
+        returning at prefix-placement time — which is what this used to do —
+        put a Play button on a game with no files.
+        """
+        prepared = await self.prepare(game_id, install_path)
+        if isinstance(prepared, InstallResult):
+            return prepared
+        return await self._watch(game_id, prepared, progress_cb, on_ready)
+
+    async def prepare(
+        self, game_id: str, install_path: str | None = None,
+    ) -> PreparedInstall | InstallResult:
+        """Everything that must be true before the user clicks Install.
+
+        Separate from the wait so the placement rules stay testable without
+        standing up a fake vendor client. Returns an :class:`InstallResult` —
+        always a failure — when the install cannot proceed at all.
+
+        ``--exec="install <FAMILY>"`` does **not** start a download; that was
+        measured against the current client with a known-good family code. The
+        install is a user click inside the client, exactly as it is for
+        Ubisoft, so all that can be done here is put the prefix in the right
+        place.
         """
         # The install run opens the client on the game's page via
         # ``--exec="launch <FAMILY>"``, so a missing family fails the install
@@ -132,12 +180,122 @@ class BattlenetInstaller:
                 "the Battle.net window and try again",
                 "prefix_clone_failed",
             )
+        return PreparedInstall(prefix=prefix)
+
+    async def update(
+        self,
+        game_id: str,
+        *,
+        progress_cb: ProgressCb = None,
+        on_ready: OnReady = None,
+    ) -> InstallResult:
+        """Same wait, existing prefix.
+
+        An update must NOT go through :meth:`prepare`. That path resets the
+        prefix for a fresh install, and for this store the prefix *is* the
+        game — resetting it would delete what the user is trying to update.
+        """
+        prefix = self._id_map.resolve_prefix(game_id)
+        if prefix is None:
+            return _failed(
+                game_id,
+                "No recorded prefix for this game",
+                "prefix_unknown",
+            )
+        return await self._watch(
+            game_id,
+            PreparedInstall(prefix=prefix, is_update=True),
+            progress_cb,
+            on_ready,
+        )
+
+    async def _watch(
+        self,
+        game_id: str,
+        prepared: PreparedInstall,
+        progress_cb: ProgressCb,
+        on_ready: OnReady,
+    ) -> InstallResult:
+        """Wait for the client to finish, then record what it produced."""
+        probe = BattlenetInstallProbe(game_id, prepared.prefix)
+        try:
+            install_dir = await watch_manual_install(
+                probe=probe,
+                prefix=prepared.prefix,
+                progress_cb=progress_cb,
+                on_ready=on_ready,
+            )
+        except asyncio.CancelledError:
+            # An explicit cancel is the only path that closes the client;
+            # completion deliberately leaves it open. Cleanup is guarded by
+            # ``holds_ready_install``, so a cancel that races a finished
+            # download keeps the prefix — which, for this store, is the game.
+            kill_client(
+                STORE_ID, prepared.prefix, timeout=_CANCEL_STOP_TIMEOUT_S,
+            )
+            await self._abandon(game_id, prepared)
+            raise
+        if not install_dir:
+            await self._abandon(game_id, prepared)
+            return _failed(
+                game_id,
+                "The install was never finished in Battle.net",
+                "no_install_detected",
+            )
+        return self._record(game_id, prepared, probe, install_dir)
+
+    async def _abandon(self, game_id: str, prepared: PreparedInstall) -> None:
+        """Reclaim a prefix we created that never received a game.
+
+        Skipped for an update: that prefix predates this operation and holds
+        the user's existing install, so it was never ours to reclaim.
+        """
+        if prepared.is_update:
+            return
+        await self.cleanup_abandoned(game_id, prepared.prefix)
+
+    def _record(
+        self,
+        game_id: str,
+        prepared: PreparedInstall,
+        probe: BattlenetInstallProbe,
+        install_dir: str,
+    ) -> InstallResult:
+        """Persist what the client installed and report it upstream.
+
+        The id map is written here because this is the only moment that sees
+        all of it. Without it ``get_installed_path`` and ``get_game_size``
+        fall through to re-reading ``product.db`` and returning the *first*
+        game in the prefix rather than the one asked for.
+        """
+        row = probe.row()
+        exe = row.host_exe_path if row else None
+        size = int((row.total_bytes if row else 0) or 0)
+        # ``install_dir`` may be the provisional answer the watcher started
+        # from — derived from the executable before ``product.db`` carried a
+        # path. Now that the install is finished, product.db is authoritative.
+        final_dir = (row.host_install_path if row else None) or install_dir
+        self._id_map.merge(
+            game_id,
+            install_path=final_dir,
+            exe_path=exe,
+            total_bytes=size or None,
+        )
+        logger.info(
+            "[Battlenet] install complete: %s (%.1f GB)",
+            final_dir, size / (1024**3),
+        )
         return InstallResult(
             success=True,
             game_id=game_id,
             store=STORE_ID,
-            install_path=str(prefix),
-            metadata={"phase": "manual", "prefix": str(prefix)},
+            install_path=final_dir,
+            size_bytes=size,
+            metadata={
+                "phase": "manual",
+                "prefix": str(prepared.prefix),
+                "executable": exe,
+            },
         )
 
     async def _place_prefix(

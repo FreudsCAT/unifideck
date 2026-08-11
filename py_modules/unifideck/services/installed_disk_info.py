@@ -33,7 +33,7 @@ from typing import Any
 from unifideck.core.types.domain import Game
 from unifideck.stores.shared.installed_size import (
     dir_size_bytes,
-    resolve_installed_dir,
+    resolve_size_root,
 )
 from unifideck.utils import mounts
 
@@ -146,8 +146,12 @@ async def _resolve_one(
             # game whose cached ``install_path`` went stale (moved to the SD
             # card, re-installed elsewhere) resolves through the store's own
             # records — classifying the cached path instead would report the
-            # dead location next to a live size.
-            resolved = await resolve_installed_dir(adapter, install_path, game_id)
+            # dead location next to a live size. For a wrapper store that
+            # directory is the prefix, which is also the right thing to
+            # classify: relocating the prefix IS relocating the game.
+            resolved = await resolve_size_root(
+                adapter, install_path, game_id, store,
+            )
             if resolved is not None:
                 size = await asyncio.to_thread(dir_size_bytes, resolved)
         except asyncio.CancelledError:

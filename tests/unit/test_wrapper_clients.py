@@ -192,3 +192,106 @@ def test_battlenet_watch_and_the_scan_agree_on_the_client_images() -> None:
     from unifideck.launcher.proton.handlers import battlenet_watch as watch
 
     assert watch._CLIENT_IMAGES is wc.CLIENT_IMAGES["battlenet"]
+
+
+# --------------------------------------------------------------------------
+# is the install still working — a broader question than "is the client up"
+# --------------------------------------------------------------------------
+
+
+def test_the_downloader_counts_as_an_active_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Battle.net's Agent finishes a download after the client is closed.
+
+    The install watchdogs can only ever END an install, so asking "is the
+    client up" would call a live 12 GB download abandoned and cancel it.
+    """
+    prefix = tmp_path / "game"
+    _FakeProc({
+        "1": ("C:\\ProgramData\\Battle.net\\Agent\\Agent.exe", str(prefix)),
+    }).install(monkeypatch)
+
+    assert wc.client_running_in("battlenet", prefix) is False
+    assert wc.install_active_in("battlenet", prefix) is True
+
+
+def test_a_store_with_no_downloader_asks_only_about_its_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Ubisoft Connect has no helper — its row is empty, not absent."""
+    prefix = tmp_path / "game"
+    _FakeProc({"1": ("Z:\\game\\Rayman.exe", str(prefix))}).install(monkeypatch)
+
+    assert wc.install_active_in("ubisoft", prefix) is False
+    assert wc.INSTALL_WORKER_IMAGES["ubisoft"] == frozenset()
+
+
+def test_an_unknown_store_is_never_active(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _FakeProc({
+        "1": ("C:\\Battle.net\\Battle.net.exe", str(tmp_path / "game")),
+    }).install(monkeypatch)
+
+    assert wc.install_active_in("epic", tmp_path / "game") is False
+
+
+# --------------------------------------------------------------------------
+# closing a client — table-driven, so no store needs its own pkill
+# --------------------------------------------------------------------------
+
+
+def test_kill_client_signals_only_this_store_in_this_prefix(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A global ``pkill -f upc.exe`` also closed a client the user had open
+    for a different game. Prefix scoping through ``/proc`` cannot."""
+    import signal as sig
+
+    mine = tmp_path / "mine"
+    theirs = tmp_path / "theirs"
+    _FakeProc({
+        "1": ("C:\\Ubisoft\\upc.exe", str(mine)),
+        "2": ("C:\\Ubisoft\\UbisoftConnect.exe", str(mine)),
+        "3": ("C:\\Ubisoft\\upc.exe", str(theirs)),
+        "4": ("Z:\\game\\Rayman.exe", str(mine)),
+    }).install(monkeypatch)
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(wc.os, "kill", lambda pid, s: sent.append((pid, s)))
+
+    assert wc.kill_client("ubisoft", mine, timeout=0.0) == 2
+    assert {pid for pid, _ in sent} == {1, 2}, "not the sibling, not the game"
+    assert sig.SIGTERM in {s for _, s in sent}
+
+
+def test_kill_client_spares_the_downloader(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Closing the window must not kill an in-flight download.
+
+    ``install_active_in`` counts the Agent so a watchdog does not give up on
+    it; the teardown must be the mirror of that and leave it running.
+    """
+    prefix = tmp_path / "game"
+    _FakeProc({
+        "1": ("C:\\Battle.net\\Battle.net.exe", str(prefix)),
+        "2": ("C:\\ProgramData\\Battle.net\\Agent\\Agent.exe", str(prefix)),
+    }).install(monkeypatch)
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(wc.os, "kill", lambda pid, s: sent.append((pid, s)))
+
+    wc.kill_client("battlenet", prefix, timeout=0.0)
+
+    assert {pid for pid, _ in sent} == {1}
+
+
+def test_kill_client_is_a_noop_when_nothing_is_running(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _FakeProc({}).install(monkeypatch)
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(wc.os, "kill", lambda pid, s: sent.append((pid, s)))
+
+    assert wc.kill_client("ubisoft", tmp_path / "cold", timeout=0.0) == 0
+    assert sent == []

@@ -10,6 +10,12 @@ prefix, so that is the volume Wine reported as ``C:``.
 The dangerous half is the reclaim: the prefix and the game are the same
 directory tree, so an over-eager cleanup deletes a download rather than a
 scratch folder. Those refusals are the assertions worth keeping.
+
+These drive ``installer.prepare`` rather than ``store.install_game``, because
+placement is only the first half of an install now: the second half blocks
+until the Battle.net client has actually put the game on disk. That split is
+itself a fix — reporting success at placement time is what showed a Play
+button on a game that had not downloaded a byte.
 """
 
 from __future__ import annotations
@@ -18,6 +24,7 @@ import asyncio
 import json
 import os
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +34,7 @@ from _wine_session import write_registry
 
 from unifideck.stores.battlenet import BattlenetStore
 from unifideck.stores.battlenet import paths as bpaths
+from unifideck.stores.battlenet.install import PreparedInstall
 from unifideck.stores.battlenet.ownership.installed import AGGREGATE_RELATIVE
 from unifideck.stores.battlenet.prefix import MARKER_FILENAME, DERIVED_MARKER
 from unifideck.stores.battlenet.product_db.reader import PRODUCT_DB_RELATIVE
@@ -35,6 +43,24 @@ from unifideck.stores.shared import prefix_clone as pc
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "battlenet"
 UID = "ark"
 FAMILY = "ARK"
+
+
+@dataclass(frozen=True)
+class _Placement:
+    """``prepare``'s two return shapes, flattened for assertions."""
+
+    success: bool
+    install_path: str | None = None
+    error: str | None = None
+    error_code: str | None = None
+
+
+def _place(store: BattlenetStore, install_path: str | None = None) -> _Placement:
+    """Run just the placement half of an install."""
+    outcome = asyncio.run(store._installer.prepare(UID, install_path))
+    if isinstance(outcome, PreparedInstall):
+        return _Placement(True, str(outcome.prefix))
+    return _Placement(False, None, outcome.error, outcome.error_code)
 
 
 class _Bus:
@@ -139,7 +165,7 @@ def test_install_lands_on_the_picked_storage(store: BattlenetStore, tmp_path: Pa
     """The whole bug: the pick has to reach the prefix, or nothing moves."""
     base = tmp_path / "sd" / "Games"
 
-    result = asyncio.run(store.install_game(UID, install_path=str(base)))
+    result = _place(store, str(base))
 
     assert result.success, result.error
     expected = base / "prefixes" / "battlenet" / UID
@@ -152,7 +178,7 @@ def test_install_lands_on_the_picked_storage(store: BattlenetStore, tmp_path: Pa
 def test_install_without_a_pick_uses_the_internal_default(
     store: BattlenetStore,
 ) -> None:
-    result = asyncio.run(store.install_game(UID))
+    result = _place(store)
 
     assert result.success, result.error
     assert Path(result.install_path) == store.prefixes.game_prefix(UID)
@@ -176,7 +202,7 @@ def test_the_prefix_is_recorded_before_the_clone_runs(
 
     monkeypatch.setattr(store.prefixes, "create_game_prefix", _fail)
 
-    result = asyncio.run(store.install_game(UID, install_path=str(base)))
+    result = _place(store, str(base))
 
     assert result.success is False
     assert result.error_code == "prefix_clone_failed"
@@ -195,7 +221,7 @@ def test_reinstalling_elsewhere_reclaims_the_old_prefix(
     store.id_map.merge(UID, prefix_path=str(old))
     base = tmp_path / "sd" / "Games"
 
-    result = asyncio.run(store.install_game(UID, install_path=str(base)))
+    result = _place(store, str(base))
 
     assert result.success, result.error
     assert not old.exists(), "the abandoned internal prefix should be reclaimed"
@@ -210,9 +236,7 @@ def test_an_unmarked_prefix_is_never_deleted(
     (old / "user-data.txt").write_text("precious")
     store.id_map.merge(UID, prefix_path=str(old))
 
-    result = asyncio.run(
-        store.install_game(UID, install_path=str(tmp_path / "sd" / "Games")),
-    )
+    result = _place(store, str(tmp_path / "sd" / "Games"))
 
     assert result.success, result.error
     assert (old / "user-data.txt").read_text() == "precious"
@@ -229,9 +253,7 @@ def test_the_auth_and_template_prefixes_survive_an_install(
     """The template carries our marker too, so the marker alone cannot save it."""
     store.id_map.merge(UID, prefix_path=str(store.prefixes.template_prefix))
 
-    result = asyncio.run(
-        store.install_game(UID, install_path=str(tmp_path / "sd" / "Games")),
-    )
+    result = _place(store, str(tmp_path / "sd" / "Games"))
 
     assert result.success, result.error
     assert store.prefixes.template_prefix.is_dir()
@@ -266,7 +288,7 @@ def test_a_failed_install_reclaims_its_partial_prefix(
 
     monkeypatch.setattr(store.prefixes, "create_game_prefix", _half_write)
 
-    result = asyncio.run(store.install_game(UID, install_path=str(base)))
+    result = _place(store, str(base))
 
     assert result.success is False
     assert not target.exists()
@@ -288,7 +310,7 @@ def test_a_failed_install_keeps_a_prefix_that_holds_a_game(
 
     monkeypatch.setattr(store.prefixes, "create_game_prefix", _leave_a_game)
 
-    result = asyncio.run(store.install_game(UID, install_path=str(base)))
+    result = _place(store, str(base))
 
     assert result.success is False
     assert target.is_dir(), "a prefix holding a game must never be reclaimed"
@@ -307,7 +329,7 @@ def test_the_launcher_resolves_the_relocated_prefix(
     from unifideck.launcher.proton.handlers import battlenet_client as client
 
     base = tmp_path / "sd" / "Games"
-    asyncio.run(store.install_game(UID, install_path=str(base)))
+    _place(store, str(base))
     monkeypatch.setattr(client, "ID_MAP_PATH", store.id_map.path)
 
     assert client.resolve_prefix(UID) == base / "prefixes" / "battlenet" / UID
@@ -352,7 +374,7 @@ def test_install_captures_the_session_before_wiping_the_old_prefix(
     _put_session(old, mtime=2000.0, vault=b"rotated")
     store.id_map.merge(UID, prefix_path=str(old))
 
-    asyncio.run(store.install_game(UID))
+    _place(store)
 
     assert auth_vault.read_bytes() == b"rotated"
 
@@ -368,7 +390,7 @@ def test_a_relocated_install_captures_from_the_old_disk_first(
 
     sdcard = tmp_path / "sdcard"
     sdcard.mkdir()
-    asyncio.run(store.install_game(UID, install_path=str(sdcard)))
+    _place(store, str(sdcard))
 
     assert auth_vault.read_bytes() == b"rotated-on-internal"
     assert not old.is_dir()

@@ -23,7 +23,6 @@ from unifideck.core.types import InstallResult
 from unifideck.launcher.wrapper_stores import WRAPPER_STORES
 from unifideck.services.download.models import DownloadItem
 from unifideck.services.download.worker import _WorkerMixin
-from unifideck.services.download.wrapper_signals import takes_on_ready
 
 PICKED = "/run/media/deck/microSTEAMDECK/Games"
 
@@ -48,6 +47,9 @@ class _Store:
         if on_ready is not None:
             await on_ready()
         return InstallResult(success=True, game_id=game_id, store="s")
+
+    async def update_game(self, game_id: str, *args: Any, **kwargs: Any) -> InstallResult:
+        return await self.install_game(game_id, *args, **kwargs)
 
 
 class _Worker(_WorkerMixin):
@@ -80,7 +82,13 @@ def test_every_wrapper_store_receives_the_picked_install_path(store: str) -> Non
 
 @pytest.mark.parametrize("store", sorted(WRAPPER_STORES))
 def test_the_frontend_is_asked_to_open_the_client_exactly_once(store: str) -> None:
-    """Either shape signals — one from inside ``install_game``, one after."""
+    """One shape for every wrapper store: signalled from inside the install.
+
+    There used to be a second shape — signal after ``install_game`` returned —
+    and it was not a variation worth keeping. It only worked because that call
+    returned at prefix-creation time, which is the bug: the game was marked
+    installed before a byte had downloaded.
+    """
     bus = _Bus()
     impl = _Store()
 
@@ -88,8 +96,27 @@ def test_the_frontend_is_asked_to_open_the_client_exactly_once(store: str) -> No
 
     assert len(bus.events) == 1
     assert bus.events[0][1]["store_game_id"] == f"{store}:42"
-    # The table, not a store-name branch, decides which shape is used.
-    assert ("on_ready" in impl.calls[0][1]) is takes_on_ready(store)
+    assert "on_ready" in impl.calls[0][1]
+
+
+@pytest.mark.parametrize("store", sorted(WRAPPER_STORES))
+def test_an_update_goes_through_the_client_too(store: str) -> None:
+    """An update is the same vendor-client operation, so it needs the same signal.
+
+    It must NOT carry the picked install path: re-placing the prefix is how
+    that path starts, and for these stores the prefix *is* the installed game.
+    """
+    bus = _Bus()
+    impl = _Store()
+    item = _item(store)
+    item.is_update = True
+
+    _dispatch(impl, item, bus)
+
+    (_game_id, kwargs), = impl.calls
+    assert "on_ready" in kwargs
+    assert "install_path" not in kwargs
+    assert len(bus.events) == 1
 
 
 @pytest.mark.parametrize("store", sorted(WRAPPER_STORES))
@@ -104,8 +131,14 @@ def test_no_pick_passes_none_rather_than_an_empty_string(store: str) -> None:
     assert impl.calls[0][1]["install_path"] is None
 
 
-def test_a_failed_wrapper_install_does_not_ask_for_the_client() -> None:
-    """A prefix that was never placed has nothing for the client to open."""
+@pytest.mark.parametrize("store", sorted(WRAPPER_STORES))
+def test_a_failed_wrapper_install_does_not_ask_for_the_client(store: str) -> None:
+    """A prefix that was never placed has nothing for the client to open.
+
+    The installer decides this by simply not calling ``on_ready`` — it fires
+    only once the prefix is bootstrapped, which is also the moment the watcher
+    starts looking.
+    """
 
     class _Failing(_Store):
         async def install_game(self, game_id: str, *a: Any, **k: Any) -> InstallResult:
@@ -113,7 +146,6 @@ def test_a_failed_wrapper_install_does_not_ask_for_the_client() -> None:
             return InstallResult(success=False, game_id=game_id, store="s")
 
     bus = _Bus()
-    store = next(s for s in sorted(WRAPPER_STORES) if not takes_on_ready(s))
 
     _dispatch(_Failing(), _item(store), bus)
 

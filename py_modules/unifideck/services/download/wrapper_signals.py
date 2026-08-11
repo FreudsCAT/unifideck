@@ -11,13 +11,14 @@ events are how it is asked to.
 One emitter, driven by a per-store table. Adding a store is a row, not a
 function.
 
-The two call *shapes* still differ and that is deliberate: Ubisoft's signal
-is an ``on_ready`` callback threaded into ``install_game`` and fired once
-the installer has bootstrapped the prefix, while Battle.net's is emitted by
-the worker after ``install_game`` returns. ``make_launch_signal`` exists to
-adapt the shared emitter to the callback shape, and :func:`takes_on_ready`
-lets the worker pick between them from this table rather than by branching
-on a store name — the difference is a row, like everything else here.
+There is exactly one call *shape*. Every wrapper store's ``install_game``
+blocks for the whole vendor-client install and fires ``on_ready`` from inside,
+once the prefix is bootstrapped — that is the wrapper-store contract, stated in
+``stores/shared/wrapper_install``. This module used to carry a
+``_ON_READY_STORES`` row recording that Battle.net signalled *after*
+``install_game`` returned instead, and that was not a variation worth
+supporting: it was the bug. Returning early is what marked a game installed
+before a byte had downloaded.
 """
 
 from __future__ import annotations
@@ -27,6 +28,9 @@ from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from unifideck.core.types import InstallResult
+    from unifideck.stores.shared.store_base import StoreBase
+
     from .models import DownloadItem
 
 logger = logging.getLogger(__name__)
@@ -36,22 +40,6 @@ _LAUNCH_EVENTS: dict[str, str] = {
     "ubisoft": "UBISOFT_INSTALL_LAUNCH_REQUESTED",
     "battlenet": "BATTLENET_INSTALL_LAUNCH_REQUESTED",
 }
-
-# Stores whose ``install_game`` accepts an ``on_ready`` callback. Ubisoft's
-# installer blocks for the whole manual UI install, so it must signal from
-# inside; Battle.net's returns as soon as the prefix is placed, so the
-# worker signals after it.
-_ON_READY_STORES: frozenset[str] = frozenset({"ubisoft"})
-
-
-def has_launch_signal(store: str) -> bool:
-    """Whether this store asks the frontend to open its client."""
-    return store in _LAUNCH_EVENTS
-
-
-def takes_on_ready(store: str) -> bool:
-    """Whether ``install_game`` signals from inside via ``on_ready``."""
-    return store in _ON_READY_STORES
 
 
 async def signal_install_launch(bus: Any, store: str, game_id: str) -> None:
@@ -76,12 +64,42 @@ def make_launch_signal(
 ) -> Callable[[], Coroutine[Any, Any, None]]:
     """Adapt the emitter to the ``on_ready`` callback shape.
 
-    Used by stores whose installer invokes a callback once the per-game
-    prefix is bootstrapped, rather than returning and letting the worker
-    emit.
+    The installer invokes this once the per-game prefix is bootstrapped and
+    before it starts watching, which is the only moment that is both "the
+    client has somewhere to open into" and "we are ready to see what it does".
     """
 
     async def _signal() -> None:
         await signal_install_launch(bus, item.store, item.game_id)
 
     return _signal
+
+
+async def dispatch_wrapper_install(
+    bus: Any, item: DownloadItem, store: StoreBase, progress_cb: Any,
+) -> InstallResult:
+    """Install or update through a vendor client running inside the prefix.
+
+    One shape for every wrapper store: the call blocks for the whole
+    vendor-client install and fires ``on_ready`` from inside, once the prefix
+    is ready for the client to open into. There used to be a second shape —
+    signal after the call returns — and it was the bug, not a variation: the
+    call returned at prefix-creation time, so the game was marked installed
+    before anything had downloaded.
+
+    ``install_path`` is not optional plumbing for these stores: their games
+    live *inside* the prefix, so it is what decides which disk the game lands
+    on and which volume's free space the vendor client reports. Battle.net
+    shipped without it being passed and its installer refused an 83 GB download
+    quoting the internal drive while the SD card the user picked had 164 GB
+    free. An *update* passes no path — it reuses the prefix the game is already
+    installed in, and re-placing it would delete that install.
+    """
+    kwargs: dict[str, Any] = {
+        "progress_cb": progress_cb,
+        "on_ready": make_launch_signal(bus, item),
+    }
+    if item.is_update:
+        return await store.update_game(item.game_id, **kwargs)
+    kwargs["install_path"] = item.install_path or None
+    return await store.install_game(item.game_id, **kwargs)

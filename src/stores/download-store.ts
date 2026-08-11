@@ -25,6 +25,7 @@ import type { EventName } from "../types/events";
 import { EventBusClient } from "../api/event-bus-client";
 import { invalidateGameInfo } from "../hooks/useGameInfo";
 import { bumpGameStateVersion } from "../lib/game-state-version";
+import { invalidateGameSize } from "../lib/game-size-cache";
 import { friendlyDownloadError } from "../lib/download-errors";
 import { launchUbisoftInstallViaShortcut } from "../utils/ubisoftShortcutLaunch";
 import { launchBattlenetInstallViaShortcut } from "../utils/battlenetShortcutLaunch";
@@ -196,6 +197,11 @@ class DownloadStoreImpl {
       if (appId != null) {
         invalidateGameInfo(appId);
         bumpGameStateVersion(appId);
+        // An install/update that just ended moved the game's bytes on disk.
+        // The install-state flip covers a first install; this also covers an
+        // update, where `installed` never changes and nothing else would tell
+        // the size caches to forget.
+        invalidateGameSize(appId);
       }
       const storeGameId = extractStoreGameId(payload);
       if (storeGameId) this._wrapperLaunched.delete(storeGameId);

@@ -275,10 +275,11 @@ class UbisoftInstaller:
                 )
         game_name = self._library._detector._get_game_name(game_id)
         try:
-            launch_env = self._build_upc_launch_env(
-                game_id,
-                prefix_path,
-            )
+            # Called for its preconditions, not its value: UPC is opened by
+            # the frontend now, so nothing here spawns it, but a missing
+            # upc.exe or umu-run still has to fail the install with a specific
+            # error code rather than surface later as a silent no-op launch.
+            self._build_upc_launch_env(game_id, prefix_path)
         except UpcLaunchEnvBuildError as e:
             return InstallResult(
                 success=False,
@@ -291,7 +292,6 @@ class UbisoftInstaller:
                 game_id=game_id,
                 game_name=game_name,
                 prefix_path=prefix_path,
-                env=launch_env.env,
                 progress_cb=progress_cb,
                 install_path=install_path,
                 on_ready=on_ready,

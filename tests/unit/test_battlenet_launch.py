@@ -477,9 +477,16 @@ def test_cef_children_alone_still_count_as_a_running_client(monkeypatch) -> None
     assert w.client_ready(PREFIX) is False
 
 
-def _spy_kill(monkeypatch, watch_mod) -> list[tuple[int, int]]:
+def _spy_kill(monkeypatch, _watch_mod=None) -> list[tuple[int, int]]:
+    """Spy on the signals sent, wherever the teardown lives.
+
+    Signalling is shared with every other wrapper store now (``kill_client``
+    is table-driven off ``CLIENT_IMAGES``), so ``battlenet_watch`` no longer
+    imports ``os`` at all — it calls through, like it already does for the
+    ``/proc`` readers.
+    """
     sent: list[tuple[int, int]] = []
-    monkeypatch.setattr(watch_mod.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    monkeypatch.setattr(wc.os, "kill", lambda pid, sig: sent.append((pid, sig)))
     return sent
 
 

@@ -34,6 +34,10 @@ import { EventBusClient } from "../../api/event-bus-client";
 import { Events } from "../../types/events";
 import { unifideckGameCache } from "../library-filters";
 import { getFacet, loadFacets, type FacetRecord } from "../library-facets";
+import {
+  onGameSizeInvalidated,
+  registerGameSizeCache,
+} from "../game-size-cache";
 
 interface EnrichableOverview {
   appid: number;
@@ -74,6 +78,16 @@ const NON_STEAM_APP_TYPE = 1073741824;
 const playtimeByAppId = new Map<number, { mins: number; last: number }>();
 const sizeByAppId = new Map<number, number>();
 const sizeFetched = new Set<number>();
+
+// `sizeFetched` makes each app measurable at most once per Steam session,
+// which is right for a polite background trickle and wrong the moment a
+// game's bytes actually change. Clearing the LATCH as well as the value is
+// what matters here: `enrichSizes` short-circuits on it, so dropping only
+// the number would leave `size_on_disk` permanently unset instead of stale.
+registerGameSizeCache((appId) => {
+  sizeByAppId.delete(appId);
+  sizeFetched.delete(appId);
+});
 
 function getAppStore(): AppStoreLike | null {
   return (window as unknown as { appStore?: AppStoreLike }).appStore ?? null;
@@ -328,6 +342,18 @@ export function startOverviewEnrichment(): () => void {
   window.addEventListener("unifideck-sync-completed", onSync);
   window.addEventListener("unifideck-game-state-changed", onState);
 
+  // Re-measure an app whose size was invalidated. Debounced because an
+  // install completing fires more than one signal (download-complete and
+  // the shortcut install-state flip), and `enrichSizes` walks every
+  // shortcut — one pass covers however many were invalidated together.
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  const unsubSize = onGameSizeInvalidated(() => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      void enrichSizes();
+    }, 1000);
+  });
+
   const unsubStop = EventBusClient.subscribe(Events.GAME_STOPPED, () => {
     setTimeout(() => {
       void enrichPlaytime();
@@ -348,6 +374,12 @@ export function startOverviewEnrichment(): () => void {
   return () => {
     window.removeEventListener("unifideck-sync-completed", onSync);
     window.removeEventListener("unifideck-game-state-changed", onState);
+    clearTimeout(resizeTimer);
+    try {
+      unsubSize();
+    } catch {
+      /* ignore */
+    }
     try {
       unsubStop?.();
     } catch {

@@ -339,21 +339,25 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
     async def install_game(
         self, game_id: str, *, install_path: str | None = None, **kwargs: Any,
     ) -> InstallResult:
-        """Hand the install to the client; completion is polled elsewhere.
+        """Prepare the prefix, then block until the client has installed the game.
 
         ``--exec="install <FAMILY>"`` does **not** start a download — that
         was measured against the current client with a known-good family
         code. The install is a user click inside the client, exactly as it
-        is for Ubisoft, so this prepares the prefix and signals the frontend
-        to bring the client up.
+        is for Ubisoft, so this prepares the prefix, asks the frontend to
+        bring the client up (``on_ready``) and then watches for the game.
 
         ``install_path`` is the storage location the user picked. The game
         installs *inside* the prefix, so placing the prefix there is the only
         thing that puts the game on that disk — and the only way the client's
         own free-space check reads the right volume.
         """
-        del kwargs
-        return await self._installer.install(game_id, install_path)
+        return await self._installer.install(
+            game_id,
+            install_path,
+            progress_cb=kwargs.get("progress_cb"),
+            on_ready=kwargs.get("on_ready"),
+        )
 
     async def uninstall_game(self, game_id: str, **kwargs: Any) -> Result:
         """Remove the game by removing its prefix — the install lives inside."""
@@ -385,23 +389,18 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         return Result(success=True, store=self.store_name)
 
     async def update_game(self, game_id: str, **kwargs: Any) -> InstallResult:
-        """Updates are client-driven, same shape as install."""
-        del kwargs
-        prefix = self.id_map.resolve_prefix(game_id)
-        if prefix is None:
-            return InstallResult(
-                success=False,
-                game_id=game_id,
-                store=self.store_name,
-                error="No recorded prefix for this game",
-                error_code="prefix_unknown",
-            )
-        return InstallResult(
-            success=True,
-            game_id=game_id,
-            store=self.store_name,
-            install_path=str(prefix),
-            metadata={"phase": "manual", "prefix": str(prefix)},
+        """Updates are client-driven, same shape as install.
+
+        Same blocking wait, and for the same reason: reporting success the
+        moment the prefix resolved is what put a Play button on a game that
+        had not downloaded. It reuses the existing prefix rather than going
+        through the install path, which resets it — here that would delete
+        the very game being updated.
+        """
+        return await self._installer.update(
+            game_id,
+            progress_cb=kwargs.get("progress_cb"),
+            on_ready=kwargs.get("on_ready"),
         )
 
     async def check_for_updates(self) -> list[str]:
@@ -424,25 +423,51 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         record = self.id_map.get(game_id)
         if record and record.total_bytes:
             return record.total_bytes
-        prefix = self.id_map.resolve_prefix(game_id)
-        if prefix is None:
-            return None
-        drive_c = paths.drive_c(prefix)
-        if drive_c is None:
-            return None
-        import asyncio
+        row = await self._install_row(game_id)
+        return row.total_bytes if row else None
 
-        state = await asyncio.to_thread(library_mod.read_install_state, drive_c, prefix)
-        for game in state.values():
-            if game.total_bytes:
-                return game.total_bytes
-        return None
+    def get_prefix_path(self, game_id: str) -> str | None:
+        """The game's Wine prefix — for this store, the whole install footprint.
+
+        The game lives *inside* the prefix and uninstall removes the prefix, so
+        this is the directory whose bytes are the disk space the game actually
+        occupies. See ``stores/shared/installed_size.resolve_size_root``.
+        """
+        prefix = self.id_map.resolve_prefix(game_id)
+        return str(prefix) if prefix else None
+
+    def find_installed_exe(
+        self, install_path: str, game_id: str | None = None,
+    ) -> str | None:
+        """The game's executable, from the client's own records.
+
+        The download worker prefers a store-specific resolver and otherwise
+        guesses with a generic heuristic — which inside a Blizzard install
+        directory picks up launchers, crash handlers and updaters as readily
+        as the game.
+        """
+        del install_path
+        if not game_id:
+            return None
+        record = self.id_map.get(game_id)
+        return record.exe_path if record else None
 
     async def get_installed_path(self, game_id: str) -> str | None:
         """Host-side install directory, translated out of Wine syntax."""
         record = self.id_map.get(game_id)
         if record and record.install_path:
             return record.install_path
+        row = await self._install_row(game_id)
+        return row.host_install_path if row else None
+
+    async def _install_row(self, game_id: str) -> Any | None:
+        """This game's row in the client's install records, or ``None``.
+
+        Keyed on the uid asked for. The earlier form returned the *first* game
+        in the prefix, which is only ever right by accident — a prefix that
+        picked up a second Blizzard title reported that one's path and size
+        under this game's id.
+        """
         prefix = self.id_map.resolve_prefix(game_id)
         if prefix is None:
             return None
@@ -451,8 +476,7 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
             return None
         import asyncio
 
-        state = await asyncio.to_thread(library_mod.read_install_state, drive_c, prefix)
-        for game in state.values():
-            if game.host_install_path:
-                return game.host_install_path
-        return None
+        state = await asyncio.to_thread(
+            library_mod.install_state_by_uid, drive_c, prefix,
+        )
+        return state.get(game_id)

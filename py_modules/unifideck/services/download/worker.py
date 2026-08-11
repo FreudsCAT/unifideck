@@ -29,11 +29,7 @@ from unifideck.launcher.wrapper_stores import (
 
 from .models import MAX_FINISHED_HISTORY, DownloadItem, classify_download_error
 from .worker_helpers import apply_dict_progress, track_task
-from .wrapper_signals import (
-    make_launch_signal,
-    signal_install_launch,
-    takes_on_ready,
-)
+from .wrapper_signals import dispatch_wrapper_install
 
 if TYPE_CHECKING:
     from unifideck.core.types import InstallResult
@@ -241,11 +237,20 @@ class _WorkerMixin:
 
         Updates use the store's genuine ``update_game`` command; otherwise
         per-store install signatures differ — the wrapper stores are
-        keyword-only (see :meth:`_dispatch_wrapper_install`), while
+        keyword-only (see
+        :func:`~.wrapper_signals.dispatch_wrapper_install`), while
         Epic/Amazon/GOG take ``base_path`` positionally.
         """
         if item.is_update:
             logger.info("[DownloadWorker] starting update for %s", key)
+            # A wrapper store's update is the same vendor-client operation as
+            # its install, so it needs the same ``on_ready`` signal — without
+            # it the client is never opened and the update waits for a window
+            # nobody asked for.
+            if is_wrapper_store(item.store):
+                return await dispatch_wrapper_install(
+                    self._bus, item, store, progress_cb,
+                )
             return await store.update_game(item.game_id, progress_cb=progress_cb)
         logger.info("[DownloadWorker] starting install for %s", key)
         # Clear stale local state first. A store CLI's install records can
@@ -260,7 +265,9 @@ class _WorkerMixin:
             stale_installs.reconcile_for_install, item.store, item.game_id,
         )
         if is_wrapper_store(item.store):
-            return await self._dispatch_wrapper_install(item, store, progress_cb)
+            return await dispatch_wrapper_install(
+                self._bus, item, store, progress_cb,
+            )
         # GOG and Epic honour a user-picked install language (GOG via
         # gogdl's --lang, Epic via a legendary SDL install tag); the
         # other stores don't accept the kwarg, so only pass it to those.
@@ -276,34 +283,6 @@ class _WorkerMixin:
             progress_cb=progress_cb,
             **extra,
         )
-
-    async def _dispatch_wrapper_install(
-        self, item: DownloadItem, store: StoreBase, progress_cb: Any,
-    ) -> InstallResult:
-        """Install through a vendor client running inside the prefix.
-
-        ``install_path`` is not optional plumbing for these stores: their
-        games live *inside* the prefix, so it is what decides which disk the
-        game lands on and which volume's free space the vendor client
-        reports. Battle.net shipped without it being passed and its installer
-        refused an 83 GB download quoting the internal drive while the SD
-        card the user picked had 164 GB free.
-
-        The only per-store difference left is *when* the frontend is asked to
-        open the client, and ``takes_on_ready`` reads that off the table in
-        ``wrapper_signals`` rather than branching on a store name.
-        """
-        kwargs: dict[str, Any] = {
-            "progress_cb": progress_cb,
-            "install_path": item.install_path or None,
-        }
-        if takes_on_ready(item.store):
-            kwargs["on_ready"] = make_launch_signal(self._bus, item)
-            return await store.install_game(item.game_id, **kwargs)
-        result = await store.install_game(item.game_id, **kwargs)
-        if result.success:
-            await signal_install_launch(self._bus, item.store, item.game_id)
-        return result
 
     async def _on_install_success(
         self, item: DownloadItem, result: InstallResult, store: StoreBase, key: str,

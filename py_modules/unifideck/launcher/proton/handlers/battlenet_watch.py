@@ -31,11 +31,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
-from collections.abc import Callable
 from pathlib import Path
 
-from .wrapper_clients import CLIENT_IMAGES
+from .wrapper_clients import CLIENT_IMAGES, kill_client, terminate
 from .wrapper_clients import scan_prefix as _scan_raw
 
 logger = logging.getLogger(__name__)
@@ -247,48 +245,6 @@ async def wait_while_client_running(prefix: str | Path, poll: float = 10.0) -> N
         await asyncio.sleep(poll)
 
 
-def _signal_all(pids: list[str], sig: int) -> None:
-    """Signal each pid individually. Never ``killpg``.
-
-    The process group here contains our own launcher (and, when Steam
-    wraps us, more besides), and group-killing a store's processes is
-    exactly how the legendary cancel path once took down its own
-    subprocess tree.
-    """
-    for pid in pids:
-        with contextlib.suppress(OSError, ValueError):
-            os.kill(int(pid), sig)
-
-
-def _terminate(
-    pids: list[str], survivors_of: Callable[[], list[str]], timeout: float,
-) -> int:
-    """SIGTERM ``pids``, then SIGKILL whatever ``survivors_of`` still reports.
-
-    SIGTERM first so the client can flush its session — the token it
-    rotated during this run lives in ``CachedData.db`` and a SIGKILL can
-    lose it. SIGKILL only for what is still alive at the deadline.
-    """
-    import signal
-    import time
-
-    if not pids:
-        return 0
-    _signal_all(pids, signal.SIGTERM)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not survivors_of():
-            logger.info("[battlenet] %d process(es) stopped cleanly", len(pids))
-            return len(pids)
-        time.sleep(0.5)
-
-    survivors = survivors_of()
-    for pid in survivors:
-        logger.warning("[battlenet] pid %s ignored SIGTERM — killing", pid)
-    _signal_all(survivors, signal.SIGKILL)
-    return len(pids)
-
-
 def stop_client(prefix: str | Path, *, timeout: float = 15.0) -> int:
     """Terminate the client running in ``prefix``. Returns how many were signalled.
 
@@ -298,12 +254,11 @@ def stop_client(prefix: str | Path, *, timeout: float = 15.0) -> int:
     install flow, and killing the Agent mid-download is the exact failure
     this module was fixed for. Use :func:`stop_stale_session` when the
     intent really is to clear the prefix.
+
+    Delegates to the shared, table-driven :func:`wrapper_clients.kill_client`,
+    which selects exactly the same images via ``CLIENT_IMAGES["battlenet"]``.
     """
-    pids, _ = _client_pids(prefix)
-    if not pids:
-        return 0
-    logger.info("[battlenet] stopping %d client process(es) in %s", len(pids), prefix)
-    return _terminate(pids, lambda: _client_pids(prefix)[0], timeout)
+    return kill_client("battlenet", prefix, timeout=timeout)
 
 
 def stop_stale_session(prefix: str | Path, *, timeout: float = 15.0) -> int:
@@ -321,7 +276,9 @@ def stop_stale_session(prefix: str | Path, *, timeout: float = 15.0) -> int:
     logger.warning(
         "[battlenet] clearing stale session: %d process(es) in %s", len(pids), prefix,
     )
-    stopped = _terminate(pids, lambda: wine_pids(prefix), timeout)
+    stopped = terminate(
+        pids, lambda: wine_pids(prefix), timeout, label="battlenet",
+    )
     with contextlib.suppress(Exception):
         from unifideck.launcher.proton.infrastructure.wineserver_reap import (
             reap_prefix_wineserver,
