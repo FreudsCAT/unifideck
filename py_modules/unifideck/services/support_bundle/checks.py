@@ -396,6 +396,24 @@ def _check_ntsync(view: _View) -> CheckResult:
     return _ok(name, "/dev/ntsync absent - relevant when a Proton hangs at setup")
 
 
+def _check_vulkan_32bit(view: _View) -> CheckResult:
+    name = "vulkan_32bit_present"
+    vulkan = view.block("gpu").get("vulkan") or {}
+    icds = vulkan.get("icds") or []
+    if not icds:
+        return _na(name, f"no Vulkan ICD manifests found in {len(vulkan.get('dirs') or [])} dir(s)")
+    detail = f"{len(icds)} ICD(s) across {len(vulkan.get('dirs') or [])} dir(s)"
+    if vulkan.get("has_32bit") is True:
+        return _ok(name, detail)
+    if vulkan.get("has_32bit") is False:
+        return _warn(
+            name,
+            f"{detail} - none 32-bit; 32-bit clients (Battle.net) may stall in their "
+            "installer without lib32 Mesa/Vulkan",
+        )
+    return _na(name, f"{detail} - none could be classified")
+
+
 def _check_decky_log_dir(view: _View) -> CheckResult:
     name = "decky_log_dir_found"
     source = view.ctx.root_sources.get("decky_logs", "unknown")
@@ -426,6 +444,7 @@ _CHECKS: tuple[Callable[[_View], CheckResult], ...] = (
     _check_store_binaries,
     _check_umu_runtime,
     _check_ntsync,
+    _check_vulkan_32bit,
     _check_session_env,
     _check_orphaned_processes,
     _check_data_dir_writable,

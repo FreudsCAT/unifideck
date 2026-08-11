@@ -39,10 +39,12 @@ import logging
 import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from unifideck.launcher import wrapper_session
 from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.game_title import resolve_title
+from unifideck.launcher.proton.handlers import battlenet_bootstrap as bootstrap
 from unifideck.launcher.proton.handlers import battlenet_watch as watch
 from unifideck.launcher.proton.handlers import wrapper_clients
 from unifideck.launcher.proton.handlers.battlenet_client import (
@@ -54,6 +56,9 @@ from unifideck.launcher.proton.handlers.battlenet_client import (
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 from unifideck.launcher.proton.infrastructure.umu_runtime import run_umu_with_retry
 from unifideck.launcher.types.errors import GameFailedError
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from unifideck.stores.battlenet.prefix.client_install import BootstrapResult
 
 logger = logging.getLogger(__name__)
 
@@ -85,16 +90,29 @@ def _fail(
     message: str,
     *,
     rc: int = 1,
+    titled: bool = True,
     **context: object,
 ) -> GameFailedError:
+    """Toast the failure and build the error to raise.
+
+    ``titled=False`` for messages with no ``{{gameTitle}}`` placeholder.
+    The auth shortcut is not a game: ``resolve_title`` finds no registry row
+    for ``battlenet:bnet-auth`` and returns the key itself, which is how a
+    user came to read "isn't set up for battlenet:bnet-auth yet".
+    """
     launcher_toast(
         f"toasts.launcher.{key}Message",
         i18n_title_key=f"toasts.launcher.{key}",
-        game_title=resolve_title(plan.context.game_key),
+        game_title=resolve_title(plan.context.game_key) if titled else "",
         severity="error",
     )
     plan.state.game_exit_code = rc
     return GameFailedError(message, subprocess_rc=rc, context=dict(context))
+
+
+def _install_error(result: BootstrapResult | None, fallback: str) -> str:
+    """The installer's own words for the log, or ``fallback`` if it has none."""
+    return result.error if result is not None and result.error else fallback
 
 
 async def _start_client_detached(plan: ProtonLaunchPlan, launcher_exe: Path) -> None:
@@ -283,15 +301,18 @@ async def _bring_up_client(plan: ProtonLaunchPlan) -> Path:
     """Phases A + B. Returns the client exe once it will accept commands."""
     launcher_exe = find_launcher_exe(plan.prefix_path)
     client_exe = find_client_exe(plan.prefix_path)
-    if (launcher_exe is None or client_exe is None) and await _install_client_here(plan):
+    install: BootstrapResult | None = None
+    if launcher_exe is None or client_exe is None:
+        install = await bootstrap.install_client(plan)
         launcher_exe = find_launcher_exe(plan.prefix_path)
         client_exe = find_client_exe(plan.prefix_path)
     if launcher_exe is None or client_exe is None:
         raise _fail(
             plan,
-            "battlenetPrefixNotReady",
-            "Battle.net client is not installed in this prefix",
+            bootstrap.toast_key_for(install, "battlenetPrefixNotReady"),
+            _install_error(install, "Battle.net client is not installed in this prefix"),
             rc=127,
+            titled=install is None or install.error_code is None,
             prefix=str(plan.prefix_path),
         )
 
@@ -413,53 +434,6 @@ async def _issue_and_confirm(
     return pid, before
 
 
-async def _install_client_here(plan: ProtonLaunchPlan) -> bool:
-    """Install the Battle.net client into this prefix, with progress toasts.
-
-    Runs **here**, inside the RunGame session, rather than in the backend.
-    The rule is the one ``services/download/wrapper_signals.py`` already
-    states: the backend must not spawn the vendor client itself, because in
-    Gaming Mode a bare subprocess has no gamescope session and its window
-    never appears. It applies to the client's *installer* too — that is
-    exactly how this failed. Signing in from the desktop showed the wizard;
-    from Gaming Mode it rendered nowhere, and the sign-in RPC blocked on a
-    window nobody could see.
-
-    Stdlib-and-launcher imports only, deliberately verified to load under
-    the SYSTEM python (3.10-3.14) that runs this process.
-    """
-    logger.info("[battlenet] no client in %s — installing it", plan.prefix_path)
-    launcher_toast(
-        "toasts.launcher.battlenetInstallingClientMessage",
-        i18n_title_key="toasts.launcher.battlenetInstallingClient",
-    )
-    try:
-        from unifideck.stores.battlenet import config as store_config
-        from unifideck.stores.battlenet.prefix.client_install import bootstrap_client
-        from unifideck.stores.shared.wine_env import WineEnvResolver
-
-        cfg = store_config.from_config_manager(None)
-        result = await bootstrap_client(
-            plan.prefix_path,
-            installer_url=cfg.installer_url,
-            installer_cache=cfg.installer_path,
-            resolver=WineEnvResolver(
-                "battlenet", str(getattr(plan.context, "plugin_dir", "") or ""),
-            ),
-        )
-    except Exception:
-        # Report "the prefix has no client", which is true and actionable,
-        # rather than a traceback from the repair attempt. The caller falls
-        # through to its own typed failure and the user gets a toast.
-        logger.exception("[battlenet] client install raised")
-        return False
-    if not result.success:
-        logger.error("[battlenet] client install failed: %s", result.error)
-        return False
-    logger.info("[battlenet] client installed into %s", plan.prefix_path)
-    return True
-
-
 async def battlenet_auth_launch(plan: ProtonLaunchPlan) -> int:
     """Open the client so the user can sign in.
 
@@ -470,14 +444,20 @@ async def battlenet_auth_launch(plan: ProtonLaunchPlan) -> int:
     path after a fresh install or a full cleanup, not an edge case.
     """
     launcher_exe = find_launcher_exe(plan.prefix_path)
-    if launcher_exe is None and await _install_client_here(plan):
+    install: BootstrapResult | None = None
+    if launcher_exe is None:
+        install = await bootstrap.install_client(plan)
         launcher_exe = find_launcher_exe(plan.prefix_path)
     if launcher_exe is None:
+        # The auth shortcut has no game title to name, and resolve_title
+        # would hand the toast the raw "battlenet:bnet-auth" key — which is
+        # exactly what a user saw on screen. Its keys take no title.
         raise _fail(
             plan,
-            "battlenetPrefixNotReady",
-            "Battle.net client is not installed in the auth prefix",
+            bootstrap.toast_key_for(install, "battlenetAuthPrefixNotReady"),
+            _install_error(install, "Battle.net client is not installed in the auth prefix"),
             rc=127,
+            titled=False,
             prefix=str(plan.prefix_path),
         )
     launcher_toast(

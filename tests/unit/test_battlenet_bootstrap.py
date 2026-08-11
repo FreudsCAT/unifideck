@@ -10,11 +10,18 @@ error:
   * no 32-bit Vulkan — the client is PE32 i386 and its installer freezes at
     roughly 25% with no message,
   * a truncated download — an error page cached as if it were the stub.
+
+The 32-bit Vulkan case is **not** a refusal any more, and the tests below
+pin that. It used to be: a filename-based probe reported "missing" on a
+machine that had the driver, and the user was left with no client at all.
+Now every verdict installs — ``ABSENT`` merely arms a stall watchdog — and
+the failure is reported only after an attempt that actually stopped moving.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +29,7 @@ import pytest
 
 from unifideck.stores.battlenet import paths
 from unifideck.stores.battlenet.prefix import client_install as ci
+from unifideck.utils.vulkan import Vulkan32, Vulkan32Report
 
 
 class _Resolver:
@@ -48,6 +56,13 @@ def _install_client(prefix: Path) -> None:
     d.mkdir(parents=True, exist_ok=True)
     (d / paths.CLIENT_EXE).write_bytes(b"MZ")
     (d / paths.LAUNCHER_EXE).write_bytes(b"MZ")
+
+
+def _verdict(monkeypatch: pytest.MonkeyPatch, verdict: Vulkan32) -> None:
+    """Force the host 32-bit Vulkan verdict the gate will see."""
+    monkeypatch.setattr(
+        ci, "detect_32bit_vulkan", lambda: Vulkan32Report(verdict, [], []),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -125,7 +140,7 @@ def test_refuses_to_run_without_a_display(tmp_path: Path) -> None:
     ok = asyncio.run(
         ci.run_silent_install(installer, tmp_path / "pfx", _Resolver(display=False)),
     )
-    assert ok is False
+    assert ok.installed is False
 
 
 def test_refuses_to_run_without_umu(tmp_path: Path) -> None:
@@ -134,14 +149,128 @@ def test_refuses_to_run_without_umu(tmp_path: Path) -> None:
     ok = asyncio.run(
         ci.run_silent_install(installer, tmp_path / "pfx", _Resolver(umu=None)),
     )
-    assert ok is False
+    assert ok.installed is False
 
 
-def test_missing_32bit_vulkan_is_reported_up_front(
+@pytest.mark.parametrize(
+    "verdict", [Vulkan32.ABSENT, Vulkan32.UNKNOWN, Vulkan32.PRESENT],
+)
+def test_no_vulkan_verdict_blocks_the_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verdict: Vulkan32,
+) -> None:
+    """The regression: a probe that said "no" cost a user their client.
+
+    A CachyOS host with a working 32-bit RADV driver was told it had none
+    and the install was refused before the installer URL was even
+    contacted. Every verdict now reaches the installer — including the one
+    that means "I could not tell".
+    """
+    attempted: list[float | None] = []
+
+    async def fake_install(
+        _installer: Path, target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+    ) -> ci.InstallOutcome:
+        attempted.append(stall_timeout)
+        _install_client(target)
+        return ci.InstallOutcome(installed=True)
+
+    _verdict(monkeypatch, verdict)
+    monkeypatch.setattr(ci, "run_silent_install", fake_install)
+    monkeypatch.setattr(
+        ci, "ensure_installer",
+        lambda url, cache: asyncio.sleep(0, result=Path("/tmp/setup.exe")),
+    )
+    result = asyncio.run(
+        ci.bootstrap_client(
+            tmp_path / "pfx",
+            installer_url="https://example.invalid",
+            installer_cache=tmp_path / "x.exe",
+            resolver=_Resolver(),
+        ),
+    )
+    assert result.success is True
+    assert len(attempted) == 1, "the installer must run whatever the verdict"
+
+
+def test_only_a_proven_absence_arms_the_stall_watchdog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Otherwise the installer freezes at ~25% with no message at all."""
-    monkeypatch.setattr(ci, "has_32bit_vulkan", lambda: False)
+    """A shorter leash is for hosts we *know* lack the driver, not for doubt."""
+    leashes: list[float | None] = []
+
+    async def fake_install(
+        _installer: Path, target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+    ) -> ci.InstallOutcome:
+        leashes.append(stall_timeout)
+        _install_client(target)
+        return ci.InstallOutcome(installed=True)
+
+    monkeypatch.setattr(ci, "run_silent_install", fake_install)
+    monkeypatch.setattr(
+        ci, "ensure_installer",
+        lambda url, cache: asyncio.sleep(0, result=Path("/tmp/setup.exe")),
+    )
+    for index, verdict in enumerate(
+        (Vulkan32.PRESENT, Vulkan32.UNKNOWN, Vulkan32.ABSENT),
+    ):
+        _verdict(monkeypatch, verdict)
+        asyncio.run(
+            ci.bootstrap_client(
+                tmp_path / f"pfx{index}",
+                installer_url="https://example.invalid",
+                installer_cache=tmp_path / "x.exe",
+                resolver=_Resolver(),
+            ),
+        )
+    assert leashes == [None, None, ci.NO_VULKAN_STALL_SECONDS]
+
+
+def test_a_proven_absence_warns_before_it_tries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The user is told what to install, while the attempt still happens."""
+    warnings: list[int] = []
+
+    async def fake_install(
+        _installer: Path, target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+    ) -> ci.InstallOutcome:
+        _install_client(target)
+        return ci.InstallOutcome(installed=True)
+
+    _verdict(monkeypatch, Vulkan32.ABSENT)
+    monkeypatch.setattr(ci, "run_silent_install", fake_install)
+    monkeypatch.setattr(
+        ci, "ensure_installer",
+        lambda url, cache: asyncio.sleep(0, result=Path("/tmp/setup.exe")),
+    )
+    asyncio.run(
+        ci.bootstrap_client(
+            tmp_path / "pfx",
+            installer_url="https://example.invalid",
+            installer_cache=tmp_path / "x.exe",
+            resolver=_Resolver(),
+            on_warning=lambda: warnings.append(1),
+        ),
+    )
+    assert warnings == [1]
+
+
+def test_a_stalled_install_is_reported_as_the_vulkan_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only *after* an attempt that stopped moving — never instead of one."""
+
+    async def fake_install(
+        _installer: Path, _target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+    ) -> ci.InstallOutcome:
+        return ci.InstallOutcome(installed=False, stalled=True)
+
+    _verdict(monkeypatch, Vulkan32.ABSENT)
+    monkeypatch.setattr(ci, "run_silent_install", fake_install)
+    monkeypatch.setattr(
+        ci, "ensure_installer",
+        lambda url, cache: asyncio.sleep(0, result=Path("/tmp/setup.exe")),
+    )
     result = asyncio.run(
         ci.bootstrap_client(
             tmp_path / "pfx",
@@ -152,6 +281,31 @@ def test_missing_32bit_vulkan_is_reported_up_front(
     )
     assert result.success is False
     assert result.error_code == "missing_32bit_vulkan"
+
+
+def test_a_plain_install_failure_is_not_blamed_on_vulkan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_install(
+        _installer: Path, _target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+    ) -> ci.InstallOutcome:
+        return ci.InstallOutcome(installed=False)
+
+    _verdict(monkeypatch, Vulkan32.PRESENT)
+    monkeypatch.setattr(ci, "run_silent_install", fake_install)
+    monkeypatch.setattr(
+        ci, "ensure_installer",
+        lambda url, cache: asyncio.sleep(0, result=Path("/tmp/setup.exe")),
+    )
+    result = asyncio.run(
+        ci.bootstrap_client(
+            tmp_path / "pfx",
+            installer_url="https://example.invalid",
+            installer_cache=tmp_path / "x.exe",
+            resolver=_Resolver(),
+        ),
+    )
+    assert result.error_code == "client_install_failed"
 
 
 # --------------------------------------------------------------------------
@@ -194,7 +348,7 @@ def test_an_existing_client_still_gets_its_tweaks(tmp_path: Path) -> None:
 def test_a_failed_download_surfaces_a_structured_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(ci, "has_32bit_vulkan", lambda: True)
+    _verdict(monkeypatch, Vulkan32.PRESENT)
     monkeypatch.setattr(ci, "_download_sync", lambda url, dest: False)
     result = asyncio.run(
         ci.bootstrap_client(
@@ -214,11 +368,13 @@ def test_install_success_is_judged_by_the_filesystem_not_the_exit_code(
     """The stub has been seen exiting non-zero after a successful install."""
     prefix = tmp_path / "pfx"
 
-    async def fake_install(installer: Path, target: Path, resolver: Any) -> bool:
+    async def fake_install(
+        _installer: Path, target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+    ) -> ci.InstallOutcome:
         _install_client(target)
-        return paths.client_installed(target)
+        return ci.InstallOutcome(installed=paths.client_installed(target))
 
-    monkeypatch.setattr(ci, "has_32bit_vulkan", lambda: True)
+    _verdict(monkeypatch, Vulkan32.PRESENT)
     monkeypatch.setattr(ci, "run_silent_install", fake_install)
     monkeypatch.setattr(
         ci, "ensure_installer",
@@ -239,6 +395,165 @@ def test_install_success_is_judged_by_the_filesystem_not_the_exit_code(
 # --------------------------------------------------------------------------
 # tweaks
 # --------------------------------------------------------------------------
+
+
+def test_hardware_acceleration_is_off_before_the_installer_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stub is CEF too, so the setting has to land first, not after.
+
+    This is the one change that shrinks the 32-bit Vulkan dependency rather
+    than measuring it: without hardware acceleration the client renders its
+    login view in software, which is also the long-standing Wine fix for a
+    spinner with no login buttons.
+    """
+    import json
+
+    from unifideck.stores.battlenet.prefix import tweaks
+
+    prefix = tmp_path / "pfx"
+    (prefix / "drive_c").mkdir(parents=True)
+    config_at_install: list[object] = []
+
+    async def fake_install(
+        _installer: Path, target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+    ) -> ci.InstallOutcome:
+        path = target / "drive_c" / tweaks.CONFIG_RELATIVE
+        config_at_install.append(
+            json.loads(path.read_text())["Client"]["HardwareAcceleration"]
+            if path.exists() else None,
+        )
+        _install_client(target)
+        return ci.InstallOutcome(installed=True)
+
+    _verdict(monkeypatch, Vulkan32.PRESENT)
+    monkeypatch.setattr(ci, "run_silent_install", fake_install)
+    monkeypatch.setattr(
+        ci, "ensure_installer",
+        lambda url, cache: asyncio.sleep(0, result=Path("/tmp/setup.exe")),
+    )
+    asyncio.run(
+        ci.bootstrap_client(
+            prefix,
+            installer_url="https://example.invalid",
+            installer_cache=tmp_path / "x.exe",
+            resolver=_Resolver(),
+        ),
+    )
+    assert config_at_install == ["false"], "installer ran before the config was seeded"
+
+
+# --------------------------------------------------------------------------
+# the stall watchdog measures progress, not the clock
+# --------------------------------------------------------------------------
+
+
+class _FakeProc:
+    """Just enough process to be killed."""
+
+    def __init__(self) -> None:
+        self.killed = False
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+@pytest.mark.asyncio
+async def test_an_installer_writing_nothing_is_killed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefix = tmp_path / "pfx"
+    prefix.mkdir()
+    monkeypatch.setattr(ci, "STALL_POLL_SECONDS", 0.01)
+    proc = _FakeProc()
+
+    await ci._stall_watchdog(prefix, proc, 0.03)  # type: ignore[arg-type]
+
+    assert proc.killed is True
+
+
+@pytest.mark.asyncio
+async def test_a_slow_but_growing_install_is_left_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole reason the leash is a stall timer and not a wall clock.
+
+    A flat 300s cap would kill this install; it is making progress, just
+    slowly — which is what a poor connection looks like, and is not what
+    the 32-bit Vulkan freeze looks like.
+    """
+    prefix = tmp_path / "pfx"
+    prefix.mkdir()
+    monkeypatch.setattr(ci, "STALL_POLL_SECONDS", 0.01)
+    proc = _FakeProc()
+
+    async def grow() -> None:
+        for index in range(12):
+            (prefix / f"chunk{index}").write_bytes(b"x" * (index + 1))
+            await asyncio.sleep(0.01)
+
+    watchdog = asyncio.ensure_future(
+        ci._stall_watchdog(prefix, proc, 0.03),  # type: ignore[arg-type]
+    )
+    await grow()
+    watchdog.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await watchdog
+
+    assert proc.killed is False
+
+
+@pytest.mark.asyncio
+async def test_a_killed_installer_is_reported_as_stalled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wiring behind the error code: watchdog fired, so blame the stall."""
+    prefix = tmp_path / "pfx"
+    prefix.mkdir()
+    monkeypatch.setattr(ci, "STALL_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(ci.paths, "client_installed", lambda _p: False)
+
+    class _Proc:
+        returncode = -9
+
+        def __init__(self) -> None:
+            self._dead = asyncio.Event()
+
+        def kill(self) -> None:
+            self._dead.set()
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            await self._dead.wait()
+            return b"", b""
+
+    outcome = await ci._await_installer(_Proc(), prefix, 0.03)  # type: ignore[arg-type]
+
+    assert outcome.installed is False
+    assert outcome.stalled is True
+
+
+@pytest.mark.asyncio
+async def test_a_normal_failure_is_not_reported_as_stalled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefix = tmp_path / "pfx"
+    prefix.mkdir()
+    monkeypatch.setattr(ci, "STALL_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(ci.paths, "client_installed", lambda _p: False)
+
+    class _Proc:
+        returncode = 1
+
+        def kill(self) -> None:
+            return None
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    outcome = await ci._await_installer(_Proc(), prefix, 0.03)  # type: ignore[arg-type]
+
+    assert outcome.installed is False
+    assert outcome.stalled is False
 
 
 def test_client_config_merge_preserves_saved_account(tmp_path: Path) -> None:
@@ -318,7 +633,7 @@ async def test_the_installer_is_invoked_with_those_args(
         tmp_path / "Battle.net-Setup.exe", tmp_path / "pfx", _Resolver(),
     )
 
-    assert ok is True
+    assert ok.installed is True
     assert seen, "installer was never spawned"
     for arg in ci.INSTALLER_ARGS:
         assert arg in seen[0], f"{arg} missing from the installer command"
@@ -380,4 +695,4 @@ def test_the_launcher_owns_the_client_install() -> None:
     """The install helper must be reachable from the launcher handler."""
     from unifideck.launcher.proton.handlers import battlenet as h
 
-    assert callable(h._install_client_here)
+    assert callable(h.bootstrap.install_client)

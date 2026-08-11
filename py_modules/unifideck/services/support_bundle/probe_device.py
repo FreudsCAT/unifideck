@@ -22,6 +22,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from unifideck.utils.vulkan import as_dict, detect_32bit_vulkan
+
 from . import procscan
 
 logger = logging.getLogger(__name__)
@@ -144,19 +146,26 @@ def cpu_block() -> dict[str, Any]:
 
 
 def gpu_block() -> dict[str, Any]:
-    """DRM driver and PCI id per card, plus attached displays."""
+    """DRM driver and PCI id per card, displays, and the Vulkan ICD inventory.
+
+    The ICD list earns its place the hard way: a Battle.net install was
+    refused for want of a 32-bit Vulkan driver on a machine that had one,
+    and answering "did it really?" meant cross-reading Steam's shader log
+    because this bundle recorded nothing about Vulkan at all.
+    """
     cards: list[dict[str, Any]] = []
     drm = Path("/sys/class/drm")
+    vulkan = as_dict(detect_32bit_vulkan())
     if not drm.is_dir():
-        return {"cards": cards, "displays": []}
+        return {"cards": cards, "displays": [], "vulkan": vulkan}
     try:
         entries = sorted(drm.iterdir())
     except OSError:
-        return {"cards": cards, "displays": []}
+        return {"cards": cards, "displays": [], "vulkan": vulkan}
     for entry in entries:
         if entry.name.startswith("card") and "-" not in entry.name:
             cards.append(_card_info(entry))
-    return {"cards": cards, "displays": _displays(entries)}
+    return {"cards": cards, "displays": _displays(entries), "vulkan": vulkan}
 
 
 def _card_info(entry: Path) -> dict[str, Any]:

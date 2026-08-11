@@ -18,22 +18,43 @@ Two things this must get right or the install hangs rather than fails:
   ``XDG_RUNTIME_DIR`` / DBus hangs. ``WineEnvResolver`` borrows them from
   the live Steam process.
 * **The client is 32-bit** (PE32 i386, confirmed on-device). Without a
-  32-bit Vulkan ICD the installer freezes around 25% with no error, so that
-  is checked up front and reported rather than waited on.
+  32-bit Vulkan driver on the host the installer freezes around 25% with no
+  error at all.
+
+That second one used to be a **gate**: a filename guess at the host's Vulkan
+ICDs, refusing the install when it came up empty. It came up empty on a
+CachyOS machine whose driver Steam had enumerated 42 seconds earlier, and
+that user was left with no client, no sign-in and no library — for a
+capability they had. So the shape is now:
+
+* :mod:`unifideck.utils.vulkan` answers the question properly, by ELF class
+  rather than by filename, and is allowed to answer "I cannot tell";
+* **no verdict blocks the install.** Not even ``ABSENT`` — it buys a stall
+  watchdog and a warning, not a refusal;
+* the hardware-acceleration tweak is written *before* the installer runs
+  rather than after, so the stub itself has the best chance of not needing
+  the GPU in the first place.
+
+The rule this encodes: never refuse a user the client over a preflight
+whose failure mode is a false negative.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import os
 import shutil
 import ssl
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from unifideck.stores.battlenet import paths
 from unifideck.stores.shared.wine_env import WineEnvResolver
+from unifideck.utils.vulkan import Vulkan32, detect_32bit_vulkan
 
 from . import tweaks
 
@@ -44,6 +65,11 @@ MIN_INSTALLER_BYTES = 1_000_000
 DOWNLOAD_TIMEOUT_SECONDS = 300
 # The installer downloads the real client, so it needs a generous budget.
 INSTALL_TIMEOUT_SECONDS = 1800
+# Applied only when the host is *proven* to lack a 32-bit Vulkan driver: how
+# long the installer may write nothing at all before we call it wedged.
+# Measured against progress, never the clock — see :func:`_stall_watchdog`.
+NO_VULKAN_STALL_SECONDS = 300.0
+STALL_POLL_SECONDS = 15.0
 
 # Pre-answer the two bootstrapper screens that otherwise wait for a click.
 # Without them the wizard stops on the language screen forever — see
@@ -65,6 +91,20 @@ class BootstrapResult:
     success: bool
     error: str | None = None
     error_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InstallOutcome:
+    """Outcome of one installer run.
+
+    ``stalled`` is carried separately so the caller can report *why* rather
+    than a generic failure: an installer killed for writing nothing on a
+    host with no 32-bit Vulkan driver is a different message from one that
+    exited on its own.
+    """
+
+    installed: bool
+    stalled: bool = False
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -127,32 +167,77 @@ async def ensure_installer(url: str, cache_path: Path) -> Path | None:
 
 
 def has_32bit_vulkan() -> bool:
-    """Whether a 32-bit Vulkan ICD is present.
+    """Whether a 32-bit Vulkan driver is installed on the host.
 
-    The client is PE32 i386. Without this the installer freezes at ~25%
-    with no error message at all, so it is far better to say so up front.
+    Kept as the boolean face of :func:`~unifideck.utils.vulkan.detect_32bit_vulkan`
+    for callers that only want a yes. ``UNKNOWN`` reads as ``False`` here,
+    which is why :func:`bootstrap_client` uses the three-way verdict instead:
+    the distinction between "no" and "cannot tell" is the whole point.
     """
-    roots = (
-        Path("/usr/share/vulkan/icd.d"),
-        Path("/usr/local/share/vulkan/icd.d"),
-        Path("~/.local/share/vulkan/icd.d").expanduser(),
-    )
-    for root in roots:
+    return detect_32bit_vulkan().verdict is Vulkan32.PRESENT
+
+
+def _tree_bytes(root: Path) -> int:
+    """Total bytes under ``root``. Never raises; unreadable entries count 0."""
+    total = 0
+    stack = [root]
+    while stack:
+        current = stack.pop()
         try:
-            for icd in root.glob("*.json"):
-                if "i686" in icd.name or "32" in icd.name:
-                    return True
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(Path(entry.path))
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat().st_size
+                    except OSError:
+                        continue
         except OSError:
             continue
-    return False
+    return total
+
+
+async def _stall_watchdog(prefix: Path, proc: asyncio.subprocess.Process, budget: float) -> None:
+    """Kill ``proc`` once the prefix stops growing for ``budget`` seconds.
+
+    A wall-clock cap cannot tell a frozen installer from a slow download —
+    it kills both — so this measures *progress* instead. The freeze this
+    exists for (a 32-bit client with no 32-bit Vulkan driver) writes nothing
+    at all from the moment it wedges, while even a crawling download keeps
+    adding bytes.
+    """
+    last = -1
+    idle = 0.0
+    while True:
+        await asyncio.sleep(STALL_POLL_SECONDS)
+        size = await asyncio.to_thread(_tree_bytes, prefix)
+        if size != last:
+            last, idle = size, 0.0
+            continue
+        idle += STALL_POLL_SECONDS
+        if idle >= budget:
+            logger.error(
+                "[Battlenet] installer wrote nothing for %.0fs — stalled, killing it",
+                budget,
+            )
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.kill()
+            return
 
 
 async def run_silent_install(
     installer: Path,
     prefix: Path,
     resolver: WineEnvResolver,
-) -> bool:
+    *,
+    stall_timeout: float | None = None,
+) -> InstallOutcome:
     """Run the installer inside ``prefix`` under umu. Never raises.
+
+    ``stall_timeout`` arms :func:`_stall_watchdog` for hosts proven to lack
+    a 32-bit Vulkan driver. ``None`` — every other path — keeps the plain
+    30-minute budget and no polling.
 
     The arguments are load-bearing, not cosmetic. Launched bare, the
     bootstrapper opens its wizard and *waits on the language screen* — in
@@ -178,7 +263,7 @@ async def run_silent_install(
     umu_run = resolver.find_umu_run()
     if not umu_run:
         logger.error("[Battlenet] umu-run not found — cannot install the client")
-        return False
+        return InstallOutcome(installed=False)
 
     env = resolver.build_env(prefix, GAMEID)
     if not env.get("DISPLAY") and not env.get("WAYLAND_DISPLAY"):
@@ -188,7 +273,7 @@ async def run_silent_install(
             "[Battlenet] no DISPLAY/WAYLAND_DISPLAY available — refusing to "
             "run the installer (it would hang rather than fail)",
         )
-        return False
+        return InstallOutcome(installed=False)
 
     await asyncio.to_thread(Path(prefix).mkdir, parents=True, exist_ok=True)
     logger.info("[Battlenet] installing client into %s", prefix)
@@ -203,8 +288,20 @@ async def run_silent_install(
         )
     except OSError:
         logger.exception("[Battlenet] could not spawn the installer")
-        return False
+        return InstallOutcome(installed=False)
 
+    return await _await_installer(proc, prefix, stall_timeout)
+
+
+async def _await_installer(
+    proc: asyncio.subprocess.Process,
+    prefix: Path,
+    stall_timeout: float | None,
+) -> InstallOutcome:
+    """Wait out the installer, with the stall watchdog when one is armed."""
+    watchdog: asyncio.Task[None] | None = None
+    if stall_timeout:
+        watchdog = asyncio.ensure_future(_stall_watchdog(Path(prefix), proc, stall_timeout))
     try:
         _out, err = await asyncio.wait_for(
             proc.communicate(), timeout=INSTALL_TIMEOUT_SECONDS,
@@ -213,8 +310,16 @@ async def run_silent_install(
         logger.exception("[Battlenet] installer timed out — killing")
         proc.kill()
         await proc.wait()
-        return False
+        return InstallOutcome(installed=False)
+    finally:
+        if watchdog is not None:
+            watchdog.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watchdog
 
+    # The watchdog only ever finishes by killing the process, so a completed
+    # task means the run it was watching was the stalled one.
+    stalled = watchdog is not None and not watchdog.cancelled()
     if proc.returncode != 0:
         logger.warning(
             "[Battlenet] installer exited %s: %s",
@@ -223,7 +328,8 @@ async def run_silent_install(
         )
     # Trust the filesystem over the exit code: the stub has been observed
     # exiting non-zero after a successful install.
-    return bool(await asyncio.to_thread(paths.client_installed, prefix))
+    installed = bool(await asyncio.to_thread(paths.client_installed, prefix))
+    return InstallOutcome(installed=installed, stalled=stalled and not installed)
 
 
 def apply_prefix_tweaks(prefix: Path) -> bool:
@@ -237,28 +343,71 @@ def apply_prefix_tweaks(prefix: Path) -> bool:
     return ok
 
 
+def preseed_client_config(prefix: Path) -> bool:
+    """Write ``HardwareAcceleration=false`` *before* the installer runs.
+
+    The bootstrapper stub is CEF too, and the config it reads is the same
+    one the installed client reads. Seeding it first is the one thing here
+    that actually shrinks the 32-bit-Vulkan dependency rather than
+    detecting it, so it happens on every path regardless of verdict.
+
+    Best-effort by design: a fresh prefix has no ``drive_c`` until umu
+    creates one, in which case this no-ops and
+    :func:`apply_prefix_tweaks` writes the same settings afterwards.
+    ``write_client_config`` merges, so writing twice is harmless.
+    """
+    drive_c = paths.drive_c(prefix)
+    if drive_c is None:
+        return False
+    return tweaks.write_client_config(drive_c)
+
+
+def _stall_leash(on_warning: Callable[[], None] | None) -> float | None:
+    """Arm the stall watchdog only when 32-bit Vulkan is *proven* missing.
+
+    Never returns a refusal. ``UNKNOWN`` is treated exactly like
+    ``PRESENT``: a probe that could not tell must not cost the user their
+    client, which is the whole reason this stopped being a gate.
+    """
+    report = detect_32bit_vulkan()
+    logger.info("[Battlenet] 32-bit Vulkan check: %s", report.summary())
+    if report.verdict is not Vulkan32.ABSENT:
+        if report.verdict is Vulkan32.UNKNOWN:
+            logger.warning(
+                "[Battlenet] could not determine 32-bit Vulkan support — "
+                "installing anyway rather than blocking on it",
+            )
+        return None
+    logger.warning(
+        "[Battlenet] no 32-bit Vulkan driver found — installing anyway, but "
+        "the installer will be killed after %.0fs of no progress",
+        NO_VULKAN_STALL_SECONDS,
+    )
+    if on_warning is not None:
+        on_warning()
+    return NO_VULKAN_STALL_SECONDS
+
+
 async def bootstrap_client(
     prefix: Path,
     *,
     installer_url: str,
     installer_cache: Path,
     resolver: WineEnvResolver,
+    on_warning: Callable[[], None] | None = None,
 ) -> BootstrapResult:
-    """Ensure ``prefix`` contains a usable, tweaked Battle.net client."""
+    """Ensure ``prefix`` contains a usable, tweaked Battle.net client.
+
+    ``on_warning`` fires once, before the install, when the host is proven
+    to lack a 32-bit Vulkan driver. It exists so the launcher can toast
+    that warning without this module reaching into the frontend bridge.
+    """
     if paths.client_installed(prefix):
         if not tweaks.tweaks_applied(prefix):
             apply_prefix_tweaks(prefix)
         return BootstrapResult(success=True)
 
-    if not has_32bit_vulkan():
-        return BootstrapResult(
-            success=False,
-            error=(
-                "32-bit Vulkan drivers are missing. The Battle.net client is "
-                "32-bit and its installer will freeze without them."
-            ),
-            error_code="missing_32bit_vulkan",
-        )
+    stall_timeout = _stall_leash(on_warning)
 
     installer = await ensure_installer(installer_url, installer_cache)
     if installer is None:
@@ -268,13 +417,31 @@ async def bootstrap_client(
             error_code="installer_download_failed",
         )
 
-    if not await run_silent_install(installer, prefix, resolver):
-        return BootstrapResult(
-            success=False,
-            error="The Battle.net client installer did not complete",
-            error_code="client_install_failed",
-        )
+    preseed_client_config(prefix)
+    outcome = await run_silent_install(
+        installer, prefix, resolver, stall_timeout=stall_timeout,
+    )
+    if not outcome.installed:
+        return _install_failure(outcome)
 
     apply_prefix_tweaks(prefix)
     logger.info("[Battlenet] client installed into %s", prefix)
     return BootstrapResult(success=True)
+
+
+def _install_failure(outcome: InstallOutcome) -> BootstrapResult:
+    """Name the failure. A stall on a driverless host is its own diagnosis."""
+    if outcome.stalled:
+        return BootstrapResult(
+            success=False,
+            error=(
+                "The Battle.net installer stopped making progress. This host has "
+                "no 32-bit Vulkan driver, and the client's installer is 32-bit."
+            ),
+            error_code="missing_32bit_vulkan",
+        )
+    return BootstrapResult(
+        success=False,
+        error="The Battle.net client installer did not complete",
+        error_code="client_install_failed",
+    )
