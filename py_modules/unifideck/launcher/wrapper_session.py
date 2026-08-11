@@ -46,10 +46,11 @@ import os
 import shutil
 from pathlib import Path
 
-from unifideck.launcher import wine_registry
+from unifideck.launcher import wine_registry, wrapper_prefs
 from unifideck.launcher.wrapper_session_specs import (
     GAMES_DIR_NAME,
     SPECS,
+    PrefsSpec,
     SessionSpec,
     read_gaclientid,
     resolve_drive_c,
@@ -63,6 +64,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "GAMES_DIR_NAME",
     "SPECS",
+    "PrefsSpec",
     "SessionSpec",
     "auth_prefix",
     "capture",
@@ -350,16 +352,21 @@ def inject(
     overwriting a target that *does* have one would sign the user out), and
     when the source is not newer than the target (a client that just rotated
     its own token must not be reset to an older copy).
+
+    The return value is about the *session*. The launcher settings ride along
+    on the way past, under their own guards in ``wrapper_prefs``, and a store
+    can perfectly well have settings to carry and no session to inject.
     """
     if Path(source).resolve() == Path(target).resolve():
         return False
+    if not _identities_agree(spec, Path(source), Path(target)):
+        return False
+    wrapper_prefs.merge(spec, source, target, target_busy=target_busy)
     if not has_session(spec, source):
         logger.info(
             "[wrapper_session] %s: no session in %s — nothing to inject",
             spec.store, Path(source).name,
         )
-        return False
-    if not _identities_agree(spec, Path(source), Path(target)):
         return False
     if has_session(spec, target) and fingerprint(spec, source) <= fingerprint(
         spec, target,
@@ -401,17 +408,22 @@ def capture(
     its rotated token on shutdown — which is why Battle.net's teardown
     SIGTERMs before it SIGKILLs — so capturing while it is still running can
     read a torn vault.
+
+    As in :func:`inject`, the launcher settings ride along under their own
+    guards, and this is the leg that makes a setting changed inside one game's
+    client reach the others: it lands in auth here, and each launch injects.
     """
     if Path(source).resolve() == Path(auth).resolve():
         return False
+    if not _identities_agree(spec, Path(source), Path(auth)):
+        return False
+    wrapper_prefs.merge(spec, source, auth, target_busy=auth_busy)
     if not has_session(spec, source):
         logger.info(
             "[wrapper_session] %s: %s holds no session — not capturing "
             "(a signed-out prefix must never overwrite auth)",
             spec.store, Path(source).name,
         )
-        return False
-    if not _identities_agree(spec, Path(source), Path(auth)):
         return False
     source_fp = fingerprint(spec, source)
     auth_fp = fingerprint(spec, auth)

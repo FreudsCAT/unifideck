@@ -272,6 +272,84 @@ def test_a_running_client_is_not_started_twice(
     assert stub["spawned"] == 0
 
 
+def _record_startup(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the prefix-preparation steps, in the order they run."""
+    order: list[str] = []
+
+    async def fake_inject(prefix: Any) -> None:
+        order.append("inject")
+
+    async def fake_tweaks(plan_: Any) -> bool:
+        order.append("tweaks")
+        return True
+
+    monkeypatch.setattr(handler.session, "inject_into", fake_inject)
+    monkeypatch.setattr(handler.bootstrap, "ensure_tweaks", fake_tweaks)
+    return order
+
+
+def test_the_prefix_is_prepared_before_the_client_starts(
+    plan: _Plan, stub: dict, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both writes have to land while the client is down.
+
+    The client reads its session and its settings at startup and rewrites the
+    settings file wholesale from memory when it exits, so anything written to a
+    live client's prefix is discarded without an error.
+    """
+    monkeypatch.setattr(handler, "resolve_family", lambda uid: "Fen")
+    monkeypatch.setattr(handler, "_issue_exec", _record_exec(stub))
+    order = _record_startup(monkeypatch)
+    _arm(monkeypatch, ready=True, game="7")
+    # Ready only *after* we start it: this is the cold-client path.
+    monkeypatch.setattr(handler.watch, "client_ready", lambda p: False)
+
+    asyncio.run(handler.battlenet_launch(plan))
+
+    assert order == ["inject", "tweaks"]
+    assert stub["spawned"] == 1
+
+
+def test_the_tweaks_never_run_before_the_injection(
+    plan: _Plan, stub: dict, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordering with teeth, because getting it backwards is silent.
+
+    The injection carries the user's launcher settings in, and it takes the
+    *newer* of the two settings files. Writing the tweaks first would make this
+    prefix's file the newer one, the injection would decline, and the setting
+    would stay behind in the prefix it was changed in - which is the bug the
+    settings merge exists to fix, reintroduced by a swapped pair of lines.
+    """
+    monkeypatch.setattr(handler, "resolve_family", lambda uid: "Fen")
+    monkeypatch.setattr(handler, "_issue_exec", _record_exec(stub))
+    order = _record_startup(monkeypatch)
+    _arm(monkeypatch, ready=True, game="7")
+    monkeypatch.setattr(handler.watch, "client_ready", lambda p: False)
+
+    asyncio.run(handler.battlenet_launch(plan))
+
+    assert order.index("inject") < order.index("tweaks")
+
+
+def test_a_client_already_up_is_never_written_underneath(
+    plan: _Plan, stub: dict, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No preparation at all when the client is already running.
+
+    Neither write would survive, and the settings merge would have recorded a
+    change that never reached disk.
+    """
+    monkeypatch.setattr(handler, "resolve_family", lambda uid: "Fen")
+    monkeypatch.setattr(handler, "_issue_exec", _record_exec(stub))
+    order = _record_startup(monkeypatch)
+    _arm(monkeypatch, ready=True, game="7")
+
+    asyncio.run(handler.battlenet_launch(plan))
+
+    assert order == []
+
+
 # --------------------------------------------------------------------------
 # gating environment
 # --------------------------------------------------------------------------

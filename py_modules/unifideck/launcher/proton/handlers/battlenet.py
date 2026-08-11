@@ -256,6 +256,11 @@ async def _start_client_here(plan: ProtonLaunchPlan, launcher_exe: Path) -> None
     await _release_other_clients(plan)
     await _clear_stale_session(plan)
     await session.inject_into(plan.prefix_path)
+    # After the injection, never before. The injection carries the user's
+    # launcher settings in, and it takes the *newer* settings file of the two;
+    # writing the tweaks first would make this prefix's file the newer one and
+    # the settings would stay behind in the prefix they were changed in.
+    await bootstrap.ensure_tweaks(plan)
     await _start_client_detached(plan, launcher_exe)
     launcher_toast(
         "toasts.launcher.battlenetStartingClientMessage",

@@ -328,7 +328,14 @@ def test_an_existing_client_short_circuits(tmp_path: Path) -> None:
 
 
 def test_an_existing_client_still_gets_its_tweaks(tmp_path: Path) -> None:
-    """A prefix from an older plugin version must self-heal its settings."""
+    """A prefix from an older plugin version must self-heal its settings.
+
+    Note what this does *not* prove: that anything calls it. For the whole life
+    of this code no game prefix ever reached here, because the launcher only
+    bootstraps a prefix whose client exe is missing and every game prefix is
+    cloned from a template that already has one. See
+    :func:`test_ensure_tweaks_reaches_a_prefix_the_bootstrap_never_will`.
+    """
     from unifideck.stores.battlenet.prefix import tweaks
 
     prefix = tmp_path / "pfx"
@@ -343,6 +350,55 @@ def test_an_existing_client_still_gets_its_tweaks(tmp_path: Path) -> None:
         ),
     )
     assert tweaks.tweaks_applied(prefix) is True
+
+
+class _TweakPlan:
+    def __init__(self, prefix: Path) -> None:
+        self.prefix_path = prefix
+
+
+def test_ensure_tweaks_reaches_a_prefix_the_bootstrap_never_will(
+    tmp_path: Path,
+) -> None:
+    """The launch-path entry point, for a prefix that arrived pre-populated.
+
+    Measured on-device: no ``Battle.net.config`` in the auth prefix, the
+    template or a game prefix carried ``HardwareAcceleration``, and no prefix
+    carried the tweak marker - so the hardware-acceleration workaround was not
+    in force anywhere, on any prefix, ever.
+    """
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap as bootstrap
+    from unifideck.stores.battlenet.prefix import tweaks
+
+    prefix = tmp_path / "pfx"
+    _install_client(prefix)
+
+    assert asyncio.run(bootstrap.ensure_tweaks(_TweakPlan(prefix))) is True
+    assert tweaks.tweaks_applied(prefix) is True
+    config = paths.client_config(prefix)
+    assert config is not None
+    assert '"HardwareAcceleration": "false"' in config.read_text()
+
+
+def test_ensure_tweaks_is_marker_gated(tmp_path: Path) -> None:
+    """One stat on the normal path: it runs before every client start."""
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap as bootstrap
+
+    prefix = tmp_path / "pfx"
+    _install_client(prefix)
+    plan = _TweakPlan(prefix)
+
+    assert asyncio.run(bootstrap.ensure_tweaks(plan)) is True
+    assert asyncio.run(bootstrap.ensure_tweaks(plan)) is False
+
+
+def test_ensure_tweaks_never_fails_a_launch(tmp_path: Path) -> None:
+    """A prefix with no drive_c yet must be a quiet False, not an exception."""
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap as bootstrap
+
+    assert asyncio.run(
+        bootstrap.ensure_tweaks(_TweakPlan(tmp_path / "never-initialised")),
+    ) is False
 
 
 def test_a_failed_download_surfaces_a_structured_error(

@@ -313,29 +313,37 @@ def test_unreadable_identity_does_not_block_the_copy(tmp_path: Path) -> None:
     assert ws.inject(SPEC, auth, fresh) is True
 
 
-def test_the_client_config_is_never_copied(tmp_path: Path) -> None:
-    """It carries per-prefix state that copying would corrupt.
+def test_the_client_config_is_never_copied_as_a_file(tmp_path: Path) -> None:
+    """It mixes settings with per-prefix state, so it moves key by key.
 
     Measured across a rotation: the identity keys (``GaClientId``,
     ``AutoLogin``, ``SavedAccountNames``) were byte-identical in every tier,
-    while what actually differed was ``Install.DefaultInstallPath`` and the
-    per-game ``LastPlayed``. So this file is an identity to verify, never
-    state to move.
+    while what actually differed was ``Client.Install.DefaultInstallPath`` and
+    the per-game ``LastPlayed``. A file copy would carry those; the session pass
+    must not touch the file at all beyond reading the identity off it.
+
+    ``launcher/wrapper_prefs`` owns the key-by-key half, and
+    ``test_wrapper_prefs`` covers it. What this asserts is the boundary: the
+    per-prefix keys survive an inject.
     """
     auth = _make_prefix(tmp_path, "auth", mtime=2000.0)
     game = _make_prefix(tmp_path, "game", mtime=1000.0)
     _write(
         game, CONFIG,
         json.dumps({
-            "Client": {"GaClientId": "GUID-A"},
-            "Install": {"DefaultInstallPath": "D:/Games"},
+            "Client": {
+                "GaClientId": "GUID-A",
+                "Install": {"DefaultInstallPath": "D:/Games"},
+            },
+            "Games": {"d1": {"LastPlayed": "1786402946"}},
         }).encode(),
         mtime=1000.0,
     )
 
     assert ws.inject(SPEC, auth, game) is True
     kept = json.loads((game / "drive_c" / CONFIG).read_text())
-    assert kept["Install"]["DefaultInstallPath"] == "D:/Games"
+    assert kept["Client"]["Install"]["DefaultInstallPath"] == "D:/Games"
+    assert kept["Games"]["d1"]["LastPlayed"] == "1786402946"
 
 
 # --------------------------------------------------------------------------

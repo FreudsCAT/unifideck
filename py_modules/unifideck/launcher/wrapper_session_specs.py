@@ -45,11 +45,42 @@ The files that travel with the token, and why each is classified as it is:
         ``battlenet/store.py`` documents the licence ledger as surviving a
         sign-out. Carried for ownership freshness only.
     AppData/Roaming/Battle.net/Battle.net.config
-        **Never copied.** ``Client.GaClientId`` is identical in every tier
-        because the prefixes are clones, so it is an *identity to verify*, not
-        state to move. The same file holds per-prefix
-        ``Install.DefaultInstallPath`` and per-game ``LastPlayed``, which
-        copying would corrupt.
+        Not session material, and never copied **as a file**. It is the
+        client's settings file, and it travels key by key instead: see
+        :class:`PrefsSpec` and ``launcher/wrapper_prefs``.
+
+**The settings file is per-prefix, and that was a bug of its own.** Every game
+gets its own prefix, so the launcher's own settings live in whichever prefix
+the user happened to change them in and reach no other. The reported symptom
+was a language setting that "reverts to default every time you launch a game":
+not a clobber, an absence of propagation. Measured layout (same client build)::
+
+    {
+      "Client": { "GaClientId": ..., "AutoLogin": ..., "Toasts": {...},
+                  "Version": { "LastBuildVersion": "17651", ... },
+                  "Install": { "DefaultInstallPath": "C:/Program Files (x86)" } },
+      "5a61123b37cafce1": {                    # hash of the client install path
+          "Client": { "Language": "enUS", "LoginSettings": {...} },
+          "Path": "C:\\Program Files (x86)\\Battle.net",
+          "Services": { "LastLoginRegion": "US", ... } },
+      "Games": { "d1": { "LastPlayed": ..., "LastActioned": ... } }
+    }
+
+Two things about it are worth writing down, because neither is guessable:
+
+* **The launcher's language is** ``<install-hash>.Client.Language``, not
+  ``Client.Language``. The hash covers the client's install path, which
+  ``client_install.INSTALLER_ARGS`` pins to ``C:\\Program Files (x86)\\
+  Battle.net``, so it is the same string in every one of our prefixes
+  (verified: ``5a61123b37cafce1`` in the auth prefix, the template and a game
+  prefix). A store that let the install path vary would get a second section
+  here rather than a merge conflict.
+* **The client rewrites the whole file from memory when it starts.** A game
+  prefix's config was observed carrying a ``LastPlayed`` from a session nine
+  hours older than the file's own mtime. So a write that lands while the client
+  is up is discarded without error, exactly the hazard
+  ``wine_registry.registry_is_writable`` exists for. Preferences are written
+  only into a prefix with no live client.
 
 Stdlib-only; runs under the SYSTEM python (3.10-3.14).
 """
@@ -81,6 +112,32 @@ def resolve_drive_c(prefix: Path | str) -> Path | None:
 
 
 @dataclass(frozen=True, slots=True)
+class PrefsSpec:
+    """One wrapper store's launcher settings, and what must not travel.
+
+    A **denylist**, deliberately, where the session is an allowlist. The two
+    are different kinds of question. Session material is a fixed, measurable
+    set of files, and guessing at it is the mistake this module's own docstring
+    warns about. Settings are not: a vendor client writes a key only once the
+    user moves it off default, so ``HardwareAcceleration`` is absent from every
+    config until something turns it off, and no allowlist we could write today
+    would carry the setting a user changes next release. Naming the handful of
+    keys that are provably *not* preferences is the only form of this that can
+    be complete.
+
+    ``exclude`` holds dotted paths. A ``*`` segment matches exactly one key,
+    which is how the install-hash section above is addressed without hardcoding
+    a hash - the same single-``*`` convention :meth:`SessionSpec.expand` uses
+    for Battle.net's numeric account id. A pattern matches its whole subtree,
+    so ``Games`` excludes ``Games.d1.LastPlayed`` without naming it.
+    """
+
+    # drive_c-relative path to the client's settings file.
+    file: str
+    exclude: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class SessionSpec:
     """One wrapper store's session material and how to judge it.
 
@@ -108,6 +165,9 @@ class SessionSpec:
     identity: Callable[[Path], str | None] | None = field(
         default=None, compare=False,
     )
+    # The client's own settings file, moved key by key rather than copied.
+    # A store without one leaves this None and no preference pass runs.
+    prefs: PrefsSpec | None = None
 
     def expand(self, drive_c: Path, patterns: tuple[str, ...]) -> list[Path]:
         """Resolve ``patterns`` against ``drive_c``, expanding any ``*``."""
@@ -120,6 +180,10 @@ class SessionSpec:
         return found
 
 
+_BNET_LOCAL = "users/steamuser/AppData/Local/Battle.net"
+_BNET_CONFIG = "users/steamuser/AppData/Roaming/Battle.net/Battle.net.config"
+
+
 def read_gaclientid(prefix: Path) -> str | None:
     """Battle.net's client-instance id, the value its token is bound to.
 
@@ -128,14 +192,15 @@ def read_gaclientid(prefix: Path) -> str | None:
     straight in. It is identical across our tiers because they are clones, so
     a mismatch means the prefix is not one of ours and its vault would be
     rejected anyway.
+
+    Read from the settings file but never written back into one: it is the
+    identity a copy is checked against, so a preference pass that carried it
+    would be checking prefixes against a value it had itself installed.
     """
     drive_c = resolve_drive_c(prefix)
     if drive_c is None:
         return None
-    config = (
-        drive_c
-        / "users/steamuser/AppData/Roaming/Battle.net/Battle.net.config"
-    )
+    config = drive_c / _BNET_CONFIG
     try:
         data = json.loads(config.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -147,8 +212,6 @@ def read_gaclientid(prefix: Path) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-_BNET_LOCAL = "users/steamuser/AppData/Local/Battle.net"
-
 # Exactly the three keys the on-device experiment in ``manager.py`` named, and
 # no more. The sibling ``Launch Options`` key under the same parent is
 # deliberately excluded: it carries per-game subkeys (``Launch Options\\OSI``
@@ -156,6 +219,42 @@ _BNET_LOCAL = "users/steamuser/AppData/Local/Battle.net"
 # options into every other prefix is not something a session transplant should
 # do. ``UnifiedAuth`` is the token; its section timestamp is the rotation clock.
 _BNET_REG = "Software\\\\Blizzard Entertainment\\\\Battle.net\\\\"
+
+# Everything in ``Battle.net.config`` is a user preference except these, and
+# each one is here for a reason that cost something to learn:
+#
+#   Client.GaClientId          the identity ``read_gaclientid`` verifies
+#                              against; see its docstring
+#   Client.Install             per-prefix. Holds DefaultInstallPath, and a
+#                              game prefix may sit on removable storage the
+#                              other prefixes cannot see
+#   Client.SavedAccountNames   sign-in state. Owned by the session pass and by
+#   Client.AutoLogin           ``tweaks.clear_client_credentials``; carrying
+#                              these would let one prefix's sign-out travel
+#   Client.Version             per-prefix client build state. The client
+#                              self-updates into a versioned sibling directory
+#                              per prefix, so LastBuildVersion from a prefix
+#                              that updated would misreport this one's build
+#   Games                      per-game LastPlayed / LastActioned / Resumable
+#   *.Path, *.Services         inside the install-hash section: the install
+#                              path, and per-login service routing
+#
+# Not listed, therefore carried: ``<hash>.Client.Language`` (the reported bug),
+# LoginSettings, Toasts, AutoStartMinimized, GameSearch, and the
+# HardwareAcceleration / Sound / Streaming tweaks ``prefix/tweaks.py`` writes.
+_BNET_PREFS = PrefsSpec(
+    file=_BNET_CONFIG,
+    exclude=(
+        "Client.GaClientId",
+        "Client.Install",
+        "Client.SavedAccountNames",
+        "Client.AutoLogin",
+        "Client.Version",
+        "Games",
+        "*.Path",
+        "*.Services",
+    ),
+)
 
 # One row per wrapper store. Ubisoft joins this table when its private
 # ``session/`` package is ported onto the shared layer; its ``identity``
@@ -175,6 +274,7 @@ SPECS: dict[str, SessionSpec] = {
             f"{_BNET_REG}Identity",
         ),
         identity=read_gaclientid,
+        prefs=_BNET_PREFS,
     ),
 }
 

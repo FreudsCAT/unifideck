@@ -24,6 +24,7 @@ SYSTEM python (3.10-3.14) that runs this process.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -103,3 +104,42 @@ async def install_client(plan: ProtonLaunchPlan) -> BootstrapResult | None:
         return result
     logger.info("[battlenet] client installed into %s", plan.prefix_path)
     return result
+
+
+async def ensure_tweaks(plan: ProtonLaunchPlan) -> bool:
+    """Apply the client tweaks to a prefix that already holds a client.
+
+    ``bootstrap_client`` does this too, but only ever reaches a prefix it had to
+    install into. **No game prefix is ever one of those.** Every game prefix is
+    an rsync clone of a template that already contains the client, so
+    ``_bring_up_client`` finds the exe present, never calls the bootstrap, and
+    the tweaks were silently skipped for the entire life of the prefix.
+    Measured on-device: no ``Battle.net.config`` in the auth prefix, the
+    template, or a game prefix carried ``HardwareAcceleration``, and no prefix
+    carried the tweak marker. So the Lutris hardware-acceleration workaround
+    (the fix for a login view that renders as a spinner with no buttons) was
+    not actually in force anywhere. It went unnoticed because a host *with* a
+    32-bit Vulkan driver does not need it.
+
+    Marker-gated, so this is one ``stat`` on the normal path.
+
+    Must run while the client is down: it merges into a file the client rewrites
+    wholesale from memory when it exits.
+    """
+    try:
+        from unifideck.stores.battlenet.prefix.client_install import (
+            apply_prefix_tweaks,
+        )
+        from unifideck.stores.battlenet.prefix.tweaks import tweaks_applied
+
+        if await asyncio.to_thread(tweaks_applied, plan.prefix_path):
+            return False
+        applied = await asyncio.to_thread(apply_prefix_tweaks, plan.prefix_path)
+    except Exception:
+        # Never fail a launch over this. The client starts either way, and on
+        # the overwhelming majority of hosts it starts fine without the tweak.
+        logger.exception("[battlenet] could not apply the client tweaks")
+        return False
+    if applied:
+        logger.info("[battlenet] applied client tweaks to %s", plan.prefix_path)
+    return applied

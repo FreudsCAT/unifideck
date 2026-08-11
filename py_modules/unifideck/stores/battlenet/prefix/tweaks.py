@@ -94,6 +94,25 @@ def mark_applied(prefix: Path) -> bool:
     return True
 
 
+def _forget_login_routing(config: dict[str, object]) -> None:
+    """Drop the remembered login routing from every install section.
+
+    These keys are **not** under ``Client``. The measured layout keeps them in
+    ``<install-hash>.Services``, where the hash covers the client's install
+    path, so popping them from ``Client`` (as this once did) was a silent
+    no-op. The section name has to be discovered rather than known, hence the
+    walk: anything that is not ``Client`` or ``Games`` is an install section.
+    """
+    for name, section in config.items():
+        if name in ("Client", "Games") or not isinstance(section, dict):
+            continue
+        services = section.get("Services")
+        if not isinstance(services, dict):
+            continue
+        for key in ("LastLoginAddress", "LastLoginRegion", "LastLoginTassadar"):
+            services.pop(key, None)
+
+
 def clear_client_credentials(drive_c: Path) -> bool:
     """Sign the client out by dropping its saved-account keys.
 
@@ -103,12 +122,13 @@ def clear_client_credentials(drive_c: Path) -> bool:
     """
     path = Path(drive_c) / CONFIG_RELATIVE
     config = _load_config(path)
-    client = config.get("Client")
-    if not isinstance(client, dict):
+    if not config:
         return True
-    for key in ("SavedAccountNames", "AutoLogin", "LastLoginAddress", "LastLoginRegion"):
-        client.pop(key, None)
-    config["Client"] = client
+    client = config.get("Client")
+    if isinstance(client, dict):
+        for key in ("SavedAccountNames", "AutoLogin"):
+            client.pop(key, None)
+    _forget_login_routing(config)
     try:
         path.write_text(json.dumps(config, indent=4), encoding="utf-8")
     except OSError as exc:
