@@ -286,6 +286,45 @@ def test_kill_client_spares_the_downloader(
     assert {pid for pid, _ in sent} == {1}
 
 
+def test_teardown_spares_the_process_that_owns_the_wineserver(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """``Battle.net Launcher.exe`` must survive a teardown.
+
+    It owns the prefix's wineserver, so signalling it alongside the client
+    tears the Wine session down before ``battle.net.exe`` can flush the token
+    it rotated during the run — and that token is a registry key written on
+    shutdown. Measured when it was included: every post-play capture stopped
+    happening, auth froze on a token Blizzard later invalidated, and the next
+    launch opened on a sign-in prompt.
+    """
+    prefix = tmp_path / "game"
+    _FakeProc({
+        "1": ("C:\\Battle.net\\Battle.net.exe", str(prefix)),
+        "2": ("C:\\Battle.net\\Battle.net Launcher.exe", str(prefix)),
+    }).install(monkeypatch)
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(wc.os, "kill", lambda pid, s: sent.append((pid, s)))
+
+    wc.kill_client("battlenet", prefix, timeout=0.0)
+
+    assert {pid for pid, _ in sent} == {1}
+    # ...while liveness still counts it: over-reporting "up" costs a wait,
+    # under-reporting reads a torn vault.
+    assert wc.client_running_in("battlenet", prefix) is True
+
+
+def test_teardown_images_are_a_subset_of_the_client_images() -> None:
+    """"Is it up" and "may I kill it" are different questions.
+
+    A teardown set that grew past the liveness set would mean signalling
+    something the liveness probe does not even consider part of the client.
+    """
+    for store, images in wc.CLIENT_TEARDOWN_IMAGES.items():
+        assert images <= wc.CLIENT_IMAGES[store], store
+    assert set(wc.CLIENT_TEARDOWN_IMAGES) == set(wc.CLIENT_IMAGES)
+
+
 def test_kill_client_is_a_noop_when_nothing_is_running(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:

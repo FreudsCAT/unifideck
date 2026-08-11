@@ -58,6 +58,25 @@ INSTALL_WORKER_IMAGES: dict[str, frozenset[str]] = {
     "ubisoft": frozenset(),
 }
 
+# What a teardown may actually SIGNAL — a SUBSET of CLIENT_IMAGES, and the
+# difference is load-bearing.
+#
+# ``Battle.net Launcher.exe`` is excluded because it owns the prefix's
+# wineserver. Signalling it alongside the client tears the Wine session down
+# before ``battle.net.exe`` can flush the token it rotated during the run — and
+# that token is a *registry* key, written on shutdown. Measured: including it
+# stopped every post-play capture happening (``capture`` then silently declines
+# at its "no newer session" branch), the auth prefix froze on a token Blizzard
+# eventually invalidated, and the next launch opened on a sign-in prompt.
+#
+# Liveness must still count the Launcher — see ``client_running_in``, where
+# over-reporting only costs a short wait. "Is it up" and "may I kill it" are
+# different questions and this table is why they can no longer be confused.
+CLIENT_TEARDOWN_IMAGES: dict[str, frozenset[str]] = {
+    "battlenet": frozenset({"battle.net.exe"}),
+    "ubisoft": frozenset({"upc.exe", "ubisoftconnect.exe"}),
+}
+
 
 def normalise_prefix(prefix: str | Path) -> str:
     """Canonical form for comparing WINEPREFIX values.
@@ -168,16 +187,17 @@ def install_active_in(store: str, prefix: str | Path) -> bool:
     return any(image in images for _, image, _ in scan_prefix(prefix))
 
 
-def client_pids_in(store: str, prefix: str | Path) -> list[str]:
-    """PIDs of ``store``'s client processes inside ``prefix``.
+def teardown_pids_in(store: str, prefix: str | Path) -> list[str]:
+    """PIDs a teardown of ``store`` in ``prefix`` may signal.
 
-    The pid-level counterpart to :func:`client_running_in`, and the input to
-    :func:`kill_client`. Every client image counts whatever its ``--type=``:
-    Battle.net measured a case where signalling only the main process left the
-    surviving ``--type=gpu-process`` children behind, so the dead session stayed
-    in the prefix and the next launch stacked a second client on top of it.
+    Keyed on :data:`CLIENT_TEARDOWN_IMAGES`, deliberately narrower than the
+    liveness question. Within that set every process counts whatever its
+    ``--type=``: Battle.net measured a case where signalling only the main
+    process left the surviving ``--type=gpu-process`` and ``--type=utility``
+    children behind, so the dead session stayed in the prefix and the next
+    launch stacked a second client on top of it.
     """
-    images = CLIENT_IMAGES.get(store)
+    images = CLIENT_TEARDOWN_IMAGES.get(store)
     if not images:
         return []
     return [pid for pid, image, _ in scan_prefix(prefix) if image in images]
@@ -230,20 +250,21 @@ def kill_client(
 ) -> int:
     """Close ``store``'s vendor client in ``prefix``. Returns how many were signalled.
 
-    Scoped by ``WINEPREFIX`` and to the client's **own** images, so it never
-    touches the game or Wine's infrastructure. Reading ``/proc`` works across
+    Scoped by ``WINEPREFIX`` and to :data:`CLIENT_TEARDOWN_IMAGES`, so it never
+    touches the game, Wine's infrastructure, the store's downloader, or the
+    process that owns the prefix's wineserver. Reading ``/proc`` works across
     gamescope sessions, which a window-manager approach does not — the reason
     Ubisoft previously reached for a global ``pkill -f upc.exe``. That global
     form also closed a client belonging to a *different* game; this one cannot.
     """
-    pids = client_pids_in(store, prefix)
+    pids = teardown_pids_in(store, prefix)
     if not pids:
         return 0
     logger.info(
         "[%s] stopping %d client process(es) in %s", store, len(pids), prefix,
     )
     return terminate(
-        pids, lambda: client_pids_in(store, prefix), timeout, label=store,
+        pids, lambda: teardown_pids_in(store, prefix), timeout, label=store,
     )
 
 

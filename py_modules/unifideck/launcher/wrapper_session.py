@@ -413,7 +413,20 @@ def capture(
         return False
     if not _identities_agree(spec, Path(source), Path(auth)):
         return False
-    if fingerprint(spec, source) <= fingerprint(spec, auth):
+    source_fp = fingerprint(spec, source)
+    auth_fp = fingerprint(spec, auth)
+    if source_fp <= auth_fp:
+        # Logged, not silent. This is the branch a lost rotation lands in — the
+        # client was killed before it could flush its token, so the source has
+        # nothing newer to give — and it used to return here without a word.
+        # The symptom (auth frozen on an old token, the client asking for a
+        # password days later) was then invisible in the logs; only comparing
+        # on-disk stamps across prefixes revealed it.
+        logger.info(
+            "[wrapper_session] %s: %s holds nothing newer than auth "
+            "(source=%.0f auth=%.0f) — not capturing",
+            spec.store, Path(source).name, source_fp[0], auth_fp[0],
+        )
         return False
     copied = _copy_session(spec, Path(source), Path(auth), dst_busy=auth_busy)
     if not copied:

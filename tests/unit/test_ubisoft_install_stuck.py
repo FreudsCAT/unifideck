@@ -14,7 +14,7 @@ TWO defects combined.
 1. The launcher died before opening UPC. ``RunGame`` invoked
    ``unifideck-launcher ubisoft:80``, whose ``_build_context`` looks the game
    up in games.map. There was no row (normal mid-install), so it fell through
-   to ``_ubisoft_has_populated_prefix`` — which is exactly the escape hatch
+   to ``wrapper_prefix_is_populated`` — which is exactly the escape hatch
    for this case — but that hand-built ``<prefix_root>/drive_c/…`` while a
    Proton prefix keeps its C: drive at ``<prefix_root>/pfx/drive_c``. It
    returned False for a fully-populated prefix and the launcher raised
@@ -76,7 +76,7 @@ def test_modern_pfx_layout_is_detected(id_map, tmp_path):
                      layout="modern")
     id_map({"80": {"name": "Rayman Origins", "prefix_path": str(root)}})
 
-    assert dispatcher._ubisoft_has_populated_prefix("80") is True
+    assert dispatcher.wrapper_prefix_is_populated("ubisoft", "80") is True
 
 
 def test_legacy_drive_c_layout_still_detected(id_map, tmp_path):
@@ -84,7 +84,7 @@ def test_legacy_drive_c_layout_still_detected(id_map, tmp_path):
     root = _populate(tmp_path / "old" / "80", layout="legacy")
     id_map({"80": {"name": "X", "prefix_path": str(root)}})
 
-    assert dispatcher._ubisoft_has_populated_prefix("80") is True
+    assert dispatcher.wrapper_prefix_is_populated("ubisoft", "80") is True
 
 
 def test_default_location_prefix_is_detected(id_map, tmp_path):
@@ -96,7 +96,7 @@ def test_default_location_prefix_is_detected(id_map, tmp_path):
     assert root.exists()
     id_map({"80": {"name": "X"}})
 
-    assert dispatcher._ubisoft_has_populated_prefix("80") is True
+    assert dispatcher.wrapper_prefix_is_populated("ubisoft", "80") is True
 
 
 def test_prefix_without_upc_is_not_populated(id_map, tmp_path):
@@ -105,19 +105,19 @@ def test_prefix_without_upc_is_not_populated(id_map, tmp_path):
     (root / "pfx" / "drive_c").mkdir(parents=True)
     id_map({"80": {"name": "X", "prefix_path": str(root)}})
 
-    assert dispatcher._ubisoft_has_populated_prefix("80") is False
+    assert dispatcher.wrapper_prefix_is_populated("ubisoft", "80") is False
 
 
 def test_game_absent_from_id_map_is_not_populated(id_map):
     id_map({"99": {"name": "Other"}})
-    assert dispatcher._ubisoft_has_populated_prefix("80") is False
+    assert dispatcher.wrapper_prefix_is_populated("ubisoft", "80") is False
 
 
 def test_missing_or_corrupt_id_map_is_not_populated(id_map, tmp_path):
-    assert dispatcher._ubisoft_has_populated_prefix("80") is False
+    assert dispatcher.wrapper_prefix_is_populated("ubisoft", "80") is False
     (tmp_path / ".local" / "share" / "unifideck"
      / "ubisoft_id_map.json").write_text("{bad json")
-    assert dispatcher._ubisoft_has_populated_prefix("80") is False
+    assert dispatcher.wrapper_prefix_is_populated("ubisoft", "80") is False
 
 
 # ── defect 2: no bail-out when UPC never starts ─────────────────

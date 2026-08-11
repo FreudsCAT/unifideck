@@ -49,7 +49,7 @@ def _hermetic(monkeypatch, tmp_path):
 async def test_installed_ubisoft_empty_exe_routes_to_play(monkeypatch):
     """A games.map row (installed) with empty exe → play, even with a prefix."""
     # A populated prefix exists, but that must NOT divert an installed game.
-    monkeypatch.setattr(d, "_ubisoft_has_populated_prefix", lambda _gid: True)
+    monkeypatch.setattr(d, "wrapper_prefix_is_populated", lambda _s, _gid: True)
     svc = _FakeShortcutSvc(
         types.SimpleNamespace(exe="", work_dir="/games/bge", app_id=1),
     )
@@ -65,7 +65,7 @@ async def test_installed_ubisoft_empty_exe_routes_to_play(monkeypatch):
 @pytest.mark.asyncio
 async def test_uninstalled_ubisoft_with_prefix_routes_to_install(monkeypatch):
     """No games.map row but a bootstrapped prefix → open UPC to install."""
-    monkeypatch.setattr(d, "_ubisoft_has_populated_prefix", lambda _gid: True)
+    monkeypatch.setattr(d, "wrapper_prefix_is_populated", lambda _s, _gid: True)
     svc = _FakeShortcutSvc(None)
 
     ctx = await d._build_context(_argv(), svc)
@@ -77,7 +77,7 @@ async def test_uninstalled_ubisoft_with_prefix_routes_to_install(monkeypatch):
 @pytest.mark.asyncio
 async def test_uninstalled_ubisoft_no_prefix_raises(monkeypatch):
     """No row and no prefix → genuinely-missing game still errors."""
-    monkeypatch.setattr(d, "_ubisoft_has_populated_prefix", lambda _gid: False)
+    monkeypatch.setattr(d, "wrapper_prefix_is_populated", lambda _s, _gid: False)
     svc = _FakeShortcutSvc(None)
 
     with pytest.raises(d.GameNotFoundError):

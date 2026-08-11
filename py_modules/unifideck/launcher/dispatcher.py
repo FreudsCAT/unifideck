@@ -13,7 +13,7 @@ from unifideck.core.types.results import Result
 from .types.context import LaunchContext
 from .types.errors import GameNotFoundError, LauncherError
 from .types.exit_codes import ExitCode
-from .ubisoft_prefix_probe import _ubisoft_has_populated_prefix
+from .wrapper_prefix_probe import wrapper_prefix_is_populated
 from .wrapper_stores import is_wrapper_store
 
 if TYPE_CHECKING:
@@ -162,34 +162,39 @@ async def _build_context(
                 "synthesizing xCloud context for %s", game_key,
             )
             return _xcloud_context(store, game_id, raw_options)
-        if store == "ubisoft":
-            # An *installed* Ubisoft title legitimately has no resolvable exe:
-            # ``ubisoft_launch`` launches it via the ``uplay://launch/{id}/0``
-            # deeplink and ignores ``exe_path`` entirely. A games.map row is
-            # the "installed" signal — route it to the play handler so Play
-            # launches the game (NOT UPC). Only when the title is genuinely
-            # NOT installed (no row) yet has a bootstrapped prefix do we treat
-            # it as an install action — the case where Steam dropped the
-            # ``UNIFIDECK_UBISOFT_ACTION=install`` token (it looks like a plain
-            # launch). Opening UPC for an already-installed game was the
-            # regression where "Play" re-opened Ubisoft Connect.
+        if is_wrapper_store(store):
+            # An *installed* wrapper-store title legitimately has no resolvable
+            # exe: its vendor client launches the game (Ubisoft via the
+            # ``uplay://launch/{id}/0`` deeplink, Battle.net via
+            # ``--exec="launch <FAMILY>"``) and neither handler reads
+            # ``exe_path``. A games.map row is the "installed" signal — route it
+            # to the play handler so Play launches the GAME, not the client.
+            # Opening UPC for an already-installed game was the regression
+            # where "Play" re-opened Ubisoft Connect.
             if has_entry:
                 logger.info(
-                    "[launcher.dispatcher] ubisoft game %s installed "
-                    "(games.map row, no exe) — launching via uplay deeplink",
-                    game_key,
+                    "[launcher.dispatcher] %s game %s installed "
+                    "(games.map row, no exe) — launching via its client",
+                    store, game_key,
                 )
                 return _game_context(
                     store, game_id, exe, work_dir, raw_options, app_id,
                 )
-            if _ubisoft_has_populated_prefix(game_id):
+            # Not installed (no row) but the prefix is bootstrapped: this is
+            # the install, and the client has to be opened into it. Two ways to
+            # arrive here — Steam dropped the ``UNIFIDECK_*_ACTION=install``
+            # token so it looks like a plain launch, or the install is simply
+            # still running and no row exists yet. The second is the normal
+            # case for every wrapper store: the row is only written once the
+            # game has actually downloaded.
+            if wrapper_prefix_is_populated(store, game_id):
                 logger.info(
-                    "[launcher.dispatcher] ubisoft game %s not in games.map "
+                    "[launcher.dispatcher] %s game %s not in games.map "
                     "but has a populated prefix — treating as install action",
-                    game_key,
+                    store, game_key,
                 )
                 return _wrapper_install_context(
-                    store, game_id, raw_options, "ubisoft",
+                    store, game_id, raw_options, store,
                 )
         raise GameNotFoundError(
             f"game {game_key!r} not found in games.map",
