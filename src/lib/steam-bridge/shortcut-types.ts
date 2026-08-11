@@ -44,8 +44,45 @@ export type ShortcutLaunchContext = {
 export type ShortcutLaunchResult = {
   success: boolean;
   already_running?: boolean;
+  /** Appid Steam was actually asked to run, when one was resolved.
+   *  Callers that must know when the launched app *ends* — the auth
+   *  flows, which otherwise wait on a backend event that may never
+   *  arrive — pass it to {@link watchAppStopped}. */
+  app_id?: number;
   error?: string;
 };
+
+/**
+ * Call `onStopped` once Steam reports `appId` has stopped, having first
+ * seen it running. Returns an unsubscribe function.
+ *
+ * The `sawRunning` edge matters: Steam emits `bRunning: false` for apps
+ * that were never started in this session, so acting on a bare "not
+ * running" notification fires immediately and means nothing.
+ *
+ * Shared because two callers need the identical edge — temp-shortcut
+ * cleanup (removing the entry early kills the app's XWayland session and
+ * the login window with it) and the auth dispatcher (a sign-in whose
+ * client has exited must not leave the Sign In button wedged).
+ */
+export function watchAppStopped(
+  appId: number,
+  onStopped: () => void,
+): () => void {
+  let sawRunning = false;
+  const sub =
+    window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
+      (n) => {
+        if (n.unAppID !== appId) return;
+        if (n.bRunning) {
+          sawRunning = true;
+          return;
+        }
+        if (sawRunning) onStopped();
+      },
+    );
+  return () => sub?.unregister();
+}
 
 /** App store entry. */
 interface AppStoreEntry {

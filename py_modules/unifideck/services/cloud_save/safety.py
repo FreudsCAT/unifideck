@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import time
 from collections.abc import Iterator
@@ -37,7 +38,20 @@ logger = logging.getLogger(__name__)
 # Manifest written at the root of each synced save dir — same name the
 # manifest/_SyncMixin machinery uses, so the two share one source of truth.
 _MANIFEST_NAME = ".unifideck_sync.json"
-_BACKUPS_ROOT = Path("~/.local/share/unifideck/save_backups").expanduser()
+
+
+def _backups_root() -> Path:
+    """Where pre-sync save backups live.
+
+    Resolved per call, not at import. As a module constant this expanded the
+    developer's real ``$HOME`` before pytest's autouse fixture could redirect
+    it, so the suite wrote fixture saves (``epic/game123``, ``gog/gog123``)
+    into the live backup tree. Same trap, same fix as
+    ``wrapper_session.prefix_index_path``.
+    """
+    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / "unifideck" / "save_backups"
+
 _KEEP_BACKUPS = 5
 
 # File suffixes that are settings/config, NOT real save data. A save dir
@@ -197,7 +211,7 @@ def snapshot_backup(
     src = Path(directory)
     if not has_save_data(src):
         return None
-    dest_root = _BACKUPS_ROOT / store / game_id
+    dest_root = _backups_root() / store / game_id
     stamp = str(int(now if now is not None else time.time()))
     dest = dest_root / stamp
     try:
@@ -219,7 +233,7 @@ def latest_backup_snapshot(store: str, game_id: str) -> dict[str, Any]:
     Lets the conflict modal show a cheap, local approximation of the
     cloud-side copy without a full store download.
     """
-    dest_root = _BACKUPS_ROOT / store / game_id
+    dest_root = _backups_root() / store / game_id
     try:
         snaps = sorted(
             (p for p in dest_root.iterdir() if p.is_dir()),

@@ -45,6 +45,8 @@ from unifideck.launcher import wrapper_session
 from unifideck.launcher.frontend_bridge import launcher_toast
 from unifideck.launcher.game_title import resolve_title
 from unifideck.launcher.proton.handlers import battlenet_bootstrap as bootstrap
+from unifideck.launcher.proton.handlers import battlenet_login_state as login_state
+from unifideck.launcher.proton.handlers import battlenet_session as session
 from unifideck.launcher.proton.handlers import battlenet_watch as watch
 from unifideck.launcher.proton.handlers import wrapper_clients
 from unifideck.launcher.proton.handlers.battlenet_client import (
@@ -73,15 +75,14 @@ EXEC_TIMEOUT = 60.0
 # How long a client-less Wine session gets to produce a renderer before we
 # call it stale. Short: a healthy client never reaches this path.
 STALE_SESSION_GRACE = 20.0
+# How long the client gets to finish logging in once it is up. Generous
+# because a client that comes up signed *out* puts the login page on screen,
+# and this is the window in which the user can answer it. Measured: a healthy
+# cold start signs in ~10s after the renderer appears.
+LOGIN_SETTLE_TIMEOUT = 180.0
 
 STORE = "battlenet"
 
-# The login token is a registry key, and wineserver owns the registry: it saves
-# on a short timer after a change and rewrites the file from memory when it
-# exits. Both numbers exist so a capture reads the token this run rotated
-# rather than the one before it.
-REGISTRY_SETTLE_TIMEOUT = 20.0
-REGISTRY_SETTLE_SECONDS = 3.0
 
 
 def _fail(
@@ -219,84 +220,6 @@ async def _release_other_clients(plan: ProtonLaunchPlan) -> None:
         )
 
 
-async def _inject_session(plan: ProtonLaunchPlan) -> None:
-    """Refresh this prefix's session from auth before the client starts.
-
-    The reason a prefix that has sat idle for a month still opens signed in:
-    the vendor rotates its token on every run, so the copy this prefix was
-    cloned with is stale, while the auth prefix is kept current by the capture
-    on the other side of every run.
-
-    Every guard lives in ``wrapper_session.inject`` — an auth prefix with no
-    session, or a target already holding something newer, is a no-op.
-    """
-    spec = wrapper_session.spec_for(STORE)
-    auth = wrapper_session.auth_prefix(STORE)
-    if spec is None or auth is None:
-        return
-    # The token is a registry key, and a live wineserver owns the registry —
-    # it rewrites the file from memory on exit, silently discarding whatever
-    # we wrote. ``_clear_stale_session`` has already run, so the normal path
-    # is quiet; report the truth either way.
-    busy = bool(await asyncio.to_thread(watch.wine_pids, plan.prefix_path))
-    with contextlib.suppress(Exception):
-        await asyncio.to_thread(
-            _inject_call, spec, auth, Path(plan.prefix_path), busy,
-        )
-
-
-def _inject_call(
-    spec: wrapper_session.SessionSpec, auth: Path, target: Path, busy: bool,
-) -> bool:
-    return wrapper_session.inject(spec, auth, target, target_busy=busy)
-
-
-async def _capture_session(plan: ProtonLaunchPlan) -> None:
-    """Hand this run's rotated session back to the auth prefix.
-
-    Called after the client has been stopped, never before: the client flushes
-    its rotated token on shutdown, which is why teardown SIGTERMs first and
-    waits. The backend repeats this on ``GAME_STOPPED`` because this process
-    can itself be SIGKILLed — belt and braces for the one thing whose loss the
-    user actually notices.
-    """
-    spec = wrapper_session.spec_for(STORE)
-    auth = wrapper_session.auth_prefix(STORE)
-    if spec is None or auth is None:
-        return
-    # This prefix's wineserver must be gone before its registry is read: Wine
-    # saves the token on a short timer after the key changes, so a read taken
-    # while it is still up returns the *previous* token.
-    await _await_quiet(plan.prefix_path)
-    busy = bool(await asyncio.to_thread(watch.wine_pids, auth))
-    with contextlib.suppress(Exception):
-        await asyncio.to_thread(
-            _capture_call, spec, Path(plan.prefix_path), auth, busy,
-        )
-
-
-def _capture_call(
-    spec: wrapper_session.SessionSpec, source: Path, auth: Path, busy: bool,
-) -> bool:
-    return wrapper_session.capture(spec, source, auth, auth_busy=busy)
-
-
-async def _await_quiet(prefix: Path | str) -> None:
-    """Wait, bounded, for every Wine process in ``prefix`` to be gone.
-
-    Then a short settle, because wineserver flushes the registry on a timer
-    rather than on each change — reading the instant the last pid vanishes can
-    still miss the token it just rotated.
-    """
-    waited = 0.0
-    while waited < REGISTRY_SETTLE_TIMEOUT:
-        if not await asyncio.to_thread(watch.wine_pids, prefix):
-            break
-        await asyncio.sleep(1.0)
-        waited += 1.0
-    await asyncio.sleep(REGISTRY_SETTLE_SECONDS)
-
-
 async def _bring_up_client(plan: ProtonLaunchPlan) -> Path:
     """Phases A + B. Returns the client exe once it will accept commands."""
     launcher_exe = find_launcher_exe(plan.prefix_path)
@@ -332,7 +255,7 @@ async def _start_client_here(plan: ProtonLaunchPlan, launcher_exe: Path) -> None
     # before this client reads them at startup.
     await _release_other_clients(plan)
     await _clear_stale_session(plan)
-    await _inject_session(plan)
+    await session.inject_into(plan.prefix_path)
     await _start_client_detached(plan, launcher_exe)
     launcher_toast(
         "toasts.launcher.battlenetStartingClientMessage",
@@ -346,6 +269,29 @@ async def _start_client_here(plan: ProtonLaunchPlan, launcher_exe: Path) -> None
             "Battle.net client did not become ready",
             timeout=CLIENT_READY_TIMEOUT,
         )
+
+
+async def _require_signed_in(plan: ProtonLaunchPlan) -> None:
+    """Refuse to drive a client that is provably sitting on the login page.
+
+    ``client_ready`` only proves a renderer exists, which is equally true of
+    the login page. Sending ``--exec`` to a signed-out client is accepted and
+    does nothing, so the launch died 180 s later as "no game process
+    appeared" — a message that blames a family-code rename for a session
+    problem, and sent at least one user hunting the wrong bug.
+
+    Only a *proven* signed-out client fails here. ``UNKNOWN`` proceeds
+    exactly as before: this is a better diagnosis, not a new gate.
+    """
+    state = await login_state.wait_for_login(plan.prefix_path, LOGIN_SETTLE_TIMEOUT)
+    if state is not login_state.LoginState.SIGNED_OUT:
+        return
+    raise _fail(
+        plan,
+        "battlenetNotSignedIn",
+        "The Battle.net client is not signed in",
+        prefix=str(plan.prefix_path),
+    )
 
 
 async def battlenet_launch(plan: ProtonLaunchPlan) -> int:
@@ -368,6 +314,7 @@ async def battlenet_launch(plan: ProtonLaunchPlan) -> int:
         game_title=resolve_title(plan.context.game_key),
     )
     client_exe = await _bring_up_client(plan)
+    await _require_signed_in(plan)
     pid, before = await _issue_and_confirm(plan, client_exe, uid, family)
 
     async with _client_teardown(plan):
@@ -398,7 +345,7 @@ async def _client_teardown(plan: ProtonLaunchPlan) -> AsyncGenerator[None]:
     finally:
         with contextlib.suppress(Exception):
             await asyncio.to_thread(watch.stop_client, plan.prefix_path)
-        await _capture_session(plan)
+        await session.capture_from(plan.prefix_path)
 
 
 async def _issue_and_confirm(
@@ -464,6 +411,15 @@ async def battlenet_auth_launch(plan: ProtonLaunchPlan) -> int:
         "toasts.launcher.signingInBattlenetMessage",
         i18n_title_key="toasts.launcher.signingInBattlenet",
     )
+    # The same clearing every other path does before starting a client, and
+    # for a sharper reason here: this run uses the default
+    # ``PROTON_VERB=waitforexitandrun``, whose ``wineserver -w`` blocks on the
+    # prefix's existing wineserver. A previous sign-in that left ``Agent.exe``
+    # behind — ``stop_client`` spares it deliberately, see its docstring —
+    # therefore wedges the *next* sign-in with no window and no error. Both
+    # calls are no-ops on a cold or healthy prefix.
+    await _release_other_clients(plan)
+    await _clear_stale_session(plan)
     argv = [str(plan.python_bin), str(plan.umu_wrapper), str(launcher_exe)]
     # reap_wineserver=False so a stop from the UI unwinds through
     # _client_teardown's SIGTERM instead of SIGKILLing the client outright:
@@ -501,6 +457,9 @@ async def battlenet_install_launch(plan: ProtonLaunchPlan) -> int:
         game_title=resolve_title(plan.context.game_key),
     )
     client_exe = await _bring_up_client(plan)
+    # Same gate as a launch: a signed-out client accepts the navigation and
+    # shows the user nothing they can install from.
+    await _require_signed_in(plan)
     # Navigate to the game's page; the user presses Install there.
     await _issue_exec(plan, client_exe, f"launch {family}")
     # Stay alive while the client is up so Steam keeps the shortcut running

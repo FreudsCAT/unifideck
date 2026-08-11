@@ -182,20 +182,42 @@ def _tree_bytes(root: Path) -> int:
     total = 0
     stack = [root]
     while stack:
-        current = stack.pop()
-        try:
-            with os.scandir(current) as entries:
-                for entry in entries:
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            stack.append(Path(entry.path))
-                        elif entry.is_file(follow_symlinks=False):
-                            total += entry.stat().st_size
-                    except OSError:
-                        continue
-        except OSError:
-            continue
+        size, children = _scan_dir(stack.pop())
+        total += size
+        stack.extend(children)
     return total
+
+
+def _scan_dir(current: Path) -> tuple[int, list[Path]]:
+    """``(bytes in this dir, subdirectories)``. An unreadable dir is ``(0, [])``.
+
+    Split from :func:`_tree_bytes` so neither function nests past the cap;
+    the swallow-everything behaviour is the point — this feeds a stall
+    watchdog, and a permission error partway down a Wine prefix must read as
+    "no growth here", never as an exception that kills the install.
+    """
+    size = 0
+    children: list[Path] = []
+    try:
+        with os.scandir(current) as entries:
+            for entry in entries:
+                size += _entry_bytes(entry, children)
+    except OSError:
+        return 0, []
+    return size, children
+
+
+def _entry_bytes(entry: os.DirEntry[str], children: list[Path]) -> int:
+    """Bytes for one entry, appending it to ``children`` when it is a dir."""
+    try:
+        if entry.is_dir(follow_symlinks=False):
+            children.append(Path(entry.path))
+            return 0
+        if entry.is_file(follow_symlinks=False):
+            return entry.stat().st_size
+    except OSError:
+        return 0
+    return 0
 
 
 async def _stall_watchdog(prefix: Path, proc: asyncio.subprocess.Process, budget: float) -> None:
@@ -303,6 +325,22 @@ async def _await_installer(
     if stall_timeout:
         watchdog = asyncio.ensure_future(_stall_watchdog(Path(prefix), proc, stall_timeout))
     try:
+        completed, err = await _run_installer_to_exit(proc)
+    finally:
+        await _stop_watchdog(watchdog)
+    if not completed:
+        return InstallOutcome(installed=False)
+    # The watchdog only ever finishes by killing the process, so a completed
+    # task means the run it was watching was the stalled one.
+    stalled = watchdog is not None and not watchdog.cancelled()
+    return await _installer_outcome(proc, prefix, err, stalled=stalled)
+
+
+async def _run_installer_to_exit(
+    proc: asyncio.subprocess.Process,
+) -> tuple[bool, bytes]:
+    """``(exited on its own, stderr)`` — killing it at the hard timeout."""
+    try:
         _out, err = await asyncio.wait_for(
             proc.communicate(), timeout=INSTALL_TIMEOUT_SECONDS,
         )
@@ -310,16 +348,27 @@ async def _await_installer(
         logger.exception("[Battlenet] installer timed out — killing")
         proc.kill()
         await proc.wait()
-        return InstallOutcome(installed=False)
-    finally:
-        if watchdog is not None:
-            watchdog.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await watchdog
+        return False, b""
+    return True, err
 
-    # The watchdog only ever finishes by killing the process, so a completed
-    # task means the run it was watching was the stalled one.
-    stalled = watchdog is not None and not watchdog.cancelled()
+
+async def _stop_watchdog(watchdog: asyncio.Task[None] | None) -> None:
+    """Cancel the stall watchdog and wait for it to unwind. Safe on ``None``."""
+    if watchdog is None:
+        return
+    watchdog.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await watchdog
+
+
+async def _installer_outcome(
+    proc: asyncio.subprocess.Process,
+    prefix: Path,
+    err: bytes,
+    *,
+    stalled: bool,
+) -> InstallOutcome:
+    """Read the verdict off the filesystem rather than off the exit code."""
     if proc.returncode != 0:
         logger.warning(
             "[Battlenet] installer exited %s: %s",

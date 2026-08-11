@@ -137,7 +137,7 @@ def test_family_is_read_from_the_id_map_never_derived(
 
     path = tmp_path / "map.json"
     path.write_text(json.dumps({"fenris": {"family": "Fen"}}))
-    monkeypatch.setattr(client, "ID_MAP_PATH", path)
+    monkeypatch.setattr(client, "id_map_path", lambda p=path: p)
     assert client.resolve_family("fenris") == "Fen"
     assert client.resolve_family("unknown") is None
 
@@ -152,7 +152,7 @@ def test_a_proven_family_wins_over_a_stale_one(
     path.write_text(json.dumps({
         "fenris": {"family": "D4", "last_launch_family": "Fen", "launch_ok_at": 1.0},
     }))
-    monkeypatch.setattr(client, "ID_MAP_PATH", path)
+    monkeypatch.setattr(client, "id_map_path", lambda p=path: p)
     assert client.resolve_family("fenris") == "Fen"
 
 

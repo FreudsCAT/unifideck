@@ -330,7 +330,7 @@ def test_the_launcher_resolves_the_relocated_prefix(
 
     base = tmp_path / "sd" / "Games"
     _place(store, str(base))
-    monkeypatch.setattr(client, "ID_MAP_PATH", store.id_map.path)
+    monkeypatch.setattr(client, "id_map_path", lambda p=store.id_map.path: p)
 
     assert client.resolve_prefix(UID) == base / "prefixes" / "battlenet" / UID
 

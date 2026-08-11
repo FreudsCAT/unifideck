@@ -425,7 +425,7 @@ def test_recorded_families_are_readable_by_the_launcher(
     monkeypatch.setattr(
         "unifideck.stores.battlenet.store.read_catalog", lambda _dc: _catalog(),
     )
-    monkeypatch.setattr(client, "ID_MAP_PATH", store.id_map.path)
+    monkeypatch.setattr(client, "id_map_path", lambda p=store.id_map.path: p)
 
     games = asyncio.run(store.get_library())
     launchable = next(g for g in games if g.metadata.get("family"))

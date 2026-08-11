@@ -23,6 +23,7 @@ Delegation only. Every concern lives in its own module (``ownership/``,
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from pathlib import Path
@@ -31,11 +32,13 @@ from typing import TYPE_CHECKING, Any
 from unifideck.core.types.domain import Game, StoreInfo
 from unifideck.core.types.results import AuthResult, InstallResult, Result
 from unifideck.event_bus.event_bus_devex import auto_wire
+from unifideck.launcher import wrapper_session
 from unifideck.stores.shared.auth_shortcut import (
     AuthShortcutSpec,
     build_context,
 )
 from unifideck.stores.shared.store_base import StoreBase
+from unifideck.stores.shared.wrapper_auth_monitor import WrapperAuthMonitor
 from unifideck.stores.shared.wrapper_session_hooks import WrapperSessionHooks
 
 from . import config as store_config
@@ -84,6 +87,16 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         )
         # Injected post-discovery by services/bootstrap/store_injector.py.
         self._shortcut_service: Any | None = None
+        # The sign-in happens in a detached client we never see the exit of, so
+        # this is the only thing that reports a verdict. Without it the
+        # frontend's AuthDispatcher waits on an event nobody emits and holds
+        # the Sign In button dead for its full 10-minute timeout — the tester
+        # report that reads "it only worked again after I restarted Steam".
+        self._auth_monitor = WrapperAuthMonitor(
+            store="battlenet", is_signed_in=self._auth_session_landed, bus=bus,
+        )
+        # Credential fingerprint as it was when the current sign-in started.
+        self._auth_baseline: tuple[float, int] = (0.0, 0)
         # Tell the out-of-process launcher where the shared prefixes are: it
         # runs under the system Python, cannot read our config, and needs the
         # auth prefix to inject the live session before it starts a client.
@@ -175,6 +188,39 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         self._cached_available = read_licences(drive_c).is_usable
         return self._cached_available
 
+    async def _auth_session_landed(self) -> bool:
+        """The monitor's probe: has a *new* session appeared in the auth prefix?
+
+        Deliberately not :meth:`is_available`. That reads the licence ledger,
+        which **survives a sign-out** — the reason ``_signed_out_marker``
+        exists at all — and ``start_auth`` clears the marker up front, so it
+        would answer True on the first poll of a sign-in that has not happened
+        yet and report success for a rejected password.
+
+        ``has_session`` is keyed on the credential material proper, including
+        the registry token whose absence produced ``ERROR_TOKEN_NOT_FOUND``.
+
+        The baseline is what makes signing in *again* work. A user replacing a
+        live session already satisfies ``has_session`` at t=0, so the verdict
+        is keyed on that material changing; the vendor rotates the token on
+        every sign-in, so a completed one always moves the fingerprint.
+        """
+        spec = wrapper_session.spec_for(self.session_store_id)
+        if spec is None:
+            return False
+        prefix = self.prefixes.auth_prefix
+        if not await asyncio.to_thread(wrapper_session.has_session, spec, prefix):
+            return False
+        current = await asyncio.to_thread(wrapper_session.fingerprint, spec, prefix)
+        return current != self._auth_baseline
+
+    def _auth_fingerprint(self) -> tuple[float, int]:
+        """Current credential fingerprint of the auth prefix, or ``(0.0, 0)``."""
+        spec = wrapper_session.spec_for(self.session_store_id)
+        if spec is None:
+            return (0.0, 0)
+        return wrapper_session.fingerprint(spec, self.prefixes.auth_prefix)
+
     @property
     def _signed_out_marker(self) -> Path:
         """Set by logout, cleared by a successful sign-in.
@@ -224,6 +270,12 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
                 "[Battlenet] auth prefix has no client — the sign-in shortcut "
                 "will install it",
             )
+        # Creating the watcher task is safe here; *probing* would not be. The
+        # comment above applies in full — this call blocks the shortcut launch,
+        # so the monitor must start and return, never poll inline. One stat
+        # sweep of the credential files is the whole cost.
+        self._auth_baseline = await asyncio.to_thread(self._auth_fingerprint)
+        await self._auth_monitor.start()
         return AuthResult(
             success=True,
             store=self.store_name,
@@ -257,6 +309,10 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         client that is still signed in and the sign-out silently did nothing.
         Only session files are removed; the games are untouched.
         """
+        # A sign-in still being watched is moot once the user signs out, and
+        # leaving it running would let it emit STORE_AUTH_COMPLETE against the
+        # session we are about to purge.
+        await self._auth_monitor.stop("signed out before sign-in completed")
         purged = await self.purge_session_everywhere()
         if purged:
             logger.info(
@@ -287,8 +343,6 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         if drive_c is None:
             logger.info("[Battlenet] no client prefix yet — empty library")
             return []
-
-        import asyncio
 
         catalog = await asyncio.to_thread(read_catalog, drive_c)
         if not catalog.program_configurations:

@@ -31,10 +31,19 @@ CLIENT_DIR = "Program Files (x86)/Battle.net"
 CLIENT_EXE = "Battle.net.exe"
 LAUNCHER_EXE = "Battle.net Launcher.exe"
 
-_DATA_DIR = Path(
-    os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")),
-) / "unifideck"
-ID_MAP_PATH = _DATA_DIR / "battlenet_id_map.json"
+def id_map_path() -> Path:
+    """Where the Battle.net id map lives.
+
+    Resolved on every call rather than once at import, for the reason
+    ``wrapper_session.prefix_index_path`` spells out: a module-level constant
+    is computed before pytest's autouse fixture redirects ``HOME``, so it
+    keeps pointing at the developer's real data directory for the whole run.
+    That is not hypothetical — a test run wrote a synthetic ``fenris`` row
+    into the live map hours after the plugin had last been up. Reading the
+    environment at call time is both correct and cheap.
+    """
+    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / "unifideck" / "battlenet_id_map.json"
 
 
 def resolve_drive_c(prefix: Path | str) -> Path | None:
@@ -78,7 +87,7 @@ def find_launcher_exe(prefix: Path | str) -> Path | None:
 
 def _load_id_map() -> dict[str, dict[str, object]]:
     try:
-        data = json.loads(ID_MAP_PATH.read_text(encoding="utf-8"))
+        data = json.loads(id_map_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -133,12 +142,13 @@ def record_launch_ok(uid: str, family: str, when: float) -> None:
         {"family": family, "last_launch_family": family, "launch_ok_at": when},
     )
     data[uid] = entry
+    path = id_map_path()
     try:
-        ID_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=ID_MAP_PATH.parent, suffix=".tmp")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2, sort_keys=True)
-        Path(tmp).replace(ID_MAP_PATH)
+        Path(tmp).replace(path)
     except OSError as exc:
         logger.warning("[battlenet] cannot record launch for %s: %s", uid, exc)
         return

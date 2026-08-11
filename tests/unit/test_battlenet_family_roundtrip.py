@@ -32,7 +32,7 @@ from unifideck.stores.battlenet.library import family_updates
 def id_map_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the launcher's module-level reader at a temp id map."""
     path = tmp_path / "battlenet_id_map.json"
-    monkeypatch.setattr(client, "ID_MAP_PATH", path)
+    monkeypatch.setattr(client, "id_map_path", lambda p=path: p)
     return path
 
 

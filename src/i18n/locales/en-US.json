@@ -372,6 +372,8 @@
       "battlenetFamilyMissingMessage": "Unifideck doesn't know Battle.net's code for {{gameTitle}}. Re-sync your library to refresh it.",
       "battlenetLaunchNotObserved": "Game Didn't Start",
       "battlenetLaunchNotObservedMessage": "Battle.net accepted the launch for {{gameTitle}} but no game started. Its launch code may have changed — re-sync to refresh it.",
+      "battlenetNotSignedIn": "Battle.net Isn't Signed In",
+      "battlenetNotSignedInMessage": "Battle.net is showing its login page, so {{gameTitle}} can't start. Sign in to the Battle.net client, then try again.",
       "battlenetPrefixNotReady": "Battle.net Not Installed",
       "battlenetPrefixNotReadyMessage": "The Battle.net client isn't set up for {{gameTitle}} yet. Reinstall the game to rebuild it.",
       "battlenetAuthPrefixNotReady": "Battle.net Sign-In Unavailable",

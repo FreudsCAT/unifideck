@@ -44,6 +44,9 @@ test asserting on the environment report should see the real values.
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 
 # Exported by a real desktop session or a CI runner, and honoured ahead of
@@ -83,6 +86,75 @@ def _isolate_home_redirecting_env(monkeypatch, tmp_path_factory):
     # ``os.path.expanduser`` falls back to the password database when HOME is
     # absent — keep both pointing at the sandbox.
     monkeypatch.setenv("USERPROFILE", str(home))
+
+
+def _live_data_dir():
+    """The user's REAL unifideck data dir, resolved from the password database.
+
+    Deliberately not from ``$HOME`` — the fixtures above have already
+    redirected that, which is the whole point.
+    """
+    import pwd
+
+    return Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local" / "share" / "unifideck"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _fail_on_live_data_writes():
+    """Fail the run if the suite wrote into the user's real data directory.
+
+    The ``HOME`` redirect above is necessary but not sufficient: it cannot
+    reach a path a module resolved **at import time**, before the fixture
+    ran. Three such constants were found doing exactly that, and the proof
+    was mtimes rather than a failing test — a suite run wrote a synthetic
+    ``fenris`` row into the live ``battlenet_id_map.json`` and fixture saves
+    into ``save_backups/``, hours after the plugin had last been up.
+
+    Reading real user state is bad; *writing* it destroys evidence and, in
+    one measured case, signed the machine out of Amazon. This turns the next
+    occurrence into a red run instead of a discovery months later.
+
+    Compares a directory listing rather than hooking ``open``, so it catches
+    writes through any route — ``shutil``, ``os.replace``, a subprocess —
+    not only the ones going through Python file objects.
+
+    **Session-scoped deliberately.** The tree is ~12k files (the Wine
+    prefixes dominate) and walking it costs ~0.7s, which per-test would cost
+    more than the entire suite. Once at each end is ~1.5s total and still
+    names the files that changed, which is what identifies the culprit.
+    """
+    live = _live_data_dir()
+    before = _snapshot(live)
+    yield
+    after = _snapshot(live)
+    added = sorted(after.keys() - before.keys())
+    changed = sorted(k for k in after.keys() & before.keys() if after[k] != before[k])
+    if not added and not changed:
+        return
+    pytest.fail(
+        f"the test run wrote into the REAL user data directory ({live}).\n"
+        "A path was almost certainly resolved at import time, before the "
+        "HOME redirect — make it a call-time resolver, as "
+        "``wrapper_session.prefix_index_path`` documents.\n"
+        f"  created:  {added}\n"
+        f"  modified: {changed}",
+        pytrace=False,
+    )
+
+
+def _snapshot(root):
+    """``{relative path: (mtime, size)}`` for every file under ``root``."""
+    if not root.is_dir():
+        return {}
+    snap = {}
+    for path in root.rglob("*"):
+        try:
+            if path.is_file():
+                stat = path.stat()
+                snap[str(path.relative_to(root))] = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            continue
+    return snap
 
 
 @pytest.fixture(autouse=True)

@@ -34,7 +34,7 @@ def migrate_microsoft_token_filename(
 
     Versions before this fix wrote the Xbox/Microsoft OAuth token to
     ``~/.config/unifideck/microsoft_token.json`` (singular) via
-    ``accounts.account_manager.AUTH_TOKEN_PATHS``, while
+    ``accounts.account_manager.auth_token_paths``, while
     ``stores/microsoft/microsoft_config.py`` and
     ``stores/microsoft/tokens/persistence.py`` have only ever read
     and written the plural ``microsoft_tokens.json``. The two never

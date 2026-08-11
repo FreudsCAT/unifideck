@@ -262,7 +262,7 @@ def test_has_save_data_distinguishes_saves_from_settings(tmp_path):
 
 
 def test_snapshot_backup_is_versioned_and_rotates(tmp_path, monkeypatch):
-    monkeypatch.setattr(safety, "_BACKUPS_ROOT", tmp_path / "backups")
+    monkeypatch.setattr(safety, "_backups_root", lambda p=tmp_path / "backups": p)
     monkeypatch.setattr(safety, "_KEEP_BACKUPS", 2)
     src = tmp_path / "saves"
     (src / "gamesaves").mkdir(parents=True)
@@ -276,7 +276,7 @@ def test_snapshot_backup_is_versioned_and_rotates(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_gog_sync_up_blocks_and_never_calls_cli(tmp_path, mock_config, monkeypatch):
-    monkeypatch.setattr(safety, "_BACKUPS_ROOT", tmp_path / "backups")
+    monkeypatch.setattr(safety, "_backups_root", lambda p=tmp_path / "backups": p)
     save_dir = _settings_only_dir(tmp_path, "gog_saves")
     strategy = GOGCloudSaveStrategy(str(tmp_path), mock_config)
     strategy.gogdl_bin = "mock_gogdl"
@@ -291,7 +291,7 @@ async def test_gog_sync_up_blocks_and_never_calls_cli(tmp_path, mock_config, mon
 
 @pytest.mark.asyncio
 async def test_epic_sync_up_blocks_and_never_calls_cli(tmp_path, mock_config, monkeypatch):
-    monkeypatch.setattr(safety, "_BACKUPS_ROOT", tmp_path / "backups")
+    monkeypatch.setattr(safety, "_backups_root", lambda p=tmp_path / "backups": p)
     save_dir = _settings_only_dir(tmp_path, "epic_saves")
     strategy = EpicCloudSaveStrategy(str(tmp_path), mock_config)
     strategy.legendary_bin = "mock_legendary"
@@ -307,7 +307,7 @@ async def test_epic_sync_up_blocks_and_never_calls_cli(tmp_path, mock_config, mo
 async def test_service_soft_conflict_opens_modal(
     tmp_path, mock_event_bus, mock_config, monkeypatch,
 ):
-    monkeypatch.setattr(safety, "_BACKUPS_ROOT", tmp_path / "backups")
+    monkeypatch.setattr(safety, "_backups_root", lambda p=tmp_path / "backups": p)
     service = CloudSaveService(
         bus=mock_event_bus,
         local_save_root=str(tmp_path / "saves"),

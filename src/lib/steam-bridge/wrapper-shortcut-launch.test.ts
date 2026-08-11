@@ -264,8 +264,15 @@ describe("store configs stay distinct", () => {
     expect(UBISOFT_SHORTCUT_CONFIG.authContextRoute).not.toBe(
       BATTLENET_SHORTCUT_CONFIG.authContextRoute,
     );
-    // Only Ubisoft threads a prefix name.
+    // Both wrapper stores thread a prefix name, and each names its own.
+    // Battle.net's is load-bearing: without it the launcher falls back to
+    // ``ctx.game_id`` and signs the user into an empty ``bnet-auth`` while
+    // the client lives in ``.bnet-auth``.
     expect(UBISOFT_SHORTCUT_CONFIG.prefixEnvVar).toBeDefined();
-    expect(BATTLENET_SHORTCUT_CONFIG.prefixEnvVar).toBeUndefined();
+    expect(BATTLENET_SHORTCUT_CONFIG.prefixEnvVar).toBeDefined();
+    expect(UBISOFT_SHORTCUT_CONFIG.prefixEnvVar).not.toBe(BATTLENET_SHORTCUT_CONFIG.prefixEnvVar);
+    expect(UBISOFT_SHORTCUT_CONFIG.authPrefixName).not.toBe(
+      BATTLENET_SHORTCUT_CONFIG.authPrefixName,
+    );
   });
 });

@@ -265,7 +265,11 @@ async function launchViaTemporaryShortcut(
     steamApps.SetShortcutLaunchOptions?.(tempAppId, launchOptions);
     steamApps.RunGame(getShortcutRunGameId(tempAppId), "", -1, 100);
     scheduleTemporaryShortcutCleanup(tempAppId, config.logTag);
-    return { success: true, already_running: alreadyRunning };
+    return {
+      success: true,
+      already_running: alreadyRunning,
+      app_id: tempAppId,
+    };
   } catch (error) {
     console.error(`${config.logTag} temp shortcut launch failed:`, error);
     return {
@@ -339,7 +343,7 @@ export async function launchWrapperViaShortcut(
     if (!skipStateRestore) {
       scheduleLaunchStateRestore(appId, ctx, originalOptions, config.logTag);
     }
-    return { success: true, already_running: alreadyRunning };
+    return { success: true, already_running: alreadyRunning, app_id: appId };
   } catch (error) {
     console.error(`${config.logTag} launch failed:`, error);
     if (!skipStateRestore) {
