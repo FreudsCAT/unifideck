@@ -33,6 +33,7 @@ from unifideck.core.types.domain import Game, StoreInfo
 from unifideck.core.types.results import AuthResult, InstallResult, Result
 from unifideck.event_bus.event_bus_devex import auto_wire
 from unifideck.launcher import wrapper_session
+from unifideck.launcher.proton.handlers import battlenet_login_state as login_state
 from unifideck.stores.shared.auth_shortcut import (
     AuthShortcutSpec,
     build_context,
@@ -204,6 +205,15 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         live session already satisfies ``has_session`` at t=0, so the verdict
         is keyed on that material changing; the vendor rotates the token on
         every sign-in, so a completed one always moves the fingerprint.
+
+        The client's log is then consulted as a veto, because the fingerprint
+        alone can move for reasons that are not a sign-in: ``Identity`` and
+        ``EncryptionKey`` survive a failed login (measured — a device's
+        ``.bnet-auth`` still held both from an earlier session while the
+        current one was failing), and the client rewrites ``account.db`` to
+        remember the account it is *asking* the user to log into. Reporting
+        "connected" for a user still looking at the login page is the one
+        wrong answer worse than reporting nothing. ``UNKNOWN`` does not veto.
         """
         spec = wrapper_session.spec_for(self.session_store_id)
         if spec is None:
@@ -212,7 +222,10 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         if not await asyncio.to_thread(wrapper_session.has_session, spec, prefix):
             return False
         current = await asyncio.to_thread(wrapper_session.fingerprint, spec, prefix)
-        return current != self._auth_baseline
+        if current == self._auth_baseline:
+            return False
+        state = await asyncio.to_thread(login_state.read_login_state, prefix)
+        return state is not login_state.LoginState.SIGNED_OUT
 
     def _auth_fingerprint(self) -> tuple[float, int]:
         """Current credential fingerprint of the auth prefix, or ``(0.0, 0)``."""

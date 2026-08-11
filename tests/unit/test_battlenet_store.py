@@ -620,3 +620,70 @@ def test_the_session_capture_is_actually_subscribed_to_the_bus(
         config=_Config(tmp_path, prefixes),
     )
     assert "game_stopped" in bus.subscriptions
+
+
+# ---------------------------------------------------------------------------
+# the sign-in monitor's probe
+# ---------------------------------------------------------------------------
+
+_BNET_LOCAL = "drive_c/users/steamuser/AppData/Local/Battle.net"
+_ACCOUNT_DB = f"{_BNET_LOCAL}/Account/1234/account.db"
+_CLIENT_LOGS = f"{_BNET_LOCAL}/Logs"
+
+# Verbatim from a device log — the sign-in the tester reported.
+_SIGNED_OUT_LINE = (
+    "E 2026-08-11 08:34:21.914905 [BNLogin] {Main} "
+    "Login failed. error=ERROR_TOKEN_NOT_FOUND (49)\n"
+)
+_SIGNED_IN_LINE = (
+    "I 2026-08-10 23:01:59.474197 [BNLogin] {Main} "
+    "Logged into Battle.net successfully. |bnet=1:0:1278132c\n"
+)
+
+
+def _place_session(store: BattlenetStore, *, log_body: str) -> None:
+    """Give the auth prefix credential material plus a client log."""
+    prefix = store.prefixes.auth_prefix
+    account = prefix / _ACCOUNT_DB
+    account.parent.mkdir(parents=True, exist_ok=True)
+    account.write_text("token-material")
+    # ``has_session`` also requires a registry section for this store — the
+    # token is a registry key, not a file.
+    (prefix / "user.reg").write_text(
+        "WINE REGISTRY Version 2\n\n"
+        "[Software\\\\Blizzard Entertainment\\\\Battle.net\\\\UnifiedAuth] 1786438212\n"
+        '"97C2054C"=hex:01,00\n',
+    )
+    logs = prefix / _CLIENT_LOGS
+    logs.mkdir(parents=True, exist_ok=True)
+    (logs / "battle.net-1.log").write_text(log_body)
+
+
+def test_probe_reports_signed_in_once_the_session_lands(store: BattlenetStore) -> None:
+    """The success path: new credential material and a log that confirms it."""
+    _place_session(store, log_body=_SIGNED_IN_LINE)
+    assert asyncio.run(store._auth_session_landed()) is True
+
+
+def test_probe_does_not_report_a_login_the_user_never_completed(
+    store: BattlenetStore,
+) -> None:
+    """Credential material moved, but the client is still on the login page.
+
+    ``Identity`` and ``EncryptionKey`` survive a failed login, and the client
+    rewrites ``account.db`` to remember the account it is asking the user to
+    log into — so material alone is not proof. Telling the user they are
+    connected when they are staring at a password prompt is the one answer
+    worse than saying nothing.
+    """
+    _place_session(store, log_body=_SIGNED_OUT_LINE)
+    assert asyncio.run(store._auth_session_landed()) is False
+
+
+def test_probe_is_quiet_until_the_material_actually_changes(
+    store: BattlenetStore,
+) -> None:
+    """Re-authenticating over a live session must not resolve instantly."""
+    _place_session(store, log_body=_SIGNED_IN_LINE)
+    store._auth_baseline = store._auth_fingerprint()
+    assert asyncio.run(store._auth_session_landed()) is False
