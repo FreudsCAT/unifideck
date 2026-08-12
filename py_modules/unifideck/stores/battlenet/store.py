@@ -95,7 +95,10 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         # the Sign In button dead for its full 10-minute timeout — the tester
         # report that reads "it only worked again after I restarted Steam".
         self._auth_monitor = WrapperAuthMonitor(
-            store="battlenet", is_signed_in=self._auth_session_landed, bus=bus,
+            store="battlenet",
+            is_signed_in=self._auth_session_landed,
+            on_captured=self._on_auth_captured,
+            bus=bus,
         )
         # Credential fingerprint as it was when the current sign-in started.
         self._auth_baseline: tuple[float, int] = (0.0, 0)
@@ -192,32 +195,26 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         self._cached_available = read_licences(drive_c).is_usable
         return self._cached_available
 
+    async def _on_auth_captured(self) -> None:
+        """Clear the signed-out marker — only on confirmed success, never in ``start_auth``."""
+        self._cached_available = True
+        with contextlib.suppress(OSError):
+            self._signed_out_marker.unlink(missing_ok=True)
+
     async def _auth_session_landed(self) -> bool:
-        """The monitor's probe: has a *new* session appeared in the auth prefix?
+        """Has a *new* session appeared in the auth prefix?
 
-        Deliberately not :meth:`is_available`. That reads the licence ledger,
-        which **survives a sign-out** — the reason ``_signed_out_marker``
-        exists at all — and ``start_auth`` clears the marker up front, so it
-        would answer True on the first poll of a sign-in that has not happened
-        yet and report success for a rejected password.
+        Not ``is_available`` — the licence ledger survives sign-out, so it
+        would answer True for a sign-in that has not happened yet. The
+        marker is only cleared on confirmed success (``_on_auth_captured``),
+        so ``is_available`` keeps answering False until the monitor confirms.
 
-        ``has_session`` is keyed on the credential material proper, including
-        the registry token whose absence produced ``ERROR_TOKEN_NOT_FOUND``.
-
-        The baseline is what makes signing in *again* work. A user replacing a
-        live session already satisfies ``has_session`` at t=0, so the verdict
-        is keyed on that material changing; the vendor rotates the token on
-        every sign-in, so a completed one always moves the fingerprint.
-
-        The client's log is then consulted as a veto, because the fingerprint
-        alone can move for reasons that are not a sign-in: ``Identity`` and
-        ``EncryptionKey`` survive a failed login (measured — a device's
-        ``.bnet-auth`` still held both from an earlier session while the
-        current one was failing), and the client rewrites ``account.db`` to
-        remember the account it is *asking* the user to log into. Reporting
-        "connected" for a user still looking at the login page is the one
-        wrong answer worse than reporting nothing. ``UNKNOWN`` does not veto.
-        """
+        Keyed on the credential material proper, including the registry
+        token. The baseline distinguishes "already there" from "just landed";
+        the client log vetoes a fingerprint change from a non-sign-in write
+        (the registry keys survive a failed login and the client rewrites
+        ``account.db`` to remember the account it is prompting for).
+        ``UNKNOWN`` does not veto."""
         spec = wrapper_session.spec_for(self.session_store_id)
         if spec is None:
             return False
@@ -229,13 +226,6 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
             return False
         state = await asyncio.to_thread(login_state.read_login_state, prefix)
         return state is not login_state.LoginState.SIGNED_OUT
-
-    def _auth_fingerprint(self) -> tuple[float, int]:
-        """Current credential fingerprint of the auth prefix, or ``(0.0, 0)``."""
-        spec = wrapper_session.spec_for(self.session_store_id)
-        if spec is None:
-            return (0.0, 0)
-        return wrapper_session.fingerprint(spec, self.prefixes.auth_prefix)
 
     @property
     def _signed_out_marker(self) -> Path:
@@ -260,13 +250,16 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         licence ledger and the cached catalog. The frontend drives this by
         RunGame-ing an auth shortcut, because a backend-spawned process has
         no gamescope session in Gaming Mode.
+
+        The signed-out marker is deliberately NOT cleared here. It is cleared
+        by the monitor's ``on_captured`` hook once a session actually lands,
+        because clearing it up front and then timing out would leave the
+        store reporting "available" when no sign-in happened — the marker gone
+        but the previous session's licence ledger still present. Instead,
+        ``is_available`` keeps returning False until the monitor confirms
+        success. The baseline fingerprint is needed so the monitor knows the
+        difference between "session already there" and "session just arrived."
         """
-        # Clear the signed-out marker up front. The client login happens in
-        # a subprocess we do not observe, so the moment the user asks to
-        # sign in is the last point we can reliably act; leaving it set
-        # would make a successful sign-in still read as disconnected.
-        with contextlib.suppress(OSError):
-            self._signed_out_marker.unlink(missing_ok=True)
         status = inspect_prefix(self.prefixes.auth_prefix)
         if not status.usable:
             # Deliberately NOT installed here. ``AuthDispatcher.kickAndLaunch``
@@ -290,7 +283,11 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         # comment above applies in full — this call blocks the shortcut launch,
         # so the monitor must start and return, never poll inline. One stat
         # sweep of the credential files is the whole cost.
-        self._auth_baseline = await asyncio.to_thread(self._auth_fingerprint)
+        spec = wrapper_session.spec_for(self.session_store_id)
+        self._auth_baseline = (
+            (0.0, 0) if spec is None
+            else await asyncio.to_thread(wrapper_session.fingerprint, spec, self.prefixes.auth_prefix)
+        )
         await self._auth_monitor.start()
         return AuthResult(
             success=True,
@@ -328,7 +325,7 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         # A sign-in still being watched is moot once the user signs out, and
         # leaving it running would let it emit STORE_AUTH_COMPLETE against the
         # session we are about to purge.
-        await self._auth_monitor.stop("signed out before sign-in completed")
+        await self._auth_monitor.stop()
         purged = await self.purge_session_everywhere()
         if purged:
             logger.info(

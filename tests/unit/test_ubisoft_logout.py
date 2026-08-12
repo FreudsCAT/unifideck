@@ -11,8 +11,8 @@ import asyncio
 
 import pytest
 
-from unifideck.stores.ubisoft.auth import facade as facade_mod
 from unifideck.stores.shared.wrapper_auth_monitor import WrapperAuthMonitor
+from unifideck.stores.ubisoft.auth import facade as facade_mod
 from unifideck.stores.ubisoft.auth.facade import UbisoftAuth
 
 

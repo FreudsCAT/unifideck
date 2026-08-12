@@ -811,23 +811,34 @@ build_with_cli() {
             "$engine" run --rm -v "$SCRIPT_DIR":/v -w /v alpine rm -rf dist
     fi
 
-    # Stage files into a clean temporary directory.
+    # Stage files into a clean temporary directory. A trap removes it on any
+    # exit path, because a CLI failure trips `set -e` and would otherwise leak
+    # a full source copy into /tmp. The path is baked into the trap now since
+    # function-locals are not visible to the EXIT trap.
     local staging; staging=$(mktemp -d)
+    trap "rm -rf '$staging'" EXIT
     local staging_plugin="$staging/unifideck-staging"
     _stage_plugin_files "$staging_plugin"
     _stage_skip_cli_binary_download "$staging_plugin"
     chmod -R a+rX "$staging_plugin" 2>/dev/null || true
 
-    # Fire up the Decky CLI builder
+    # Fire up the Decky CLI builder. By default the CLI stages its own temp
+    # copy under /tmp/decky. A previous root-context build can leave that
+    # directory root-owned, and a deck build then cannot write into it, which
+    # fails with "Temporary build directory already exists / Permission
+    # denied". Point it at a fresh directory inside our own deck-owned staging
+    # tree so a stray root-owned /tmp/decky can never block a sudo-less build.
     mkdir -p "$OUTPUT_DIR"
     "$CLI_LOCATION/decky" plugin build "$staging_plugin" \
         --output-path "$OUTPUT_DIR" \
+        --tmp-output-path "$staging/decky-tmp" \
         --engine "$engine" \
         --follow-symlinks \
         --build-as-root
 
-    # Clean up staging dir
+    # Clean up staging dir (and disarm the trap set above)
     rm -rf "$staging"
+    trap - EXIT
 
     # The CLI hardcodes the output name to "Unifideck.zip". We rename it to our versioned format.
     local expected="$OUTPUT_DIR/Unifideck.zip"
@@ -861,6 +872,7 @@ build_local() {
 
     mkdir -p "$OUTPUT_DIR"
     local build_dir; build_dir=$(mktemp -d)
+    trap "rm -rf '$build_dir'" EXIT
     local plugin_dir="$build_dir/Unifideck"
     _stage_plugin_files "$plugin_dir"
 
@@ -1065,6 +1077,7 @@ build_local() {
 
     cd "$SCRIPT_DIR"
     rm -rf "$build_dir"
+    trap - EXIT
 
     # Stamped for both dev and prod builds - see _write_dev_build_json.
     if [ -f "$OUTPUT_FILE" ]; then

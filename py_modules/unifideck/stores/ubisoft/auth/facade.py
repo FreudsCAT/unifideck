@@ -211,7 +211,7 @@ class UbisoftAuth:
         """
         # A sign-in still being watched is moot once the user signs out, and
         # the prefix it is watching is about to be renamed out from under it.
-        await self._monitor.stop("signed out before sign-in completed")
+        await self._monitor.stop()
         self._session.clear_session_file()
         auth_dir = self._config.auth_prefix_dir_expanded
         trash = await asyncio.to_thread(self._rename_to_trash, auth_dir)
@@ -290,9 +290,9 @@ class UbisoftAuth:
         """Start auth session monitor."""
         return await self._monitor.start()
 
-    async def stop_auth_session_monitor(self, reason: str) -> None:
-        """Abandon a pending sign-in watch and report it as failed."""
-        await self._monitor.stop(reason)
+    async def stop_auth_session_monitor(self) -> None:
+        """Abandon a pending sign-in watch silently."""
+        await self._monitor.stop()
 
     def check_auth_session_status(self) -> dict[str, Any]:
         """Check auth session status."""

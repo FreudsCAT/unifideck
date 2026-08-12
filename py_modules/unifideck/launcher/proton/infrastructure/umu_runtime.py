@@ -21,7 +21,11 @@ logger = logging.getLogger(__name__)
 # Ns" toast truthful.
 _RETRY_BACKOFF_SECONDS = 3
 UMU_CACHE_DIR = Path("~/.local/share/umu").expanduser()
-_LAUNCHES_DIR = Path("~/.local/share/unifideck/launches").expanduser()
+def _launches_dir() -> Path:
+    """Resolved per call, not at import — same trap as ``wrapper_session.prefix_index_path``."""
+    return Path(
+        os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")),
+    ) / "unifideck" / "launches"
 # umu-run picks the Steam Runtime *generation* per Proton build (it reads
 # the selected PROTONPATH's own toolmanifest.vdf) — a newer GE-Proton can
 # require "steamrt4" instead of the default "sniper"/"steamrt3". Mirrors
@@ -151,8 +155,8 @@ def open_game_log() -> Any:
     """
     from unifideck.launcher.diagnostics.correlation import get_launch_id
     try:
-        _LAUNCHES_DIR.mkdir(parents=True, exist_ok=True)
-        path = _LAUNCHES_DIR / f"{get_launch_id()}.game.log"
+        _launches_dir().mkdir(parents=True, exist_ok=True)
+        path = _launches_dir() / f"{get_launch_id()}.game.log"
         return path.open("a", encoding="utf-8", errors="replace")
     except OSError as e:
         logger.debug("[launcher.umu] game log open failed: %s", e)

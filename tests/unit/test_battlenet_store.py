@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _wine_session import token_of, write_registry
 
+from unifideck.launcher import wrapper_session as ws
 from unifideck.stores.battlenet import BattlenetStore
 from unifideck.stores.battlenet import paths as bpaths
 from unifideck.stores.battlenet.library import build_library
@@ -27,9 +29,6 @@ from unifideck.stores.battlenet.ownership import (
     InstalledGame,
     merge_fragments,
 )
-from _wine_session import token_of, write_registry
-
-from unifideck.launcher import wrapper_session as ws
 from unifideck.stores.battlenet.prefix import MARKER_FILENAME
 from unifideck.stores.shared import prefix_clone as pc
 from unifideck.stores.shared.store_base import StoreBase
@@ -188,13 +187,21 @@ def test_start_auth_reports_no_bootstrap_needed_once_the_client_exists(
     assert result.metadata["needs_bootstrap"] is False
 
 
-def test_start_auth_clears_the_signed_out_marker(store: BattlenetStore) -> None:
-    """Otherwise a successful sign-in still reads as disconnected."""
+def test_start_auth_does_not_clear_the_signed_out_marker(store: BattlenetStore) -> None:
+    """The marker persists until the monitor confirms a completed sign-in.
+
+    Clearing it up front and then timing out would leave the store reporting
+    "available" when no sign-in happened — the marker gone but the previous
+    session's licence ledger still present. The monitor's ``on_captured``
+    hook clears it once the session actually lands.
+    """
     asyncio.run(store.logout())
     assert store._signed_out_marker.exists()
 
     asyncio.run(store.start_auth())
 
+    assert store._signed_out_marker.exists()
+    asyncio.run(store._on_auth_captured())
     assert not store._signed_out_marker.exists()
 
 
@@ -685,5 +692,7 @@ def test_probe_is_quiet_until_the_material_actually_changes(
 ) -> None:
     """Re-authenticating over a live session must not resolve instantly."""
     _place_session(store, log_body=_SIGNED_IN_LINE)
-    store._auth_baseline = store._auth_fingerprint()
+    store._auth_baseline = ws.fingerprint(
+        ws.spec_for("battlenet"), store.prefixes.auth_prefix,
+    )
     assert asyncio.run(store._auth_session_landed()) is False

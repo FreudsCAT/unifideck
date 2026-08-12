@@ -1,4 +1,4 @@
-"""Observing a wrapper store's sign-in, and reporting a verdict either way.
+"""Watching a wrapper store's prefix for a completed sign-in.
 
 py_modules/unifideck/stores/shared/wrapper_auth_monitor.py
 
@@ -7,25 +7,34 @@ detached inside a Wine prefix. There is no callback: the client writes its
 session into the prefix and exits, so the only way to know sign-in finished
 is to watch the prefix for it.
 
-The frontend depends on that verdict far more than it looks. ``AuthDispatcher``
-holds one in-flight promise per store in a module-singleton ``Map`` and only
-clears it when ``STORE_AUTH_COMPLETE`` or ``STORE_AUTH_FAILED`` arrives. A flow
-that emits neither does not merely fail to update the UI — it wedges the button
-for the full 10-minute timeout, because the next press is handed the same stale
-pending promise and never reaches the RPC at all. Measured from a tester's
-device: Battle.net's sign-in emitted nothing, and "it only worked again after I
-restarted Steam" is exactly what reloading the frontend bundle does to that map.
+The frontend depends on a success signal. ``AuthDispatcher`` holds one
+in-flight promise per store and only clears it when the backend emits
+``STORE_AUTH_COMPLETE`` — otherwise the promise stays pending and the Sign In
+button returns nothing on later presses. Measured from a tester's device:
+Battle.net's sign-in emitted nothing, and "it only worked again after I
+restarted Steam" is exactly what reloading the frontend bundle does.
 
-So this module exists to guarantee **a terminal event on every path**, which is
-the part both stores previously got wrong in different ways:
+This module provides the success half. Failure is the dispatcher's own
+concern and need not be signalled from here — it already resolves on the
+auth app's exit and on its own 10-minute timeout.
 
-* Battle.net had no monitor at all — no success signal, no failure signal.
-* Ubisoft emitted ``STORE_AUTH_COMPLETE`` on capture but nothing on the timeout
-  path, so an abandoned or rejected sign-in hung the frontend identically.
+**``STORE_AUTH_FAILED`` is deliberately never emitted.** The frontend
+``auth-store`` subscribes to that event and translates it to a store status
+of ``"error"``, which ``StoreAuthButton`` renders as ``null`` — the button
+vanishes. The one answer worse than a button that does nothing is a button
+that is not there at all. A sign-in that times out should show
+"disconnected" with a working Connect button, not a blank row.
 
-Shared rather than copied for the reason ``prefix_placement`` states: the same
-question asked separately in two places is how these stores drift apart. A
-store supplies a probe and, optionally, what to do once the session lands.
+The original Ubisoft monitor (``stores/ubisoft/auth/session_monitor.py``,
+now retired) got this right by accident: it only ever emitted success and
+logged a warning on timeout, so the flow silently hung rather than
+vanishing. Battle.net had nothing. This module replaces both, and its rule
+is the same: signal success, and only success.
+
+Shared rather than copied for the reason ``prefix_placement`` states: the
+same question asked separately in two places is how these stores drift
+apart. A store supplies a probe and, optionally, what to do once the
+session lands.
 """
 
 from __future__ import annotations
@@ -91,17 +100,15 @@ class WrapperAuthMonitor:
         logger.info("[%sAuth] started auth session monitor", self._store)
         return Result(success=True)
 
-    async def stop(self, reason: str) -> None:
-        """Abandon the watch and report failure.
+    async def stop(self) -> None:
+        """Abandon the watch silently.
 
         For the paths that make a pending sign-in moot — a logout, or the user
-        starting over. Silent on an already-finished monitor: a completed
-        capture has emitted its verdict and must not be contradicted.
+        pressing Sign In again. The cancelled task will unwind without
+        emitting anything. A completed capture has already emitted its
+        verdict and is left undisturbed; the guard is ``_session_captured``.
         """
-        running = self._monitor_task is not None and not self._monitor_task.done()
         await self._cancel_task()
-        if running and not self._session_captured:
-            await self._emit_failed(reason)
 
     async def _cancel_task(self) -> None:
         """Cancel the in-flight task, if any, and wait for it to unwind."""
@@ -134,9 +141,6 @@ class WrapperAuthMonitor:
             "[%sAuth] auth session monitor timed out after %.0fs",
             self._store, self._timeout_s,
         )
-        await self._emit_failed(
-            f"Sign-in was not completed within {int(self._timeout_s // 60)} minutes",
-        )
 
     async def _probe(self) -> bool:
         """Ask the store whether it is signed in yet.
@@ -165,10 +169,6 @@ class WrapperAuthMonitor:
     async def _emit_complete(self) -> None:
         """Emit STORE_AUTH_COMPLETE so the frontend settles and refreshes."""
         await self._emit(Events.STORE_AUTH_COMPLETE)
-
-    async def _emit_failed(self, error: str) -> None:
-        """Emit STORE_AUTH_FAILED so the frontend settles instead of hanging."""
-        await self._emit(Events.STORE_AUTH_FAILED, error=error)
 
     async def _emit(self, event: str, **payload: Any) -> None:
         """Emit ``event`` for this store, swallowing bus failures."""
