@@ -55,6 +55,9 @@ from unifideck.launcher.proton.handlers.battlenet_client import (
     record_launch_ok,
     resolve_family,
 )
+from unifideck.launcher.proton.infrastructure.container_escape import (
+    escape_argv,
+)
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 from unifideck.launcher.proton.infrastructure.umu_runtime import run_umu_with_retry
 from unifideck.launcher.types.errors import GameFailedError
@@ -118,7 +121,13 @@ def _install_error(result: BootstrapResult | None, fallback: str) -> str:
 
 async def _start_client_detached(plan: ProtonLaunchPlan, launcher_exe: Path) -> None:
     """Phase A. Owns the wineserver session, so it keeps waitforexitandrun."""
-    argv = [str(plan.python_bin), str(plan.umu_wrapper), str(launcher_exe)]
+    # Escape Steam's pressure-vessel when Force-Compat wrapped us, or the
+    # client nests a second container and never starts. No-op when
+    # unwrapped. See infrastructure.container_escape.
+    argv = escape_argv(
+        [str(plan.python_bin), str(plan.umu_wrapper), str(launcher_exe)],
+        plan.env, None,
+    )
     logger.info("[battlenet] phase A: starting client")
     proc = await asyncio.create_subprocess_exec(
         *argv,

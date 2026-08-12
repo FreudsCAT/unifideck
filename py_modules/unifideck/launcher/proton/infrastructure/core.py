@@ -271,6 +271,32 @@ def _apply_icu_dll_overrides(env: dict[str, str], game_id: str | None) -> None:
     )
 
 
+def _apply_per_title_env(
+    env: dict[str, str],
+    ctx: LaunchContext,
+    *,
+    umu_id: str | None,
+    exe_name: str,
+    rockstar_egs: bool,
+) -> None:
+    """Layer the per-title / per-store env quirks onto ``env`` in place.
+
+    Split out of :func:`_build_umu_env` to keep it under the line cap. Every
+    branch here is gated so a title that matches nothing is left byte-for-byte
+    unchanged, and all of them run BEFORE ``ctx.env_overrides`` so a user's
+    explicit value still wins.
+    """
+    from unifideck.launcher.proton.fixes.game_fixes import needs_native_icu
+    if rockstar_egs:
+        _apply_rockstar_dll_overrides(env, umu_id)
+    if ctx.store == "battlenet":
+        _apply_battlenet_env(env)
+    # Store-independent: keyed off the exe/id, not ctx.store, because the
+    # same title ships the same bundled ICU on GOG and Epic alike.
+    if needs_native_icu(ctx.game_id, umu_id, exe_name):
+        _apply_icu_dll_overrides(env, ctx.game_id)
+
+
 def _build_umu_env(
     ctx: LaunchContext,
     *,
@@ -288,10 +314,7 @@ def _build_umu_env(
     """
     import os
 
-    from unifideck.launcher.proton.fixes.game_fixes import (
-        is_rockstar_egs,
-        needs_native_icu,
-    )
+    from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
     env = dict(os.environ)
     had_ld_preload_orig = "LD_PRELOAD_ORIG" in env
     # Strip the Decky PluginLoader's PyInstaller LD_LIBRARY_PATH pollution so
@@ -342,14 +365,9 @@ def _build_umu_env(
     # one on atomic hosts.
     env.pop("STEAM_COMPAT_CLIENT_INSTALL_PATH", None)
     env["PROTON_VERB"] = "waitforexitandrun"
-    if rockstar_egs:
-        _apply_rockstar_dll_overrides(env, umu_id)
-    if ctx.store == "battlenet":
-        _apply_battlenet_env(env)
-    # Store-independent: keyed off the exe/id, not ctx.store, because the
-    # same title ships the same bundled ICU on GOG and Epic alike.
-    if needs_native_icu(ctx.game_id, umu_id, exe_name):
-        _apply_icu_dll_overrides(env, ctx.game_id)
+    _apply_per_title_env(
+        env, ctx, umu_id=umu_id, exe_name=exe_name, rockstar_egs=rockstar_egs,
+    )
     env.update(ctx.env_overrides)
     logger.info(
         "[launcher.proton.core] plan ready: store=%s umu_store=%s "

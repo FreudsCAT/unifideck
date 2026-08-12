@@ -43,6 +43,9 @@ from unifideck.launcher.proton.compat.ge_fallback import fallback_to_ge_proton
 from unifideck.launcher.proton.compat.save_migration import (
     restore_or_migrate_saves,
 )
+from unifideck.launcher.proton.infrastructure.container_escape import (
+    escape_argv,
+)
 from unifideck.launcher.proton.infrastructure.prefix_layout import (
     normalize_prefix_root,
     resolve_registry_prefix,
@@ -438,7 +441,14 @@ async def _run_umu(
     goes to the same per-launch ``game.log`` the real launch uses, so a
     support bundle carries it.
     """
-    argv = [str(plan.python_bin), str(plan.umu_wrapper), *umu_args]
+    # Force-Compat puts US inside Steam's pressure-vessel, and nesting a
+    # second container makes umu die with "bwrap: execvp true: No such file
+    # or directory" — every createprefix/wineboot exit 1, so the prefix is
+    # never built and the launch cannot recover (field bundle 2026-08-12).
+    # No-op when unwrapped. See infrastructure.container_escape.
+    argv = escape_argv(
+        [str(plan.python_bin), str(plan.umu_wrapper), *umu_args], env, None,
+    )
     game_log = open_game_log()
     out = game_log if game_log is not None else asyncio.subprocess.DEVNULL
     try:
