@@ -99,11 +99,15 @@ def prefix_index_path() -> Path:
     return Path(base) / "unifideck" / "wrapper_prefixes.json"
 
 
-def write_prefix_index(store: str, *, auth: Path, template: Path) -> None:
+def write_prefix_index(
+    store: str, *, auth: Path, template: Path, locale: str | None = None,
+) -> None:
     """Record where ``store``'s auth and template prefixes live.
 
     Merges rather than replaces: one file serves every wrapper store, and
-    each store writes only its own row on init.
+    each store writes only its own row on init. ``locale`` is the plugin's
+    BCP-47 UI locale, written so the launcher can seed the client's own
+    language setting from it — same idea as the install-language modal.
     """
     path = prefix_index_path()
     index: dict[str, dict[str, str]] = {}
@@ -113,7 +117,10 @@ def write_prefix_index(store: str, *, auth: Path, template: Path) -> None:
             index = {k: v for k, v in raw.items() if isinstance(v, dict)}
     except (OSError, ValueError):
         index = {}
-    index[store] = {"auth": str(auth), "template": str(template)}
+    row: dict[str, str] = {"auth": str(auth), "template": str(template)}
+    if locale:
+        row["locale"] = locale
+    index[store] = row
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
@@ -361,6 +368,11 @@ def inject(
         return False
     if not _identities_agree(spec, Path(source), Path(target)):
         return False
+    # Seed the launcher's language from the plugin locale at most once, so
+    # the first launch picks up the locale the language-selector modal
+    # already defaults to. Runs before the prefs merge, which then carries
+    # the seed into the target.
+    wrapper_prefs.ensure_locale_seeded(spec, source)
     wrapper_prefs.merge(spec, source, target, target_busy=target_busy)
     if not has_session(spec, source):
         logger.info(

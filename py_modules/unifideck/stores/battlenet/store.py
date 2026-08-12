@@ -41,6 +41,7 @@ from unifideck.stores.shared.auth_shortcut import (
 from unifideck.stores.shared.store_base import StoreBase
 from unifideck.stores.shared.wrapper_auth_monitor import WrapperAuthMonitor
 from unifideck.stores.shared.wrapper_session_hooks import WrapperSessionHooks
+from unifideck.utils.locale import get_unifideck_locale
 
 from . import config as store_config
 from . import library as library_mod
@@ -98,10 +99,12 @@ class BattlenetStore(WrapperSessionHooks, StoreBase):
         )
         # Credential fingerprint as it was when the current sign-in started.
         self._auth_baseline: tuple[float, int] = (0.0, 0)
-        # Tell the out-of-process launcher where the shared prefixes are: it
-        # runs under the system Python, cannot read our config, and needs the
-        # auth prefix to inject the live session before it starts a client.
-        self.publish_session_prefixes(self.prefixes.template_prefix)
+        # Tell the out-of-process launcher where the shared prefixes are
+        # and what the plugin's UI locale is, so it can seed the vendor
+        # client's language from it on the first launch.
+        self.publish_session_prefixes(
+            self.prefixes.template_prefix, locale=get_unifideck_locale(config),
+        )
         # Subscribes ``GAME_STOPPED`` so the token the client rotates during a
         # play session is captured back to the auth prefix.
         auto_wire(self, bus)
