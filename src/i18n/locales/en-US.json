@@ -48,6 +48,7 @@
     "emptyDirectory": "Empty folder",
     "showHidden": "Show Hidden",
     "selectDevice": "Select Device",
+    "noExternalDrives": "No external drives detected",
     "sortAZ": "A-Z",
     "sortZA": "Z-A",
     "sortModifiedNewest": "Modified (Newest)",

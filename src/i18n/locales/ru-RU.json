@@ -48,6 +48,7 @@
     "emptyDirectory": "Пустая папка",
     "showHidden": "Показывать скрытые",
     "selectDevice": "Выбрать накопитель",
+    "noExternalDrives": "Внешние накопители не обнаружены",
     "sortAZ": "А-Я",
     "sortZA": "Я-А",
     "sortModifiedNewest": "Изменено (сначала новые)",

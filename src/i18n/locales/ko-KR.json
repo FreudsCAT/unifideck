@@ -48,6 +48,7 @@
     "emptyDirectory": "빈 폴더",
     "showHidden": "숨김 파일 표시",
     "selectDevice": "장치 선택",
+    "noExternalDrives": "외부 드라이브를 찾을 수 없습니다",
     "sortAZ": "A-Z",
     "sortZA": "Z-A",
     "sortModifiedNewest": "수정일 (최신순)",

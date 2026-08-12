@@ -48,6 +48,7 @@
     "emptyDirectory": "空のフォルダ",
     "showHidden": "非表示ファイルを表示",
     "selectDevice": "デバイスを選択",
+    "noExternalDrives": "外部ドライブが見つかりません",
     "sortAZ": "A-Z",
     "sortZA": "Z-A",
     "sortModifiedNewest": "更新日時 (新しい順)",

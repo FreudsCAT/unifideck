@@ -232,32 +232,38 @@ def _check_install_fstype(view: _View) -> CheckResult:
 
 
 def _check_storage_visibility(view: _View) -> CheckResult:
-    """Flag user storage the kernel sees but the plugin does not.
+    """Flag user storage the kernel sees but the install picker won't offer.
 
     Scoped to removable, network and automounted media via
     :func:`is_user_storage`. An earlier version compared every mounted
     device and failed on every healthy machine, because the internal
     disk is bind-mounted at paths the plugin's install-target scanner
     deliberately filters out.
+
+    ``offered_in_picker`` is the field that matters, not
+    ``visible_to_plugin``: the user's complaint is "I can't install
+    there", and a mount can be perfectly visible to the scanner yet
+    still be refused by the picker's writability gate. Each device
+    carries its own ``visibility_note`` saying which of the two it is.
     """
     name = "storage_visible_to_plugin"
     devices = view.block("storage").get("devices") or []
     candidates = [item for item in devices if is_user_storage(item)]
-    invisible = [
+    unusable = [
         f"{item['name']} at {item['mounted_at']} - {item['visibility_note']}"
         for item in candidates
-        if item.get("mounted_at") and not item.get("visible_to_plugin")
+        if item.get("mounted_at") and not item.get("offered_in_picker")
     ]
-    if invisible:
+    if unusable:
         return _fail(
             name,
-            "removable/external storage is mounted but invisible to the "
-            f"plugin (this is the 'drive not detected' failure): "
-            f"{'; '.join(invisible)}",
+            "removable/external storage is mounted but the plugin cannot "
+            f"install to it (this is the 'drive not detected' failure): "
+            f"{'; '.join(unusable)}",
         )
     if not candidates:
         return _na(name, "no removable or external storage attached")
-    return _ok(name, f"{len(candidates)} external device(s) visible to the plugin")
+    return _ok(name, f"{len(candidates)} external device(s) offered by the picker")
 
 
 def _check_unmounted_removable(view: _View) -> CheckResult:

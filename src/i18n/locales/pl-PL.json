@@ -48,6 +48,7 @@
     "emptyDirectory": "Pusty folder",
     "showHidden": "Pokaż ukryte",
     "selectDevice": "Wybierz urządzenie",
+    "noExternalDrives": "Nie wykryto dysków zewnętrznych",
     "sortAZ": "A-Z",
     "sortZA": "Z-A",
     "sortModifiedNewest": "Modyfikacja (najnowsze)",

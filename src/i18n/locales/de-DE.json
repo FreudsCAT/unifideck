@@ -48,6 +48,7 @@
     "emptyDirectory": "Leerer Ordner",
     "showHidden": "Versteckte anzeigen",
     "selectDevice": "Gerät auswählen",
+    "noExternalDrives": "Keine externen Laufwerke erkannt",
     "sortAZ": "A-Z",
     "sortZA": "Z-A",
     "sortModifiedNewest": "Geändert (Neueste)",

@@ -48,6 +48,7 @@
     "emptyDirectory": "مجلد فارغ",
     "showHidden": "إظهار الملفات المخفية",
     "selectDevice": "اختر جهاز التخزين",
+    "noExternalDrives": "لم يتم العثور على أي أقراص خارجية",
     "sortAZ": "أ-ي",
     "sortZA": "ي-أ",
     "sortModifiedNewest": "تاريخ التعديل (الأحدث أولاً)",

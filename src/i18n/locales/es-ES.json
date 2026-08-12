@@ -48,6 +48,7 @@
     "emptyDirectory": "Carpeta vacía",
     "showHidden": "Mostrar ocultos",
     "selectDevice": "Seleccionar dispositivo",
+    "noExternalDrives": "No se detectaron unidades externas",
     "sortAZ": "A-Z",
     "sortZA": "Z-A",
     "sortModifiedNewest": "Modificado (más reciente)",

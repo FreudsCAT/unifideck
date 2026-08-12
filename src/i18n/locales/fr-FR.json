@@ -48,6 +48,7 @@
     "emptyDirectory": "Dossier vide",
     "showHidden": "Afficher les fichiers cachés",
     "selectDevice": "Sélectionner le périphérique",
+    "noExternalDrives": "Aucun disque externe détecté",
     "sortAZ": "A-Z",
     "sortZA": "Z-A",
     "sortModifiedNewest": "Modifié (le plus récent)",

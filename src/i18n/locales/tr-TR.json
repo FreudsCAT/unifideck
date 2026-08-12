@@ -48,6 +48,7 @@
     "emptyDirectory": "Boş klasör",
     "showHidden": "Gizlileri Göster",
     "selectDevice": "Cihaz Seç",
+    "noExternalDrives": "Harici sürücü bulunamadı",
     "sortAZ": "A-Z",
     "sortZA": "Z-A",
     "sortModifiedNewest": "Değiştirilme (En yeni)",

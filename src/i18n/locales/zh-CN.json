@@ -48,6 +48,7 @@
     "emptyDirectory": "空文件夹",
     "showHidden": "显示隐藏文件",
     "selectDevice": "选择存储设备",
+    "noExternalDrives": "未检测到外部存储设备",
     "sortAZ": "A-Z",
     "sortZA": "Z-A",
     "sortModifiedNewest": "修改时间 (最新)",

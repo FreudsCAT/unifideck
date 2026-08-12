@@ -48,6 +48,7 @@
     "emptyDirectory": "空資料夾",
     "showHidden": "顯示隱藏檔案",
     "selectDevice": "選擇儲存裝置",
+    "noExternalDrives": "未偵測到外接儲存裝置",
     "sortAZ": "A-Z",
     "sortZA": "Z-A",
     "sortModifiedNewest": "修改時間 (最新)",
