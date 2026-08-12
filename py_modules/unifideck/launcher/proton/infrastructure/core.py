@@ -247,6 +247,30 @@ def _apply_rockstar_dll_overrides(env: dict[str, str], umu_id: str | None) -> No
     )
 
 
+def _apply_icu_dll_overrides(env: dict[str, str], game_id: str | None) -> None:
+    """Add the native-ICU WINEDLLOVERRIDES to ``env`` in place.
+
+    Merges with any existing overrides rather than clobbering (Proton
+    appends its own long default list, and battlenet may already have put
+    ``locationapi=d`` here); a user's explicit ``ctx.env_overrides`` still
+    wins, since that is applied afterwards.
+    """
+    from unifideck.launcher.proton.fixes.game_fixes import (
+        ICU_NATIVE_WINEDLLOVERRIDES,
+    )
+    existing = env.get("WINEDLLOVERRIDES", "")
+    if "icuuc" in existing:
+        return
+    env["WINEDLLOVERRIDES"] = (
+        f"{existing};{ICU_NATIVE_WINEDLLOVERRIDES}"
+        if existing else ICU_NATIVE_WINEDLLOVERRIDES
+    )
+    logger.info(
+        "[launcher.proton.core] native-ICU title (%s): WINEDLLOVERRIDES+=%s",
+        game_id, ICU_NATIVE_WINEDLLOVERRIDES,
+    )
+
+
 def _build_umu_env(
     ctx: LaunchContext,
     *,
@@ -264,7 +288,10 @@ def _build_umu_env(
     """
     import os
 
-    from unifideck.launcher.proton.fixes.game_fixes import is_rockstar_egs
+    from unifideck.launcher.proton.fixes.game_fixes import (
+        is_rockstar_egs,
+        needs_native_icu,
+    )
     env = dict(os.environ)
     had_ld_preload_orig = "LD_PRELOAD_ORIG" in env
     # Strip the Decky PluginLoader's PyInstaller LD_LIBRARY_PATH pollution so
@@ -319,6 +346,10 @@ def _build_umu_env(
         _apply_rockstar_dll_overrides(env, umu_id)
     if ctx.store == "battlenet":
         _apply_battlenet_env(env)
+    # Store-independent: keyed off the exe/id, not ctx.store, because the
+    # same title ships the same bundled ICU on GOG and Epic alike.
+    if needs_native_icu(ctx.game_id, umu_id, exe_name):
+        _apply_icu_dll_overrides(env, ctx.game_id)
     env.update(ctx.env_overrides)
     logger.info(
         "[launcher.proton.core] plan ready: store=%s umu_store=%s "
