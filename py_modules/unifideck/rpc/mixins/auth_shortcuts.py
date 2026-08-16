@@ -152,6 +152,38 @@ class AuthShortcutsRPCMixin:
             )
             return {"success": False, "error": str(e)}
 
+    async def get_effective_proton_tool(self, store_game_id: str) -> Any:
+        """Name the Proton this game will launch under, for display.
+
+        Read-only, and only ever reports a tool the *user* chose in
+        Steam's Properties > Compatibility dialog — see
+        ``compatibility.effective_proton`` for what is deliberately left
+        out. ``tool_name`` empty means "no custom choice", which is the
+        normal case, and the panel then shows nothing.
+
+        Unlike :meth:`get_compat_tool_for_game` this changes nothing: it
+        neither saves a pin nor clears Steam's setting, so opening a
+        game's page can never move the user's choice around.
+        """
+        try:
+            from unifideck.compatibility.effective_proton import (
+                describe_effective_proton,
+            )
+            appid_unsigned, _ = self._resolve_shortcut_entry(store_game_id)
+            result = describe_effective_proton(store_game_id, appid_unsigned)
+            logger.info(
+                "[AuthShortcuts] effective proton for %s: %r (source=%s)",
+                store_game_id, result["display_name"], result["source"],
+            )
+            return {"success": True, **result}
+        except Exception as e:
+            # A failure here costs one line of UI, never a launch.
+            logger.warning(
+                "[AuthShortcuts] get_effective_proton_tool(%s) failed: %s",
+                store_game_id, e,
+            )
+            return {"success": False, "error": str(e)}
+
     async def _get_compat_tool_impl(self, store_game_id: str) -> Any:
         """Return the Steam Force-Compatibility tool for a game shortcut.
 
