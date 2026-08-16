@@ -83,6 +83,21 @@ export interface Game {
   metadata?: Record<string, unknown>;
 }
 
+/** The Proton a game will launch under, when the user picked one.
+ *
+ * Backed by ``get_effective_proton_tool``. All three fields are empty
+ * for the normal case — no per-game choice, so the plugin's own managed
+ * GE-Proton runs the game and the panel says nothing. */
+export interface EffectiveProtonTool {
+  success?: boolean;
+  /** Steam's internal id, verbatim ("proton_9", "GE-Proton7-55"). */
+  tool_name: string;
+  /** The build as Steam displays it ("Proton 9.0 (Beta)"). */
+  display_name: string;
+  /** "steam" (live Force-Compat), "pin" (Unifideck's own), or "". */
+  source: string;
+}
+
 /** One achievement (definition + this user's unlock status). */
 export interface Achievement {
   key: string;

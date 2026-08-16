@@ -4,7 +4,8 @@
  * Renders the Steam Deck compatibility badge, the Details and
  * Synopsis toggle buttons, the Install / Uninstall / Cancel
  * action button (live progress when downloading), and the
- * comma-dot-separated genre tags underneath.
+ * dot-separated genre tags underneath — followed, when the user
+ * chose a Proton for this game, by which one it will run on.
  *
  * The action button drives:
  *  - install via {@link useInstallFlow} (handles GOG language picker);
@@ -19,13 +20,16 @@ import { DialogButton, Focusable, showModal } from "@decky/ui";
 import { useTranslation } from "react-i18next";
 import { useGameInfo } from "../../hooks/useGameInfo";
 import { useGameActions } from "../../hooks/useGameActions";
+import { useRPCQuery } from "../../api/useRPC";
+import { rpcRoutes } from "../../api/rpc-routes";
 import { useDownloads } from "../../contexts/DownloadContext";
 import { useToast } from "../../hooks/useToast";
 import { SteamBridge } from "../../lib/steam-bridge";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
+import { buildInfoLine } from "./infoLine";
 import { GameInfoDetailsModal } from "./GameInfoDetailsModal";
 import { GameAchievementsModal } from "./GameAchievementsModal";
-import type { GameMetadata } from "../../types/api";
+import type { EffectiveProtonTool, GameMetadata } from "../../types/api";
 
 interface Props {
   appId: number;
@@ -136,6 +140,26 @@ export const GameInfoCompatRow: FC<Props> = ({
 
   const compatColors = COMPAT_COLORS[meta.deck_compatibility];
 
+  // The genre line doubles as "what will this game run on". Unifideck has
+  // no Proton picker of its own, so a user who set one in Steam's
+  // Properties > Compatibility had no way to see it from here — and after
+  // the first launch Unifideck moves that setting into its own pin and
+  // clears Steam's copy (see utils/protonPin.ts), so Steam's dialog stops
+  // showing it too. Empty for the usual case, where the plugin picks
+  // GE-Proton itself and there is nothing worth saying.
+  const storeGameId = game ? `${game.store}:${game.store_game_id}` : "";
+  const { data: proton } = useRPCQuery<[string], EffectiveProtonTool>(
+    rpcRoutes.getEffectiveProtonTool,
+    [storeGameId],
+    { enabled: storeGameId !== "" },
+  );
+  const infoLine = buildInfoLine(
+    meta.genres,
+    proton?.display_name
+      ? t("gameInfoPanel.protonInUse", { proton: proton.display_name })
+      : "",
+  );
+
   return (
     // "grid" rather than "row" — this Focusable lays out as a COLUMN and its
     // buttons sit in a wrapping inner div, so a single-logical-row hint was
@@ -212,10 +236,8 @@ export const GameInfoCompatRow: FC<Props> = ({
           </DialogButton>
         )}
       </div>
-      {meta.genres.length > 0 && (
-        <div style={{ color: "#8f98a0", fontSize: 13 }}>
-          {meta.genres.join(" • ")}
-        </div>
+      {infoLine !== "" && (
+        <div style={{ color: "#8f98a0", fontSize: 13 }}>{infoLine}</div>
       )}
     </Focusable>
   );

@@ -28,6 +28,7 @@ export const rpcRoutes = {
   getUbisoftAuthShortcutContext: "get_ubisoft_auth_shortcut_context",
   getBattlenetAuthShortcutContext: "get_battlenet_auth_shortcut_context",
   getCompatToolForGame: "get_compat_tool_for_game",
+  getEffectiveProtonTool: "get_effective_proton_tool",
   saveProtonSetting: "save_proton_setting",
   // Library sync (SyncRPCMixin)
   syncLibraries: "sync_libraries",

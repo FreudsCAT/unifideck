@@ -569,6 +569,7 @@
     "loading": "Loading game information...",
     "noMetadata": "No metadata available for this game.",
     "noTestResults": "No detailed test results available.",
+    "protonInUse": "This game will run using {{proton}}",
     "buttons": {
       "details": "Details",
       "synopsis": "Synopsis",
