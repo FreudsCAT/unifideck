@@ -155,15 +155,16 @@ export const InstalledGameRow: FC<Props> = ({ game, disk, onUninstalled }) => {
       launchManualGame(game.store_game_id);
       return;
     }
+    const gameKey = `${game.store}:${game.store_game_id}`;
     if (!hasUpdate) {
-      actions.launch(appId);
+      void actions.launch(appId, gameKey);
       return;
     }
     showModal(
       <UpdateAvailableModal
         gameTitle={game.title}
         onUpdate={queueUpdate}
-        onPlayAnyway={() => actions.launch(appId)}
+        onPlayAnyway={() => void actions.launch(appId, gameKey)}
         closeModal={() => {}}
       />,
     );
