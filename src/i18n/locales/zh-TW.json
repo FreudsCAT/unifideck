@@ -521,6 +521,7 @@
     "loading": "正在載入遊戲資訊...",
     "noMetadata": "此遊戲無可用元資料。",
     "noTestResults": "無詳細測試結果可用。",
+    "protonInUse": "本遊戲將使用 {{proton}} 執行",
     "buttons": {
       "details": "詳細資訊",
       "synopsis": "劇情大綱",

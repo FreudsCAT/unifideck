@@ -521,6 +521,7 @@
     "loading": "Oyun bilgileri yükleniyor...",
     "noMetadata": "Bu oyun için meta veri bulunmuyor.",
     "noTestResults": "Detaylı test sonucu bulunmuyor.",
+    "protonInUse": "Bu oyun {{proton}} ile çalıştırılacak",
     "buttons": {
       "details": "Detaylar",
       "synopsis": "Özet",

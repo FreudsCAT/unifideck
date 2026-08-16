@@ -521,6 +521,7 @@
     "loading": "Spielinformationen werden geladen...",
     "noMetadata": "Keine Metadaten für dieses Spiel verfügbar.",
     "noTestResults": "Keine detaillierten Testergebnisse verfügbar.",
+    "protonInUse": "Dieses Spiel wird mit {{proton}} ausgeführt",
     "buttons": {
       "details": "Details",
       "synopsis": "Zusammenfassung",
