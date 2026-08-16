@@ -121,15 +121,16 @@ export const InstalledGameRow: FC<Props> = ({ game, disk, onUninstalled }) => {
   // than blocking it.
   const onPlay = () => {
     if (appId == null) return;
+    const gameKey = `${game.store}:${game.store_game_id}`;
     if (!hasUpdate) {
-      actions.launch(appId);
+      void actions.launch(appId, gameKey);
       return;
     }
     showModal(
       <UpdateAvailableModal
         gameTitle={game.title}
         onUpdate={queueUpdate}
-        onPlayAnyway={() => actions.launch(appId)}
+        onPlayAnyway={() => void actions.launch(appId, gameKey)}
         closeModal={() => {}}
       />,
     );
