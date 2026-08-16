@@ -569,6 +569,7 @@
     "loading": "正在加载游戏信息...",
     "noMetadata": "此游戏无可用元数据。",
     "noTestResults": "无详细测试结果可用。",
+    "protonInUse": "本游戏将使用 {{proton}} 运行",
     "buttons": {
       "details": "详细信息",
       "synopsis": "剧情大纲",

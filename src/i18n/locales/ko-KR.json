@@ -569,6 +569,7 @@
     "loading": "게임 정보 불러오는 중...",
     "noMetadata": "이 게임에 사용할 수 있는 메타데이터가 없습니다.",
     "noTestResults": "제공된 테스트 결과 데이터가 없습니다.",
+    "protonInUse": "이 게임은 {{proton}}(으)로 실행됩니다",
     "buttons": {
       "details": "상세 정보",
       "synopsis": "시놉시스",

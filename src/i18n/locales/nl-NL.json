@@ -569,6 +569,7 @@
     "loading": "Game-informatie laden...",
     "noMetadata": "Geen metadata beschikbaar voor deze game.",
     "noTestResults": "Geen gedetailleerde testresultaten beschikbaar.",
+    "protonInUse": "Deze game wordt uitgevoerd met {{proton}}",
     "buttons": {
       "details": "Details",
       "synopsis": "Synopsis",
