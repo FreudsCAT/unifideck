@@ -356,6 +356,8 @@
       "battlenetStartingClientMessage": "Waiting for the Battle.net client to be ready…",
       "battlenetInstallingClient": "Instalando Battle.net",
       "battlenetInstallingClientMessage": "Configurando el cliente de Battle.net: puede tardar unos minutos.",
+      "battlenetRepairingClient": "Reparando Battle.net",
+      "battlenetRepairingClientMessage": "El cliente de Battle.net está incompleto y se está reinstalando. Puede tardar unos minutos.",
       "battlenetClientNotReady": "Battle.net Didn't Start",
       "battlenetClientNotReadyMessage": "The Battle.net client did not finish starting. It may be applying an update — try again in a moment.",
       "battlenetClientBusyElsewhere": "Battle.net Is Busy",

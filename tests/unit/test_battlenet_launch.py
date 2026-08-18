@@ -17,6 +17,7 @@ real debugging time and none of which is obvious from the code:
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,11 @@ def _install_client(prefix: Path) -> None:
     d.mkdir(parents=True, exist_ok=True)
     (d / client.CLIENT_EXE).write_bytes(b"MZ")
     (d / client.LAUNCHER_EXE).write_bytes(b"MZ")
+    # The versioned payload the shim loads. Without it the prefix is
+    # the shape an interrupted install leaves and no client can start.
+    build = d / "Battle.net.17651"
+    build.mkdir(exist_ok=True)
+    (build / client.CLIENT_EXE).write_bytes(b"MZ")
 
 
 @pytest.fixture
@@ -175,7 +181,9 @@ def _arm(monkeypatch: pytest.MonkeyPatch, *, ready: bool, game: str | None) -> N
     monkeypatch.setattr(handler.watch, "client_ready", lambda p: ready)
     monkeypatch.setattr(handler.watch, "game_pids", lambda p: set())
 
-    async def fake_wait_ready(p: Any, t: float, poll: float = 2.0) -> bool:
+    async def fake_wait_ready(
+        p: Any, t: float, poll: float = 2.0, proc: Any = None,
+    ) -> bool:
         return ready
 
     async def fake_wait_game(p: Any, before: set, t: float, poll: float = 3.0) -> str | None:
@@ -712,7 +720,9 @@ def _arm_stale(
         handler.watch, "stop_stale_session", lambda p: cleared.append(str(p)),
     )
 
-    async def fake_wait_ready(p: Any, t: float, poll: float = 2.0) -> bool:
+    async def fake_wait_ready(
+        p: Any, t: float, poll: float = 2.0, proc: Any = None,
+    ) -> bool:
         return ready
 
     monkeypatch.setattr(handler.watch, "wait_for_client_ready", fake_wait_ready)
@@ -757,3 +767,259 @@ def test_a_cold_prefix_costs_nothing(
     asyncio.run(handler._clear_stale_session(plan))
     assert cleared == []
     assert waited == []
+
+
+# --------------------------------------------------------------------------
+# phase A: observable, and over when the client is gone
+# --------------------------------------------------------------------------
+
+
+class _Exited:
+    """A phase-A process handle that has already exited."""
+
+    def __init__(self, rc: int = 1) -> None:
+        self.returncode = rc
+
+
+class _Running:
+    """A phase-A process handle still running (asyncio leaves rc None)."""
+
+    returncode = None
+
+
+def test_a_client_that_exits_without_starting_ends_the_wait(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The measured failure: exited in ~20 s, then 4½ minutes of nothing.
+
+    The old wait had no liveness condition, so a client that was provably
+    gone still cost the full 300 s and reported "not ready" — which reads
+    as "still starting" and pointed the diagnosis at the wrong subsystem.
+    """
+    monkeypatch.setattr(watch, "client_ready", lambda p: False)
+    monkeypatch.setattr(watch, "wine_pids", lambda p: [])
+    slept: list[float] = []
+
+    async def _no_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(watch.asyncio, "sleep", _no_sleep)
+    ready = asyncio.run(
+        watch.wait_for_client_ready(plan.prefix_path, 300.0, proc=_Exited()),
+    )
+    assert ready is False
+    # Returned on the first pass rather than polling out the deadline.
+    assert slept == []
+
+
+def test_a_live_wine_session_is_not_treated_as_gone(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The outer umu process exiting is normal; Wine still running is not gone.
+
+    umu execs through several wrappers and the client is detached, so a
+    returncode on its own must never end the wait.
+    """
+    monkeypatch.setattr(watch, "client_ready", lambda p: False)
+    monkeypatch.setattr(watch, "wine_pids", lambda p: ["4242"])
+    assert watch._client_gave_up(plan.prefix_path, _Exited()) is False
+
+
+def test_a_running_process_is_never_treated_as_gone(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty prefix in the first seconds is normal — wineboot has not run."""
+    monkeypatch.setattr(watch, "wine_pids", lambda p: [])
+    assert watch._client_gave_up(plan.prefix_path, _Running()) is False
+    assert watch._client_gave_up(plan.prefix_path, None) is False
+
+
+def test_phase_a_output_goes_to_the_game_log(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Never DEVNULL again.
+
+    A tester's client died in ~20 s and left nothing at all to read, so a
+    five-minute failure had to be reasoned about from surrounding logs.
+    """
+    log = tmp_path / "launch.game.log"
+    opened = log.open("a", encoding="utf-8")
+    monkeypatch.setattr(handler, "open_game_log", lambda: opened)
+    monkeypatch.setattr(handler, "escape_argv", lambda argv, env, _x: argv)
+    spawned: dict[str, Any] = {}
+
+    async def _fake_exec(*argv: str, **kwargs: Any) -> Any:
+        spawned["stdout"] = kwargs["stdout"]
+        spawned["stderr"] = kwargs["stderr"]
+        return _Running()
+
+    monkeypatch.setattr(handler.asyncio, "create_subprocess_exec", _fake_exec)
+    asyncio.run(handler._start_client_detached(plan, Path("/c/Battle.net Launcher.exe")))
+
+    assert spawned["stdout"] is opened
+    assert spawned["stderr"] is asyncio.subprocess.STDOUT
+    # Closed after the spawn: the child holds its own duplicated descriptor.
+    assert opened.closed
+
+
+# --------------------------------------------------------------------------
+# the client is installed with the Proton that will later run it
+# --------------------------------------------------------------------------
+
+
+def test_the_install_uses_the_launch_plan_proton(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One Proton builds the prefix and runs the client, not two.
+
+    The backend-side installer used to resolve its own, and on a host
+    where the two differ the prefix ends up created by a Wine build
+    nobody selected. See ``test_wrapper_store_proton_choice``.
+    """
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap as boot
+
+    plan.env["PROTONPATH"] = "/compat/GE-Proton11-5"
+    seen: dict[str, Any] = {}
+
+    async def _fake_bootstrap(prefix: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return type("R", (), {"success": True, "error": None, "error_code": None})()
+
+    monkeypatch.setattr(boot, "launcher_toast", lambda *a, **k: None)
+    monkeypatch.setitem(
+        sys.modules,
+        "unifideck.stores.battlenet.prefix.client_install",
+        type("M", (), {"bootstrap_client": _fake_bootstrap}),
+    )
+    asyncio.run(boot.install_client(plan))
+
+    assert seen["proton_path"] == "/compat/GE-Proton11-5"
+
+
+def test_an_empty_plan_proton_is_passed_as_none(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty string is not a Proton path; the resolver must be free to choose."""
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap as boot
+
+    plan.env["PROTONPATH"] = ""
+    seen: dict[str, Any] = {}
+
+    async def _fake_bootstrap(prefix: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return type("R", (), {"success": True, "error": None, "error_code": None})()
+
+    monkeypatch.setattr(boot, "launcher_toast", lambda *a, **k: None)
+    monkeypatch.setitem(
+        sys.modules,
+        "unifideck.stores.battlenet.prefix.client_install",
+        type("M", (), {"bootstrap_client": _fake_bootstrap}),
+    )
+    asyncio.run(boot.install_client(plan))
+
+    assert seen["proton_path"] is None
+
+
+def test_an_incomplete_client_is_announced_as_a_repair(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """"Installing" reads as "nothing was ever set up" — this was set up."""
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap as boot
+
+    # The plan fixture already installed a complete client; drop the payload
+    # to leave exactly what an interrupted install produces.
+    payload = client.find_payload_dir(tmp_path)
+    for leftover in payload.iterdir():
+        leftover.unlink()
+    payload.rmdir()
+
+    toasts: list[str] = []
+    monkeypatch.setattr(boot, "launcher_toast", lambda key, **kw: toasts.append(key))
+    boot._announce_install(tmp_path)
+
+    assert toasts == ["toasts.launcher.battlenetRepairingClientMessage"]
+
+
+def test_a_bare_prefix_is_announced_as_an_install(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap as boot
+
+    toasts: list[str] = []
+    monkeypatch.setattr(boot, "launcher_toast", lambda key, **kw: toasts.append(key))
+    boot._announce_install(tmp_path / "nothing-here")
+
+    assert toasts == ["toasts.launcher.battlenetInstallingClientMessage"]
+
+
+# --------------------------------------------------------------------------
+# an incomplete client is repaired, not launched
+# --------------------------------------------------------------------------
+
+
+def _break_payload(prefix: Path) -> None:
+    """Leave exactly what an interrupted client install leaves behind."""
+    payload = client.find_payload_dir(prefix)
+    for leftover in payload.iterdir():
+        leftover.unlink()
+    payload.rmdir()
+
+
+def test_an_incomplete_client_triggers_a_reinstall(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The tester's prefix: shim present, payload absent, launch impossible.
+
+    Before this, the exes were there so nothing reinstalled, phase A
+    started a launcher with nothing to hand off to, and every Battle.net
+    install failed the same way indefinitely.
+    """
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap as boot
+
+    _break_payload(tmp_path)
+    calls: list[Path] = []
+
+    async def _fake_install(p: Any) -> Any:
+        calls.append(p.prefix_path)
+        # A real installer completes the payload; do the same.
+        build = client.find_client_exe(p.prefix_path).parent / "Battle.net.17651"
+        build.mkdir()
+        (build / client.CLIENT_EXE).write_bytes(b"MZ")
+        return type("R", (), {"success": True, "error": None, "error_code": None})()
+
+    monkeypatch.setattr(boot, "install_client", _fake_install)
+    asyncio.run(boot.ensure_client(plan, "battlenetPrefixNotReady", fail=handler._fail))
+
+    assert calls == [tmp_path], "an incomplete client must be reinstalled"
+
+
+def test_a_complete_client_is_left_alone(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The normal path must not pay for the repair path."""
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap as boot
+
+    async def _never(_p: Any) -> Any:
+        raise AssertionError("a healthy prefix must not be reinstalled")
+
+    monkeypatch.setattr(boot, "install_client", _never)
+    asyncio.run(boot.ensure_client(plan, "battlenetPrefixNotReady", fail=handler._fail))
+
+
+def test_an_install_that_leaves_the_shim_still_fails(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Failing here names the problem; passing spends 300 s not naming it."""
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap as boot
+
+    _break_payload(tmp_path)
+
+    async def _incomplete(_p: Any) -> Any:
+        return type("R", (), {"success": True, "error": None, "error_code": None})()
+
+    monkeypatch.setattr(boot, "install_client", _incomplete)
+    monkeypatch.setattr(handler, "launcher_toast", lambda *a, **k: None)
+    with pytest.raises(GameFailedError):
+        asyncio.run(
+            boot.ensure_client(plan, "battlenetPrefixNotReady", fail=handler._fail),
+        )

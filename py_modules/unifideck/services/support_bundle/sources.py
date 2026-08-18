@@ -61,6 +61,17 @@ _LOGS: tuple[SourceSpec, ...] = (
              "'-.game.log' orphan is normal and often the largest file.",
     ),
     SourceSpec(
+        key="vendor_client_logs",
+        what="A wrapper store's own client logs, salvaged before its prefix was deleted",
+        root="launches", pattern="*.vendor.txt", arch_dir="launches",
+        policy="tail", max_bytes=CAP_GAME_LOG, scrub="text",
+        priority=25, newest_n=MAX_LAUNCH_LOGS, expect="optional",
+        writer="stores/shared/prefix_forensics.py::preserve_vendor_logs",
+        note="For a wrapper store the prefix IS the install, so a failed "
+             "install deletes the only first-hand account of why the vendor "
+             "client would not start. This is that account, kept.",
+    ),
+    SourceSpec(
         key="launcher_events",
         what="Launcher-to-frontend toast bridge (JSONL, capped at 100 lines)",
         root="data", pattern="launcher_events.jsonl", arch_dir="data",

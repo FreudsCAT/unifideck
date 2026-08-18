@@ -85,6 +85,39 @@ def find_launcher_exe(prefix: Path | str) -> Path | None:
     return exe if exe.is_file() else None
 
 
+def find_payload_dir(prefix: Path | str) -> Path | None:
+    """The newest versioned client payload ``Battle.net.<build>/``, or None.
+
+    ``Battle.net.exe`` beside the launcher is a ~1 MB **shim**; the client
+    it loads lives in this directory and the bootstrapper writes the shim
+    long before it has finished downloading it. An install interrupted in
+    that window leaves a prefix that passes every "is the client here"
+    check and cannot start — measured in the field, where it poisoned the
+    auth prefix, the template derived from it and every game prefix cloned
+    from that, so each launch burned the full 300 s readiness timeout and
+    no amount of signing out repaired it.
+
+    The backend states the same rule in ``stores/battlenet/paths.py``
+    (:func:`client_payload_dir`). It is written twice on purpose: this
+    module runs in the out-of-process launcher under the SYSTEM python and
+    must not import the plugin backend. ``test_battlenet_paths_config``
+    holds both to the same fixtures.
+    """
+    parent = _client_dir(prefix)
+    if parent is None:
+        return None
+    versioned = [p for p in parent.glob("Battle.net.*") if p.is_dir()]
+
+    def _build(path: Path) -> tuple[int, str]:
+        suffix = path.name.rsplit(".", 1)[-1]
+        return (int(suffix), path.name) if suffix.isdigit() else (-1, path.name)
+
+    for candidate in sorted(versioned, key=_build, reverse=True):
+        if (candidate / CLIENT_EXE).is_file():
+            return candidate
+    return None
+
+
 def _load_id_map() -> dict[str, dict[str, object]]:
     try:
         data = json.loads(id_map_path().read_text(encoding="utf-8"))
@@ -156,4 +189,19 @@ def record_launch_ok(uid: str, family: str, when: float) -> None:
 
 
 def client_installed(prefix: Path | str) -> bool:
-    return find_client_exe(prefix) is not None
+    """Both halves present — the ``--exec`` shim and the payload it loads.
+
+    See :func:`find_payload_dir` for why the shim alone is not enough.
+    """
+    return find_client_exe(prefix) is not None and find_payload_dir(prefix) is not None
+
+
+def client_startable(prefix: Path | str) -> bool:
+    """Everything the two-phase launch needs before it starts anything.
+
+    Phase A runs ``Battle.net Launcher.exe`` and phase C drives
+    ``Battle.net.exe``, so both must exist — and so must the payload the
+    launcher hands off to, which is the piece an interrupted install
+    leaves out.
+    """
+    return find_launcher_exe(prefix) is not None and client_installed(prefix)

@@ -39,7 +39,6 @@ import logging
 import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from unifideck.launcher import wrapper_session
 from unifideck.launcher.frontend_bridge import launcher_toast
@@ -59,11 +58,11 @@ from unifideck.launcher.proton.infrastructure.container_escape import (
     escape_argv,
 )
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
-from unifideck.launcher.proton.infrastructure.umu_runtime import run_umu_with_retry
+from unifideck.launcher.proton.infrastructure.umu_runtime import (
+    open_game_log,
+    run_umu_with_retry,
+)
 from unifideck.launcher.types.errors import GameFailedError
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from unifideck.stores.battlenet.prefix.client_install import BootstrapResult
 
 logger = logging.getLogger(__name__)
 
@@ -114,13 +113,22 @@ def _fail(
     return GameFailedError(message, subprocess_rc=rc, context=dict(context))
 
 
-def _install_error(result: BootstrapResult | None, fallback: str) -> str:
-    """The installer's own words for the log, or ``fallback`` if it has none."""
-    return result.error if result is not None and result.error else fallback
+async def _start_client_detached(
+    plan: ProtonLaunchPlan, launcher_exe: Path,
+) -> asyncio.subprocess.Process:
+    """Phase A. Owns the wineserver session, so it keeps waitforexitandrun.
 
+    Output goes to the per-launch ``game.log``, the same place
+    ``run_umu_with_retry`` sends every other launch path. It used to go to
+    ``DEVNULL``, and the cost was measured in the field: a tester's client
+    started, died within ~20 s and left *nothing at all* to read — no umu
+    banner, no Wine error, no exit code — so a five-minute failure had to be
+    reasoned about from the surrounding logs instead of read off disk.
 
-async def _start_client_detached(plan: ProtonLaunchPlan, launcher_exe: Path) -> None:
-    """Phase A. Owns the wineserver session, so it keeps waitforexitandrun."""
+    The process handle is returned rather than discarded so the readiness
+    wait can notice the client exiting. Detached (``start_new_session``) is
+    unchanged: this run owns the wineserver and must outlive us.
+    """
     # Escape Steam's pressure-vessel when Force-Compat wrapped us, or the
     # client nests a second container and never starts. No-op when
     # unwrapped. See infrastructure.container_escape.
@@ -129,16 +137,27 @@ async def _start_client_detached(plan: ProtonLaunchPlan, launcher_exe: Path) -> 
         plan.env, None,
     )
     logger.info("[battlenet] phase A: starting client")
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        env=plan.env,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    game_log = open_game_log()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            env=plan.env,
+            stdout=game_log if game_log is not None else asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.STDOUT if game_log is not None
+            else asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    finally:
+        # Ours to close: the child holds its own duplicated descriptor, so
+        # closing here does not truncate its output. Leaving it open would
+        # leak a handle for the life of the launcher.
+        if game_log is not None:
+            with contextlib.suppress(OSError):
+                game_log.close()
     if plan.on_process_start:
         with contextlib.suppress(Exception):
             plan.on_process_start(proc)
+    return proc
 
 
 async def _issue_exec(plan: ProtonLaunchPlan, client_exe: Path, command: str) -> None:
@@ -231,20 +250,17 @@ async def _release_other_clients(plan: ProtonLaunchPlan) -> None:
 
 async def _bring_up_client(plan: ProtonLaunchPlan) -> Path:
     """Phases A + B. Returns the client exe once it will accept commands."""
+    await bootstrap.ensure_client(plan, "battlenetPrefixNotReady", fail=_fail)
     launcher_exe = find_launcher_exe(plan.prefix_path)
     client_exe = find_client_exe(plan.prefix_path)
-    install: BootstrapResult | None = None
-    if launcher_exe is None or client_exe is None:
-        install = await bootstrap.install_client(plan)
-        launcher_exe = find_launcher_exe(plan.prefix_path)
-        client_exe = find_client_exe(plan.prefix_path)
-    if launcher_exe is None or client_exe is None:
+    # ``ensure_client`` proved both above; this satisfies the type checker
+    # and would only fire if the prefix vanished between the two calls.
+    if launcher_exe is None or client_exe is None:  # pragma: no cover
         raise _fail(
             plan,
-            bootstrap.toast_key_for(install, "battlenetPrefixNotReady"),
-            _install_error(install, "Battle.net client is not installed in this prefix"),
+            "battlenetPrefixNotReady",
+            "Battle.net client is not installed in this prefix",
             rc=127,
-            titled=install is None or install.error_code is None,
             prefix=str(plan.prefix_path),
         )
 
@@ -270,13 +286,15 @@ async def _start_client_here(plan: ProtonLaunchPlan, launcher_exe: Path) -> None
     # writing the tweaks first would make this prefix's file the newer one and
     # the settings would stay behind in the prefix they were changed in.
     await bootstrap.ensure_tweaks(plan)
-    await _start_client_detached(plan, launcher_exe)
+    proc = await _start_client_detached(plan, launcher_exe)
     launcher_toast(
         "toasts.launcher.battlenetStartingClientMessage",
         i18n_title_key="toasts.launcher.battlenetStartingClient",
         game_title=resolve_title(plan.context.game_key),
     )
-    if not await watch.wait_for_client_ready(plan.prefix_path, CLIENT_READY_TIMEOUT):
+    if not await watch.wait_for_client_ready(
+        plan.prefix_path, CLIENT_READY_TIMEOUT, proc=proc,
+    ):
         raise _fail(
             plan,
             "battlenetClientNotReady",
@@ -403,20 +421,22 @@ async def battlenet_auth_launch(plan: ProtonLaunchPlan) -> int:
 
     Installs the client first when the prefix has none. That is the normal
     path after a fresh install or a full cleanup, not an edge case.
+
+    It also *completes* a half-installed one, and this is the prefix where
+    that matters most: the template is derived from here and every game
+    prefix is cloned from the template, so an interrupted install here
+    poisons the whole lineage. Signing in again is the one action a user
+    naturally retries, so it is the right place to heal from.
     """
+    await bootstrap.ensure_client(
+        plan, "battlenetAuthPrefixNotReady", fail=_fail, titled=False,
+    )
     launcher_exe = find_launcher_exe(plan.prefix_path)
-    install: BootstrapResult | None = None
-    if launcher_exe is None:
-        install = await bootstrap.install_client(plan)
-        launcher_exe = find_launcher_exe(plan.prefix_path)
-    if launcher_exe is None:
-        # The auth shortcut has no game title to name, and resolve_title
-        # would hand the toast the raw "battlenet:bnet-auth" key — which is
-        # exactly what a user saw on screen. Its keys take no title.
+    if launcher_exe is None:  # pragma: no cover - ensure_client proved it
         raise _fail(
             plan,
-            bootstrap.toast_key_for(install, "battlenetAuthPrefixNotReady"),
-            _install_error(install, "Battle.net client is not installed in the auth prefix"),
+            "battlenetAuthPrefixNotReady",
+            "Battle.net client is not installed in the auth prefix",
             rc=127,
             titled=False,
             prefix=str(plan.prefix_path),

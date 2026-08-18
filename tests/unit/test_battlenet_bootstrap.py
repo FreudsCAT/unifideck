@@ -56,6 +56,11 @@ def _install_client(prefix: Path) -> None:
     d.mkdir(parents=True, exist_ok=True)
     (d / paths.CLIENT_EXE).write_bytes(b"MZ")
     (d / paths.LAUNCHER_EXE).write_bytes(b"MZ")
+    # The versioned payload the shim loads. Without it the prefix is
+    # the shape an interrupted install leaves and no client can start.
+    build = d / "Battle.net.17651"
+    build.mkdir(exist_ok=True)
+    (build / paths.CLIENT_EXE).write_bytes(b"MZ")
 
 
 def _verdict(monkeypatch: pytest.MonkeyPatch, verdict: Vulkan32) -> None:
@@ -168,7 +173,8 @@ def test_no_vulkan_verdict_blocks_the_install(
     attempted: list[float | None] = []
 
     async def fake_install(
-        _installer: Path, target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+        _installer: Path, target: Path, _resolver: Any, *,
+        stall_timeout: float | None = None, proton_path: str | None = None,
     ) -> ci.InstallOutcome:
         attempted.append(stall_timeout)
         _install_client(target)
@@ -199,7 +205,8 @@ def test_only_a_proven_absence_arms_the_stall_watchdog(
     leashes: list[float | None] = []
 
     async def fake_install(
-        _installer: Path, target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+        _installer: Path, target: Path, _resolver: Any, *,
+        stall_timeout: float | None = None, proton_path: str | None = None,
     ) -> ci.InstallOutcome:
         leashes.append(stall_timeout)
         _install_client(target)
@@ -232,7 +239,8 @@ def test_a_proven_absence_warns_before_it_tries(
     warnings: list[int] = []
 
     async def fake_install(
-        _installer: Path, target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+        _installer: Path, target: Path, _resolver: Any, *,
+        stall_timeout: float | None = None, proton_path: str | None = None,
     ) -> ci.InstallOutcome:
         _install_client(target)
         return ci.InstallOutcome(installed=True)
@@ -261,7 +269,8 @@ def test_a_stalled_install_is_reported_as_the_vulkan_failure(
     """Only *after* an attempt that stopped moving — never instead of one."""
 
     async def fake_install(
-        _installer: Path, _target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+        _installer: Path, _target: Path, _resolver: Any, *,
+        stall_timeout: float | None = None, proton_path: str | None = None,
     ) -> ci.InstallOutcome:
         return ci.InstallOutcome(installed=False, stalled=True)
 
@@ -287,7 +296,8 @@ def test_a_plain_install_failure_is_not_blamed_on_vulkan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_install(
-        _installer: Path, _target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+        _installer: Path, _target: Path, _resolver: Any, *,
+        stall_timeout: float | None = None, proton_path: str | None = None,
     ) -> ci.InstallOutcome:
         return ci.InstallOutcome(installed=False)
 
@@ -425,7 +435,8 @@ def test_install_success_is_judged_by_the_filesystem_not_the_exit_code(
     prefix = tmp_path / "pfx"
 
     async def fake_install(
-        _installer: Path, target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+        _installer: Path, target: Path, _resolver: Any, *,
+        stall_timeout: float | None = None, proton_path: str | None = None,
     ) -> ci.InstallOutcome:
         _install_client(target)
         return ci.InstallOutcome(installed=paths.client_installed(target))
@@ -472,7 +483,8 @@ def test_hardware_acceleration_is_off_before_the_installer_runs(
     config_at_install: list[object] = []
 
     async def fake_install(
-        _installer: Path, target: Path, _resolver: Any, *, stall_timeout: float | None = None,
+        _installer: Path, target: Path, _resolver: Any, *,
+        stall_timeout: float | None = None, proton_path: str | None = None,
     ) -> ci.InstallOutcome:
         path = target / "drive_c" / tweaks.CONFIG_RELATIVE
         config_at_install.append(
@@ -682,7 +694,7 @@ async def test_the_installer_is_invoked_with_those_args(
             return "/bin/umu-run"
 
         @staticmethod
-        def build_env(_prefix: object, _gameid: str) -> dict[str, str]:
+        def build_env(_prefix: object, _gameid: str, **_kw: Any) -> dict[str, str]:
             return {"DISPLAY": ":0"}
 
     ok = await ci.run_silent_install(

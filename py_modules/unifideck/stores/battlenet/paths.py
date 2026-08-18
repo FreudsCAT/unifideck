@@ -104,21 +104,6 @@ def client_config(prefix: Path) -> Path | None:
     return cfg if cfg.is_file() else None
 
 
-def client_installed(prefix: Path) -> bool:
-    """True when a prefix actually holds a usable client."""
-    return client_exe(prefix) is not None
-
-
-def is_ours(prefix: Path) -> bool:
-    """True only when the in-directory marker proves we built this prefix.
-
-    Never infer ownership from the path. A prefix under our directory that
-    lacks the marker is treated as not ours, because deleting a user's
-    prefix is unrecoverable and the marker is cheap.
-    """
-    return (Path(prefix) / PREFIX_MARKER).exists()
-
-
 def client_version_dirs(prefix: Path) -> list[Path]:
     """Sibling versioned client folders, newest last.
 
@@ -137,3 +122,51 @@ def client_version_dirs(prefix: Path) -> list[Path]:
         return (int(suffix), path.name) if suffix.isdigit() else (-1, path.name)
 
     return sorted(dirs, key=_build)
+
+
+def client_payload_dir(prefix: Path) -> Path | None:
+    """The newest versioned client payload, or None when there is none.
+
+    ``Battle.net.exe`` in the client directory is a ~1 MB **shim**. The
+    client itself lives in a sibling ``Battle.net.<build>/`` holding its own
+    ``Battle.net.exe`` and the CEF payload, and the bootstrapper writes the
+    shim long before it finishes downloading that.
+
+    So the shim alone is not evidence of a client, and treating it as such
+    is a measured field failure: a sign-in stopped mid-install left the auth
+    prefix reporting "has a client", ``.template`` was derived from it, every
+    game prefix was cloned from that, and each launch started
+    ``Battle.net Launcher.exe`` with nothing for it to hand off to. It exited
+    within seconds and the launch sat out its full 300 s readiness timeout —
+    for every Battle.net title, permanently, with no way for the user to
+    heal it.
+
+    Keyed on the payload's own ``Battle.net.exe`` rather than on the
+    directory merely existing, because a half-written payload directory is
+    exactly what an interrupted install leaves behind. The false direction
+    is deliberate: a false "incomplete" costs a client reinstall, while a
+    false "complete" is the unrecoverable bug above.
+    """
+    for candidate in reversed(client_version_dirs(prefix)):
+        if (candidate / CLIENT_EXE).is_file():
+            return candidate
+    return None
+
+
+def client_installed(prefix: Path) -> bool:
+    """True when a prefix actually holds a usable client.
+
+    Both halves are required — the shim that takes ``--exec`` *and* the
+    versioned payload it loads. See :func:`client_payload_dir`.
+    """
+    return client_exe(prefix) is not None and client_payload_dir(prefix) is not None
+
+
+def is_ours(prefix: Path) -> bool:
+    """True only when the in-directory marker proves we built this prefix.
+
+    Never infer ownership from the path. A prefix under our directory that
+    lacks the marker is treated as not ours, because deleting a user's
+    prefix is unrecoverable and the marker is cheap.
+    """
+    return (Path(prefix) / PREFIX_MARKER).exists()

@@ -150,16 +150,53 @@ def wine_pids(prefix: str | Path) -> list[str]:
     return [pid for pid, _ in scan(prefix)]
 
 
+def _client_gave_up(prefix: str | Path, proc: object | None) -> bool:
+    """Whether the run we started has exited leaving nothing behind.
+
+    Both halves are required and neither is sufficient:
+
+    * the phase-A process having exited is normal on its own — umu execs
+      through several wrappers and the client is detached, so the outer
+      process can return while Wine keeps running;
+    * an empty prefix is normal on its own for the first few seconds, before
+      ``wineboot`` has started anything.
+
+    Together they mean the attempt is over. Measured in the field: a client
+    started, exited within ~20 s and left the prefix empty, and the wait sat
+    out its remaining 4½ minutes before reporting a timeout — which reads as
+    "still starting" and sent the diagnosis toward the wrong half of the
+    system entirely.
+    """
+    if proc is None or getattr(proc, "returncode", None) is None:
+        return False
+    return not wine_pids(prefix)
+
+
 async def wait_for_client_ready(
-    prefix: str | Path, deadline_seconds: float, poll: float = 2.0,
+    prefix: str | Path,
+    deadline_seconds: float,
+    poll: float = 2.0,
+    proc: object | None = None,
 ) -> bool:
-    """Poll until the client's renderer appears, or give up."""
+    """Poll until the client's renderer appears, or give up.
+
+    ``proc`` is phase A's process handle, when the caller has one. It turns
+    the give-up condition from "the deadline passed" into "the deadline
+    passed, or the client is provably gone" — see :func:`_client_gave_up`.
+    """
     timeout = deadline_seconds
     waited = 0.0
     while waited < timeout:
         if client_ready(prefix):
             logger.info("[battlenet] client ready after %.0fs", waited)
             return True
+        if _client_gave_up(prefix, proc):
+            logger.error(
+                "[battlenet] client exited after %.0fs (rc=%s) without starting — "
+                "no Wine processes left in %s; see the game log for its output",
+                waited, getattr(proc, "returncode", "?"), prefix,
+            )
+            return False
         await asyncio.sleep(poll)
         waited += poll
     logger.error("[battlenet] client not ready after %.0fs", timeout)

@@ -26,8 +26,23 @@ from unifideck.stores.battlenet import paths
 from unifideck.stores.battlenet.id_map import BattlenetIdMap, GameRecord
 
 
-def _make_prefix(root: Path, *, layout: str = "modern", client: bool = True) -> Path:
-    """Build a prefix tree in either layout umu can produce."""
+#: A real build number, as observed on-device beside ``Battle.net.17554``.
+_BUILD_DIR = "Battle.net.17651"
+
+
+def _make_prefix(
+    root: Path,
+    *,
+    layout: str = "modern",
+    client: bool = True,
+    payload: bool = True,
+) -> Path:
+    """Build a prefix tree in either layout umu can produce.
+
+    ``payload=False`` reproduces the shape an *interrupted* client install
+    leaves: the shim executables present, the versioned client they load
+    missing. That prefix used to pass every "is the client here" check.
+    """
     prefix = root / "pfx-under-test"
     drive_c = prefix / ("pfx/drive_c" if layout == "modern" else "drive_c")
     drive_c.mkdir(parents=True)
@@ -36,6 +51,10 @@ def _make_prefix(root: Path, *, layout: str = "modern", client: bool = True) -> 
         client_dir.mkdir(parents=True)
         (client_dir / paths.CLIENT_EXE).write_bytes(b"MZ")
         (client_dir / paths.LAUNCHER_EXE).write_bytes(b"MZ")
+        if payload:
+            build = client_dir / _BUILD_DIR
+            build.mkdir()
+            (build / paths.CLIENT_EXE).write_bytes(b"MZ")
     return prefix
 
 
@@ -76,6 +95,66 @@ def test_prefix_without_drive_c_is_not_a_prefix(tmp_path: Path) -> None:
     assert paths.client_installed(tmp_path / "nope") is False
 
 
+# --------------------------------------------------------------------------
+# client completeness — the shim is not the client
+# --------------------------------------------------------------------------
+
+
+def test_a_shim_without_its_payload_is_not_an_installed_client(tmp_path: Path) -> None:
+    """The exact prefix an interrupted client install leaves behind.
+
+    ``Battle.net.exe`` next to the launcher is a ~1 MB shim written early;
+    the client it loads lands later in ``Battle.net.<build>/``. Reported
+    from the field on a ROG Ally X: a sign-in stopped mid-install left this
+    shape, ``client_installed`` said yes, the template was derived from it,
+    and every game prefix cloned from that started a launcher with nothing
+    to hand off to — 300 s of spinner per install, forever, with no user
+    action that repaired it.
+    """
+    prefix = _make_prefix(tmp_path, payload=False)
+    assert paths.client_exe(prefix) is not None
+    assert paths.launcher_exe(prefix) is not None
+    assert paths.client_payload_dir(prefix) is None
+    assert paths.client_installed(prefix) is False
+
+
+def test_a_payload_directory_without_its_exe_does_not_count(tmp_path: Path) -> None:
+    """A half-written payload directory is what an interrupted install makes."""
+    prefix = _make_prefix(tmp_path, payload=False)
+    (paths.client_dir(prefix) / _BUILD_DIR).mkdir()
+    assert paths.client_payload_dir(prefix) is None
+    assert paths.client_installed(prefix) is False
+
+
+def test_the_newest_payload_wins(tmp_path: Path) -> None:
+    """The client self-updates into a new sibling; the newest is the live one."""
+    prefix = _make_prefix(tmp_path)
+    newer = paths.client_dir(prefix) / "Battle.net.17999"
+    newer.mkdir()
+    (newer / paths.CLIENT_EXE).write_bytes(b"MZ")
+    assert paths.client_payload_dir(prefix).name == "Battle.net.17999"
+
+
+@pytest.mark.parametrize("payload", [True, False])
+@pytest.mark.parametrize("layout", ["modern", "legacy"])
+def test_backend_and_launcher_agree_on_completeness(
+    tmp_path: Path, layout: str, payload: bool,
+) -> None:
+    """The rule is written twice and must never drift.
+
+    The launcher copy runs out-of-process under the SYSTEM python and
+    cannot import the backend, so the two implementations are independent
+    code. This is the only thing holding them together.
+    """
+    from unifideck.launcher.proton.handlers import battlenet_client as launcher_side
+
+    prefix = _make_prefix(tmp_path, layout=layout, payload=payload)
+    assert launcher_side.client_installed(prefix) is paths.client_installed(prefix)
+    assert (launcher_side.find_payload_dir(prefix) is None) is (
+        paths.client_payload_dir(prefix) is None
+    )
+
+
 def test_ownership_requires_the_marker_not_the_path(tmp_path: Path) -> None:
     """Never infer ownership from location — deleting a prefix is final."""
     prefix = _make_prefix(tmp_path)
@@ -93,7 +172,7 @@ def test_auth_and_template_prefixes_cannot_collide_with_a_game_uid(tmp_path: Pat
 
 def test_client_version_dirs_sorted_oldest_to_newest(tmp_path: Path) -> None:
     """Self-update writes a new sibling; repair removes the newest."""
-    prefix = _make_prefix(tmp_path)
+    prefix = _make_prefix(tmp_path, payload=False)
     parent = paths.client_dir(prefix)
     for build in ("17554", "17651", "9000"):
         (parent / f"Battle.net.{build}").mkdir()

@@ -356,6 +356,8 @@
       "battlenetStartingClientMessage": "Waiting for the Battle.net client to be ready…",
       "battlenetInstallingClient": "Battle.net をインストール中",
       "battlenetInstallingClientMessage": "Battle.net クライアントを設定しています。数分かかる場合があります。",
+      "battlenetRepairingClient": "Battle.net を修復中",
+      "battlenetRepairingClientMessage": "Battle.net クライアントが不完全なため、再インストールしています。数分かかる場合があります。",
       "battlenetClientNotReady": "Battle.net Didn't Start",
       "battlenetClientNotReadyMessage": "The Battle.net client did not finish starting. It may be applying an update — try again in a moment.",
       "battlenetClientBusyElsewhere": "Battle.net Is Busy",

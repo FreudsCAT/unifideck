@@ -37,6 +37,10 @@ from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types.results import InstallResult
 from unifideck.launcher.proton.handlers.wrapper_clients import kill_client
+from unifideck.stores.shared.prefix_forensics import (
+    preserve_vendor_logs,
+    salvage_path,
+)
 from unifideck.stores.shared.prefix_placement import (
     BeforeRemove as CaptureSession,
 )
@@ -164,12 +168,7 @@ class BattlenetInstaller:
                 "family_unknown",
             )
         if not self._prefixes.auth_ready():
-            return _failed(
-                game_id,
-                "Sign in to Battle.net first — the game prefix inherits "
-                "your signed-in session",
-                "not_signed_in",
-            )
+            return _failed(game_id, *self._auth_not_ready_reason())
         target = await self._place_prefix(game_id, install_path)
         prefix = await self._prefixes.create_game_prefix(game_id, target)
         if prefix is None:
@@ -356,7 +355,13 @@ class BattlenetInstaller:
         An interrupted clone to removable media would otherwise leave a
         partial ~1.2 GB tree squatting on the disk the user picked, with the
         id map still pointing at it.
+
+        The client's own logs come out first. They live inside the prefix,
+        so this deletion is the only thing standing between a failed install
+        and the sole first-hand record of why it failed — and it has already
+        cost one field investigation. See ``shared/prefix_forensics``.
         """
+        await self._salvage_client_logs(game_id, prefix)
         deleted = await cleanup_abandoned_prefix(
             prefix,
             recorded=self._id_map.resolve_prefix(game_id),
@@ -366,6 +371,41 @@ class BattlenetInstaller:
         )
         if deleted:
             self._id_map.clear_prefix(game_id)
+
+    def _auth_not_ready_reason(self) -> tuple[str, str]:
+        """``(message, error_code)`` naming *why* the auth prefix is unusable.
+
+        Two different situations reach the same gate and want different
+        words. Telling a user to "sign in first" when they signed in
+        successfully an hour ago is how a real report came back a second
+        time: their session was fine, the client the session lives beside
+        was half-installed. Signing in again does repair it — the sign-in
+        shortcut reinstalls the client — but only if the message says so.
+        """
+        auth = self._prefixes.auth_prefix
+        if paths.client_exe(auth) is not None:
+            return (
+                "Battle.net's client files are incomplete. Sign in to "
+                "Battle.net again and let the window finish opening — that "
+                "reinstalls the client.",
+                "client_incomplete",
+            )
+        return (
+            "Sign in to Battle.net first — the game prefix inherits "
+            "your signed-in session",
+            "not_signed_in",
+        )
+
+    async def _salvage_client_logs(self, game_id: str, prefix: Path) -> None:
+        """Copy Battle.net's own logs out before the prefix goes.
+
+        Best-effort by construction — :func:`preserve_vendor_logs` swallows
+        everything and returns a count. A salvage must never be the reason a
+        prefix the user is waiting on does not get reclaimed.
+        """
+        await preserve_vendor_logs(
+            STORE_ID, Path(prefix), salvage_path(STORE_ID, game_id),
+        )
 
     async def _holds_game(self, prefix: Path) -> bool:
         return await asyncio.to_thread(holds_ready_install, Path(prefix))
