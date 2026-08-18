@@ -62,10 +62,11 @@ _BNET_PROBES = (
     "pfx/drive_c/Program Files (x86)/Battle.net/Battle.net.exe",
     "pfx/drive_c/Program Files (x86)/Battle.net/Battle.net Launcher.exe",
     # The client payload. ``Battle.net.exe`` above is a ~1 MB shim written
-    # early in the install; this is what it loads, and an interrupted
-    # install leaves the first without the second. That prefix passes as
-    # "has a client" to the naked eye and cannot start one.
-    "pfx/drive_c/Program Files (x86)/Battle.net/Battle.net.*/Battle.net.exe",
+    # early in the install; this DLL is the client it loads, and an
+    # interrupted install leaves the first without the second. That prefix
+    # passes as "has a client" to the naked eye and cannot start one.
+    # A DLL, not an exe — the versioned dir holds no ``Battle.net.exe``.
+    "pfx/drive_c/Program Files (x86)/Battle.net/Battle.net.*/battle.net.dll",
     "pfx/drive_c/ProgramData/Battle.net/Agent/product.db",
     "pfx/drive_c/ProgramData/Battle.net/Agent/data/cache",
     "pfx/drive_c/users/steamuser/AppData/Roaming/Battle.net/Battle.net.config",

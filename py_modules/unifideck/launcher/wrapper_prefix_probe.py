@@ -63,10 +63,15 @@ _SPECS: dict[str, _ProbeSpec] = {
     # proves nothing. An install interrupted in that window produced a prefix
     # that passed this probe and could not start a client — see
     # ``handlers/battlenet_client.find_payload_dir``.
+    #
+    # The payload glob matches the client DLL, not an exe: the versioned dir
+    # holds no ``Battle.net.exe`` (the client is ``battle.net.dll``), so a
+    # glob ending in the exe never matched a real install and reported every
+    # working client as missing.
     "battlenet": _ProbeSpec(
         id_map="battlenet_id_map.json",
         client_rel="Program Files (x86)/Battle.net/Battle.net.exe",
-        payload_glob="Program Files (x86)/Battle.net/Battle.net.*/Battle.net.exe",
+        payload_glob="Program Files (x86)/Battle.net/Battle.net.*/battle.net.dll",
     ),
 }
 

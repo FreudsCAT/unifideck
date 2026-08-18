@@ -10,16 +10,27 @@ authoritative sign-out:
 * ``_delete_auth_data`` unlinks each store's persisted credential file.
 * ``_reset_store_availability`` clears the in-memory ``_cached_available``
   flag on every registered store.
+
+Plus the rest of the live in-process state the wipe used to leave behind —
+the reason a destructive cleanup still listed the games it had just deleted:
+``reset_library_state`` (in-memory library + its cache file, and the
+resurrect-on-next-save regression), and ``_finalize_wipe``'s ordering,
+per-game announce, memo clear, and best-effort contract.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from unifideck.core.sync_cache_mixin import _SyncCacheMixin
+from unifideck.core.types.domain import Game
+from unifideck.core.types.events import Events
 from unifideck.rpc.mixins.sync import SyncRPCMixin
+from unifideck.services import installed_disk_info
 from unifideck.services.artwork.event_handlers import _EventHandlersMixin
 from unifideck.services.artwork.fetcher import delete_artwork_files
 
@@ -313,3 +324,200 @@ async def test_microsoft_tokens_legacy_migration(
     assert pm._ms_refresh_token == "mock_refresh"
     assert new_file.exists()
     assert not legacy_file.exists()
+
+
+# --------------------------------------------------------------------------
+# Live in-process state: the reset that "Delete all data" was missing
+# --------------------------------------------------------------------------
+class _CacheHost(_SyncCacheMixin):
+    """Minimal ``SyncService`` stand-in owning just the cache round trip."""
+
+    def __init__(self) -> None:
+        self._config = None
+        self._all_games: dict[str, list[Game]] = {}
+        self._last_sync_time: float | None = None
+
+
+def _installed_game(store: str, game_id: str, app_id: int) -> Game:
+    return Game(
+        app_id=app_id,
+        store=store,
+        store_game_id=game_id,
+        title=game_id,
+        installed=True,
+        install_path=f"/run/media/deck/SD/Games/{game_id}",
+        exe_path=f"/run/media/deck/SD/Games/{game_id}/game.exe",
+    )
+
+
+def test_reset_library_state_clears_memory_and_cache_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    host = _CacheHost()
+    host._all_games = {"gog": [_installed_game("gog", "1434021265", -209853636)]}
+    host._last_sync_time = 1234.0
+    host._save_library_cache()
+    cache_file = host._get_library_cache_path()
+    assert cache_file.is_file()
+
+    host.reset_library_state()
+
+    assert host._all_games == {}
+    assert host._last_sync_time is None
+    assert not cache_file.exists()
+
+
+def test_save_after_reset_cannot_resurrect_the_wiped_library(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The actual bug: the wipe deleted the file, memory rewrote it.
+
+    ``_save_library_cache`` fires on any finalize or install-state flip, so
+    a wipe that cleared only the file put all 245 games — two of them still
+    flagged installed — straight back on disk.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    host = _CacheHost()
+    host._all_games = {"gog": [_installed_game("gog", "1434021265", -209853636)]}
+    host._last_sync_time = 1234.0
+
+    host.reset_library_state()
+    host._save_library_cache()
+
+    payload = json.loads(host._get_library_cache_path().read_text())
+    assert payload == {"last_sync_time": None, "libraries": {}}
+
+
+class _RecordingBus:
+    def __init__(self) -> None:
+        self.emitted: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit(self, event: str, **kwargs: Any) -> None:
+        self.emitted.append((event, kwargs))
+
+
+class _FakeSync:
+    """Records the order the finalize step touches it in."""
+
+    def __init__(self, games: list[Game], calls: list[str]) -> None:
+        self._games = games
+        self._calls = calls
+
+    def get_all_games(self) -> list[Game]:
+        self._calls.append("get_all_games")
+        return self._games
+
+    def reset_library_state(self) -> None:
+        self._calls.append("reset_library_state")
+        self._games = []
+
+
+@pytest.mark.asyncio
+async def test_finalize_wipe_resets_before_announcing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Announce-after-reset, or SyncService re-saves the wiped cache.
+
+    Its ``SHORTCUT_INSTALL_STATE_CHANGED`` handler calls
+    ``_save_library_cache()`` on a match, so emitting while the library is
+    still populated would put it right back on disk.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    calls: list[str] = []
+    bus = _RecordingBus()
+    sync = _FakeSync([_installed_game("gog", "1434021265", -209853636)], calls)
+
+    async def _emit(event: str, **kwargs: Any) -> None:
+        calls.append("emit")
+        bus.emitted.append((event, kwargs))
+
+    bus.emit = _emit  # type: ignore[method-assign]
+    m = _mixin(sync_service=sync, bus=bus, cache=None)
+
+    await m._finalize_wipe(delete_files=True)
+
+    assert calls == ["get_all_games", "reset_library_state", "emit"]
+
+
+@pytest.mark.asyncio
+async def test_finalize_wipe_announces_every_cleared_game(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bus = _RecordingBus()
+    not_installed = Game(
+        app_id=-1, store="epic", store_game_id="Potoo", title="Overcooked 2",
+    )
+    sync = _FakeSync(
+        [
+            _installed_game("gog", "1434021265", -209853636),
+            _installed_game("battlenet", "w3_legacy", -127585543),
+            not_installed,
+        ],
+        [],
+    )
+    m = _mixin(sync_service=sync, bus=bus, cache=None)
+
+    await m._finalize_wipe(delete_files=True)
+
+    assert len(bus.emitted) == 2          # the not-installed game is skipped
+    names = {e for e, _ in bus.emitted}
+    assert names == {Events.SHORTCUT_INSTALL_STATE_CHANGED}
+    payloads = {kw["store_game_id"]: kw for _, kw in bus.emitted}
+    assert set(payloads) == {"1434021265", "w3_legacy"}
+    gog = payloads["1434021265"]
+    # Exactly the kwargs the event's schema declares, matching the payload
+    # ``ShortcutService.mark_uninstalled`` emits.
+    assert set(gog) == {
+        "store", "store_game_id", "app_id", "installed", "exe_path",
+        "install_path",
+    }
+    assert gog["installed"] is False
+    assert gog["app_id"] == -209853636
+    assert gog["exe_path"] == ""
+    assert gog["install_path"] == ""
+
+
+@pytest.mark.asyncio
+async def test_finalize_wipe_clears_the_installed_disk_info_memo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The 300 s memo served "13.36 GB · External" for a deleted directory."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    installed_disk_info._memo[("gog", "1434021265", "/sd/Shadow Warrior 2")] = (
+        0.0, {"size_bytes": 14349000000, "location": "external"},
+    )
+    m = _mixin(sync_service=_FakeSync([], []), bus=_RecordingBus(), cache=None)
+
+    await m._finalize_wipe(delete_files=True)
+
+    assert installed_disk_info._memo == {}
+
+
+@pytest.mark.asyncio
+async def test_finalize_wipe_is_best_effort_without_collaborators(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A wipe that already succeeded must not report failure."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    m = _mixin()
+    assert await m._finalize_wipe(delete_files=True) == 0
+
+
+@pytest.mark.asyncio
+async def test_finalize_wipe_never_raises_when_sync_service_blows_up(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    class _Exploding:
+        def get_all_games(self) -> list[Game]:
+            raise RuntimeError("boom")
+
+        def reset_library_state(self) -> None:
+            raise RuntimeError("boom")
+
+    m = _mixin(sync_service=_Exploding(), bus=_RecordingBus(), cache=None)
+
+    assert await m._finalize_wipe(delete_files=True) == 0

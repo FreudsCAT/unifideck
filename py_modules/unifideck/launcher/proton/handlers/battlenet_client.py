@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 CLIENT_DIR = "Program Files (x86)/Battle.net"
 CLIENT_EXE = "Battle.net.exe"
 LAUNCHER_EXE = "Battle.net Launcher.exe"
+# The client itself, inside the versioned payload dir — a DLL, not an exe.
+# Mirrors ``stores/battlenet/paths.CLIENT_DLL``.
+CLIENT_DLL = "battle.net.dll"
 
 def id_map_path() -> Path:
     """Where the Battle.net id map lives.
@@ -88,14 +91,21 @@ def find_launcher_exe(prefix: Path | str) -> Path | None:
 def find_payload_dir(prefix: Path | str) -> Path | None:
     """The newest versioned client payload ``Battle.net.<build>/``, or None.
 
-    ``Battle.net.exe`` beside the launcher is a ~1 MB **shim**; the client
-    it loads lives in this directory and the bootstrapper writes the shim
-    long before it has finished downloading it. An install interrupted in
-    that window leaves a prefix that passes every "is the client here"
-    check and cannot start — measured in the field, where it poisoned the
-    auth prefix, the template derived from it and every game prefix cloned
-    from that, so each launch burned the full 300 s readiness timeout and
-    no amount of signing out repaired it.
+    ``Battle.net.exe`` beside the launcher is a ~1 MB **shim**: a host
+    process that loads the real client out of this directory, and the
+    bootstrapper writes the shim long before that payload finishes
+    downloading. An install interrupted in that window leaves a prefix that
+    passes every "is the client here" check and cannot start — measured in
+    the field, where it poisoned the auth prefix, the template derived from
+    it and every game prefix cloned from that, so each launch burned the
+    full 300 s readiness timeout and no amount of signing out repaired it.
+
+    Keyed on the client DLL (``battle.net.dll``), NOT on an exe: the payload
+    dir holds no ``Battle.net.exe`` at all — the client is a DLL, beside
+    ``libcef.dll`` and ``Battle.net.mpq``. Its only exes are the auxiliary
+    ``BlizzardError.exe`` / ``GameSessionMonitor.exe``. Keying on an exe
+    reported every correctly installed client as incomplete, which refused
+    every install and made every client unstartable.
 
     The backend states the same rule in ``stores/battlenet/paths.py``
     (:func:`client_payload_dir`). It is written twice on purpose: this
@@ -113,9 +123,23 @@ def find_payload_dir(prefix: Path | str) -> Path | None:
         return (int(suffix), path.name) if suffix.isdigit() else (-1, path.name)
 
     for candidate in sorted(versioned, key=_build, reverse=True):
-        if (candidate / CLIENT_EXE).is_file():
+        if _holds_client_dll(candidate):
             return candidate
     return None
+
+
+def _holds_client_dll(payload: Path) -> bool:
+    """Whether a payload directory holds the client DLL (case-insensitive).
+
+    Mirrors ``stores/battlenet/paths._holds_client_dll``.
+    """
+    try:
+        return any(
+            entry.name.lower() == CLIENT_DLL and entry.is_file()
+            for entry in payload.iterdir()
+        )
+    except OSError:
+        return False
 
 
 def _load_id_map() -> dict[str, dict[str, object]]:

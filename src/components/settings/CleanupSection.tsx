@@ -79,6 +79,15 @@ export const CleanupSection: FC = () => {
     await deleteAllUnifideckCollections().catch((e) =>
       console.error("[Cleanup] delete collections failed", e),
     );
+    // Tell the frontend its library is gone. Two mechanisms, two scopes:
+    // the backend emits SHORTCUT_INSTALL_STATE_CHANGED per cleared game
+    // (Downloads tab + per-app install flags), while this window event is
+    // the existing "re-read the whole library" hook — LibraryContext,
+    // library-filters, overview-enrichment and UnifiedLibraryView all
+    // listen, so store tabs and counts drop to zero without a reload.
+    // Safe after the collection delete: an empty library makes
+    // `syncTab` delete leftover `[Unifideck]` collections, never create them.
+    window.dispatchEvent(new CustomEvent("unifideck-sync-completed"));
     const totalTouched =
       result.deleted_games +
       result.deleted_artwork_count +

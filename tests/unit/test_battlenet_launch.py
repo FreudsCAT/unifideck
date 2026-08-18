@@ -61,7 +61,7 @@ def _install_client(prefix: Path) -> None:
     # the shape an interrupted install leaves and no client can start.
     build = d / "Battle.net.17651"
     build.mkdir(exist_ok=True)
-    (build / client.CLIENT_EXE).write_bytes(b"MZ")
+    (build / client.CLIENT_DLL).write_bytes(b"MZ")
 
 
 @pytest.fixture
@@ -984,7 +984,7 @@ def test_an_incomplete_client_triggers_a_reinstall(
         # A real installer completes the payload; do the same.
         build = client.find_client_exe(p.prefix_path).parent / "Battle.net.17651"
         build.mkdir()
-        (build / client.CLIENT_EXE).write_bytes(b"MZ")
+        (build / client.CLIENT_DLL).write_bytes(b"MZ")
         return type("R", (), {"success": True, "error": None, "error_code": None})()
 
     monkeypatch.setattr(boot, "install_client", _fake_install)

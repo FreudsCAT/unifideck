@@ -97,7 +97,7 @@ def _install_client(prefix: Path) -> None:
     # the shape an interrupted install leaves and no client can start.
     build = client / "Battle.net.17651"
     build.mkdir(exist_ok=True)
-    (build / bpaths.CLIENT_EXE).write_bytes(b"MZ")
+    (build / bpaths.CLIENT_DLL).write_bytes(b"MZ")
 
 
 def _mark(prefix: Path) -> None:

@@ -183,7 +183,7 @@ def test_start_auth_reports_no_bootstrap_needed_once_the_client_exists(
     (client / bpaths.LAUNCHER_EXE).write_bytes(b"MZ")
     build = client / "Battle.net.17651"
     build.mkdir()
-    (build / bpaths.CLIENT_EXE).write_bytes(b"MZ")
+    (build / bpaths.CLIENT_DLL).write_bytes(b"MZ")
 
     result = asyncio.run(store.start_auth())
 
