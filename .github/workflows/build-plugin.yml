@@ -35,6 +35,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # The whole job historically runs in ~70s. Without this it
+    # inherits GitHub's 6-hour default, so one stalled network
+    # fetch pins the PR check as "in progress" for a full day of
+    # runner time before anything reports back.
+    timeout-minutes: 20
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -105,8 +111,11 @@ jobs:
 
       # ── Frontend: install, lint, typecheck, build ──────────
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y cabextract
+      # No `apt-get install cabextract` step here: cabextract is a
+      # RUNTIME dependency of winetricks on the Deck, and winetricks
+      # never runs in CI. The step was vestigial and its `apt-get
+      # update` stalled on an Ubuntu mirror for 6h on 2026-08-19,
+      # burning the job timeout. Nothing else in the tree calls it.
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
