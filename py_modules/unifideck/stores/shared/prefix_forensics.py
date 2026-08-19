@@ -133,8 +133,10 @@ def _write_salvage(
     if not captured:
         return 0
     parts = [
-        f"# {store} client logs salvaged from {prefix}\n"
-        f"# The prefix was removed after this file was written.\n",
+        (
+            f"# {store} client logs salvaged from {prefix}\n"
+            f"# The prefix was removed after this file was written.\n"
+        ),
     ]
     for path, text in captured:
         rel = os.path.relpath(path, drive_c)

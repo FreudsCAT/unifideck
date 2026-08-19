@@ -394,13 +394,25 @@ def test_scan_mounts_finds_mount_point_containing_a_space(tmp_path: Path) -> Non
 
 
 def test_spaced_mount_point_yields_a_path_safe_id(tmp_path: Path) -> None:
-    """The id stays space-free so the install-path resolver can match it."""
+    """The id stays space-free so the install-path resolver can match it.
+
+    ``by_uuid_dir`` is passed explicitly at an empty index so the mount has
+    no UUID and the name-derived fallback is what gets asserted. Without it
+    the default is the real ``/dev/disk/by-uuid`` and the result depends on
+    whether the host happens to index a UUID for ``/dev/sda1``: this test
+    passed locally and on CI's 3.12 runner while failing on its 3.11 runner,
+    which had one, returning ``ext:1f78b26…`` instead.
+    """
     ext = tmp_path / "External SSD"
     ext.mkdir()
+    empty_index = tmp_path / "by-uuid-empty"
+    empty_index.mkdir()
     mounts_file = _write_mounts(tmp_path, [
         f"/dev/sda1 {_kernel_field(ext)} ext4 rw 0 0",
     ])
-    result = mounts.scan_mounts(999999, mounts_path=mounts_file)
+    result = mounts.scan_mounts(
+        999999, mounts_path=mounts_file, by_uuid_dir=empty_index,
+    )
     ids = [loc_id for loc_id, _ in mounts.assign_unique_ids(result)]
     assert ids == ["ext:External_SSD"]
 

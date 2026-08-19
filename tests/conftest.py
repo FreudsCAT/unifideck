@@ -158,6 +158,50 @@ def _snapshot(root):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_by_uuid_index(monkeypatch):
+    """Point udev's ``by-uuid`` index at an empty per-test temp dir.
+
+    ``mount_naming.BY_UUID_DIR`` is a module-level ``Path("/dev/disk/by-uuid")``
+    and is the default for both ``uuid_by_device()`` and ``scan_mounts()``, so a
+    test that builds a synthetic ``/proc/mounts`` naming ``/dev/sda1`` but does
+    not pass ``by_uuid_dir=`` reads the REAL host disk index. Whether it then
+    gets a name-derived id or a UUID one depends on the machine's partition
+    layout, which makes the assertion non-deterministic across hosts.
+
+    That is not hypothetical: ``test_spaced_mount_point_yields_a_path_safe_id``
+    passed on both this Deck and a python:3.11 container but failed on CI's
+    3.11 runner and passed on its 3.12 runner, because each matrix job gets its
+    own VM and only one of them had a UUID indexed for ``/dev/sda1``. It
+    expected ``ext:External_SSD`` and got ``ext:1f78b26…``.
+
+    Patching ``BY_UUID_DIR`` itself does NOT work: it is bound as a default
+    argument at import time (``by_uuid_dir: Path = BY_UUID_DIR``), so rebinding
+    the module attribute leaves both defaults pointing at the real dir. What is
+    resolved per call is the ``uuid_by_device`` global, so the guard goes there
+    and neutralises only the unsafe default: a call that reaches for the real
+    ``/dev/disk/by-uuid`` gets an empty map, which is the documented degradation
+    for network shares and FUSE mounts and yields the name-derived id.
+
+    Tests that exercise real UUID behaviour pass ``by_uuid_dir=`` a fake index
+    (see ``_fake_uuid_index``) and still get the genuine lookup.
+    """
+    from unifideck.utils import mount_naming, mounts
+
+    real = mount_naming.BY_UUID_DIR
+    original = mount_naming.uuid_by_device
+
+    def _guarded(root: Path = real) -> dict[str, str]:
+        if Path(root) == Path(real):
+            return {}
+        return original(root)
+
+    # Both namespaces: ``mounts`` imported the name directly, and other
+    # callers reach it through ``mount_naming``.
+    monkeypatch.setattr(mounts, "uuid_by_device", _guarded)
+    monkeypatch.setattr(mount_naming, "uuid_by_device", _guarded)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_launcher_bridge(tmp_path, monkeypatch):
     """Point the launcher→frontend bridge file at a per-test temp path."""
     # Imported inside the fixture so conftest import never depends on

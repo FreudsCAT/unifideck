@@ -385,14 +385,18 @@ class BattlenetInstaller:
         auth = self._prefixes.auth_prefix
         if paths.client_exe(auth) is not None:
             return (
-                "Battle.net's client files are incomplete. Sign in to "
-                "Battle.net again and let the window finish opening — that "
-                "reinstalls the client.",
+                (
+                    "Battle.net's client files are incomplete. Sign in to "
+                    "Battle.net again and let the window finish opening — that "
+                    "reinstalls the client."
+                ),
                 "client_incomplete",
             )
         return (
-            "Sign in to Battle.net first — the game prefix inherits "
-            "your signed-in session",
+            (
+                "Sign in to Battle.net first — the game prefix inherits "
+                "your signed-in session"
+            ),
             "not_signed_in",
         )
 
