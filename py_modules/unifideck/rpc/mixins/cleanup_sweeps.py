@@ -81,17 +81,27 @@ def is_unifideck_owned(
     entry: dict[str, Any],
     unifideck_tag: str,
     is_unifideck_launch_options: Callable[[str], bool],
+    launcher_path: str = "",
 ) -> bool:
     """True iff a VDF shortcut entry is Unifideck-owned.
 
-    Two independent signals so cleanup catches entries even when
-    Steam silently strips one of them:
+    Ownership is decided on the ``Exe`` target, the one marker a
+    foreign tool cannot forge. LaunchOptions tokens and the
+    ``UNIFIDECK_TAG`` are then used to *narrow* which of our own
+    entries this is — never on their own to claim one.
 
-    * **LaunchOptions pattern** — most reliable, Steam preserves
-      ``LaunchOptions`` across updates.
-    * **UNIFIDECK_TAG** in ``tags`` — secondary signal for old
-      entries that pre-date the LaunchOptions convention.
+    Gating on those two signals alone is how "Delete all Unifideck
+    data" came to delete the user's own shortcuts, and to sweep their
+    grid artwork with them (the same predicate builds the artwork
+    keep-set). It is the UD-006 failure mode, and adding ``battlenet``
+    to ``STORE_ID_PATTERN`` widened it to every NonSteamLaunchers
+    Battle.net entry — those carry a ``battlenet:<id>`` token and
+    would otherwise read as ours.
     """
+    from unifideck.services.shortcut.write_guard import is_ours
+
+    if not is_ours(entry, launcher_path):
+        return False
     launch = entry.get("LaunchOptions", "")
     if isinstance(launch, str) and is_unifideck_launch_options(launch):
         return True

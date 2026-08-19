@@ -124,11 +124,12 @@ class CleanupRPCMixin(_CleanupFinalizeMixin):
         root = shortcuts.get("shortcuts") if isinstance(shortcuts, dict) else None
         if not isinstance(root, dict):
             return ids
+        launcher = getattr(shortcut_svc, "_launcher_path", "") or ""
         for entry in root.values():
             if not isinstance(entry, dict):
                 continue
             if not cleanup_sweeps.is_unifideck_owned(
-                entry, UNIFIDECK_TAG, is_unifideck_shortcut,
+                entry, UNIFIDECK_TAG, is_unifideck_shortcut, launcher,
             ):
                 continue
             app_id = entry.get("appid")
@@ -196,11 +197,12 @@ class CleanupRPCMixin(_CleanupFinalizeMixin):
         root = shortcuts.get("shortcuts") if isinstance(shortcuts, dict) else None
         if not isinstance(root, dict):
             return keep
+        launcher = getattr(shortcut_svc, "_launcher_path", "") or ""
         for entry in root.values():
             if not isinstance(entry, dict):
                 continue
             if cleanup_sweeps.is_unifideck_owned(
-                entry, UNIFIDECK_TAG, is_unifideck_shortcut,
+                entry, UNIFIDECK_TAG, is_unifideck_shortcut, launcher,
             ):
                 continue
             app_id = entry.get("appid")

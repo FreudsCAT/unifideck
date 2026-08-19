@@ -302,6 +302,9 @@
     "repairPrefixFailed": "Repair Failed",
     "repairPrefixFailedMessage": "Could not repair prefix: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "Steam's shortcuts file was left untouched to avoid removing your own non-Steam games. Your Unifideck library may look out of date until this is resolved. Reason: {{reason}}"
+    },
     "launcher": {
       "networkError": "Network Error",
       "launchRetry": "Retrying Launch",

@@ -30,6 +30,7 @@ from .check_kit import na as _na
 from .check_kit import ok as _ok
 from .check_kit import warn as _warn
 from .checks_protontricks import check_protontricks
+from .checks_shortcuts import check_shortcut_backups, check_shortcut_ownership_census
 from .probe_storage import RISKY_FSTYPES, is_user_storage
 from .spec import BundleContext, CheckResult, PathRecord
 
@@ -66,11 +67,23 @@ def _check_shortcuts_vdf(view: _View) -> CheckResult:
     if not view.present("shortcuts_vdf"):
         return _fail(name, f"shortcuts.vdf {view.status('shortcuts_vdf')}")
     mode = record.mode or ""
-    if mode and mode[-3:] == "644":
+    # An empty shortcuts.vdf used to report PASS, because ``present()``
+    # accepts the "empty" status too. That is the single loudest symptom
+    # of the library-wipe this check exists to catch, so it fails first.
+    if not record.size:
+        return _fail(
+            name,
+            "shortcuts.vdf is zero bytes - every non-Steam shortcut, ours "
+            "and the user's, is gone. Restore from shortcuts_backups/",
+        )
+    # Test the actual permission bit rather than string-matching "644":
+    # 0o600 and 0o444 disarm NonSteamLaunchers' scanner sentinel exactly
+    # as 0o644 does, and used to pass silently.
+    if mode and not mode.endswith(("1", "3", "5", "7")):
         return _warn(
             name,
-            f"mode {mode}: the exec bit has been lost before, and an "
-            "external tool then wiped library entries",
+            f"mode {mode} is not executable: the exec bit has been lost "
+            "before, and an external tool then wiped library entries",
         )
     return _ok(name, f"mode {mode}, {record.size} bytes")
 
@@ -444,6 +457,8 @@ _CHECKS: tuple[Callable[[_View], CheckResult], ...] = (
     _check_shortcuts_vdf,
     _check_triangulation,
     _check_shortcuts_race,
+    check_shortcut_ownership_census,
+    check_shortcut_backups,
     _check_third_party_writers,
     _check_steam_root,
     _check_launcher_binary,

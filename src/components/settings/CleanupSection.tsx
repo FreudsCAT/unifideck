@@ -69,8 +69,14 @@ export const CleanupSection: FC = () => {
         }
       ).SteamClient?.Apps;
       for (const id of result.deleted_app_ids) {
+        // `deleted_app_ids` are the SIGNED 32-bit ids as stored in
+        // shortcuts.vdf, but `RemoveShortcut` keys off the UNSIGNED id in
+        // `appStore.m_mapApps` — passing the signed form matched nothing,
+        // so this loop quietly did nothing and the tiles lingered until
+        // the next Steam restart. Mirrors `orphan_scan._to_unsigned`.
+        const unsigned = id < 0 ? id + 0x100000000 : id;
         try {
-          apps?.RemoveShortcut(id);
+          apps?.RemoveShortcut(unsigned);
         } catch {
           /* best effort */
         }

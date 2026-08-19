@@ -266,22 +266,65 @@ async def test_delete_nonsteam_artwork_noop_without_grid() -> None:
     assert await m._delete_nonsteam_artwork(keep_appids=set()) == 0
 
 
-def test_nonunifideck_unsigned_appids_filters_owned() -> None:
-    # Two shortcuts: one Unifideck-tagged (excluded), one foreign (kept).
+_CLEANUP_LAUNCHER = "/home/deck/homebrew/plugins/Unifideck/bin/unifideck-launcher"
+
+
+def _cleanup_shortcuts() -> dict:
+    """One of ours plus two of the user's, including the trap case.
+
+    Entry "2" is the shape that made this dangerous: NonSteamLaunchers
+    writes a ``battlenet:<id>`` token into LaunchOptions, and 0.7.4 added
+    ``battlenet`` to ``STORE_ID_PATTERN`` — so a LaunchOptions-only
+    ownership test claims it as ours and "Delete all Unifideck data"
+    removes the user's Battle.net shortcut and sweeps its artwork.
+    """
     from unifideck.services.shortcut.games_map import UNIFIDECK_TAG
 
-    shortcuts = {
+    return {
         "shortcuts": {
+            # Foreign, no Unifideck signals at all.
             "0": {"appid": -11936521, "tags": {"0": "Heroic"},
-                  "LaunchOptions": ""},
+                  "Exe": '"/usr/bin/heroic"', "LaunchOptions": ""},
+            # Ours: Exe is the launcher.
             "1": {"appid": -1379918704, "tags": {"0": UNIFIDECK_TAG},
+                  "Exe": f'"{_CLEANUP_LAUNCHER}"',
                   "LaunchOptions": "amazon:amzn1.adg.product.x"},
-        }
+            # Foreign, but carries a store token AND our tag.
+            "2": {"appid": -55555555, "tags": {"0": UNIFIDECK_TAG},
+                  "Exe": '"/home/deck/NonSteamLaunchers/Battle.net.sh"',
+                  "LaunchOptions": "battlenet:s1"},
+        },
     }
-    svc = SimpleNamespace(_shortcuts=shortcuts)
+
+
+def test_nonunifideck_unsigned_appids_filters_owned() -> None:
+    """The artwork keep-set holds every shortcut that isn't ours."""
+    svc = SimpleNamespace(
+        _shortcuts=_cleanup_shortcuts(), _launcher_path=_CLEANUP_LAUNCHER,
+    )
     keep = SyncRPCMixin._nonunifideck_unsigned_appids(svc)
 
-    assert keep == {(-11936521) + 0x100000000}
+    assert keep == {
+        (-11936521) + 0x100000000,
+        (-55555555) + 0x100000000,
+    }
+
+
+def test_cleanup_never_collects_a_foreign_shortcut_for_deletion() -> None:
+    """UD-006 class: only launcher-Exe entries are deletion candidates.
+
+    Guards the 0.7.4 regression specifically — a NonSteamLaunchers
+    ``battlenet:`` row must survive "Delete all Unifideck data" even
+    though it matches both the LaunchOptions pattern and our tag.
+    """
+    svc = SimpleNamespace(
+        _shortcuts=_cleanup_shortcuts(), _launcher_path=_CLEANUP_LAUNCHER,
+    )
+    ids = SyncRPCMixin._collect_ids_from_shortcuts_vdf(svc)
+
+    assert ids == {-1379918704}
+    assert -55555555 not in ids
+    assert -11936521 not in ids
 
 
 @pytest.mark.asyncio

@@ -303,6 +303,17 @@ _HEAVY: tuple[SourceSpec, ...] = (
              "wipe library entries.",
     ),
     SourceSpec(
+        key="shortcuts_vdf_backups",
+        what="Pre-write snapshots of shortcuts.vdf (newest first)",
+        root="data", pattern="shortcuts_backups/shortcuts.vdf.bak.*",
+        arch_dir="steam",
+        max_bytes=CAP_VDF, scrub="none", priority=85, expect="sync",
+        writer="services/shortcut/vdf_backup.py before every write",
+        note="Diff against shortcuts_vdf to see exactly which entries a "
+             "write removed - the question every 'my non-Steam games "
+             "disappeared' report turns on.",
+    ),
+    SourceSpec(
         key="libraryfolders_vdf",
         what="Steam's library folder list (which drives Steam knows about)",
         root="steam", pattern="steamapps/libraryfolders.vdf", arch_dir="steam",
