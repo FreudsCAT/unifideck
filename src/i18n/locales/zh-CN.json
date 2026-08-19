@@ -293,6 +293,9 @@
     "repairPrefixFailed": "修复失败",
     "repairPrefixFailedMessage": "无法修复运行环境: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "为避免移除您自己添加的非 Steam 游戏，Steam 的快捷方式文件未被修改。在此问题解决之前，您的 Unifideck 库可能显示为过时状态。原因：{{reason}}"
+    },
     "launcher": {
       "networkError": "网络错误",
       "launchRetry": "正在重试启动",

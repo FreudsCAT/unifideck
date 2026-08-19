@@ -293,6 +293,9 @@
     "repairPrefixFailed": "Error al reparar",
     "repairPrefixFailedMessage": "No se pudo reparar el prefijo: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "No se modificó el archivo de accesos directos de Steam para evitar eliminar tus propios juegos ajenos a Steam. Es posible que tu biblioteca de Unifideck parezca desactualizada hasta que se resuelva. Motivo: {{reason}}"
+    },
     "launcher": {
       "networkError": "Error de red",
       "launchRetry": "Reintentando inicio",

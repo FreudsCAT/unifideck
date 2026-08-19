@@ -293,6 +293,9 @@
     "repairPrefixFailed": "복구 실패",
     "repairPrefixFailedMessage": "실행 환경을 복구하지 못했습니다: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "직접 추가한 비Steam 게임이 삭제되지 않도록 Steam의 바로 가기 파일을 수정하지 않았습니다. 이 문제가 해결될 때까지 Unifideck 라이브러리가 최신 상태가 아닌 것처럼 보일 수 있습니다. 이유: {{reason}}"
+    },
     "launcher": {
       "networkError": "네트워크 오류",
       "launchRetry": "실행 재시도 중",

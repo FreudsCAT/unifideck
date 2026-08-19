@@ -708,10 +708,12 @@ _stage_plugin_files() {
     done
 
     # Build-time leftovers that must never ship: the per-binary download stamps
-    # (see prebuild_binaries) and any half-finished download, plus mypy's cache,
-    # which the copy above otherwise drags in from py_modules/.
+    # (see prebuild_binaries) and any half-finished download, plus the lint
+    # caches, which the copy above otherwise drags in from py_modules/. Both
+    # caches are created by simply running the CI gate block before a build,
+    # so a release build is exactly when they are most likely to be present.
     rm -f "$dest"/bin/*.url "$dest"/bin/*.new
-    rm -rf "$dest/py_modules/.mypy_cache"
+    rm -rf "$dest/py_modules/.mypy_cache" "$dest/py_modules/.import_linter_cache"
 }
 
 # ── Skip the Decky CLI's redundant binary re-download ─────────

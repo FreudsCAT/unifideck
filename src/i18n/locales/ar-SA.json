@@ -293,6 +293,9 @@
     "repairPrefixFailed": "فشل الإصلاح",
     "repairPrefixFailedMessage": "فشل إصلاح بيئة التشغيل: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "لم يتم تعديل ملف اختصارات Steam لتجنب إزالة ألعابك غير التابعة لـ Steam. قد تبدو مكتبة Unifideck قديمة إلى أن يتم حل هذه المشكلة. السبب: {{reason}}"
+    },
     "launcher": {
       "networkError": "خطأ في الشبكة",
       "launchRetry": "إعادة محاولة التشغيل",

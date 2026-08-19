@@ -293,6 +293,9 @@
     "repairPrefixFailed": "Échec de la réparation",
     "repairPrefixFailedMessage": "Impossible de réparer le préfixe : {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "Le fichier de raccourcis de Steam n'a pas été modifié afin de ne pas supprimer vos propres jeux non-Steam. Votre bibliothèque Unifideck peut sembler obsolète tant que le problème n'est pas résolu. Raison : {{reason}}"
+    },
     "launcher": {
       "networkError": "Erreur réseau",
       "launchRetry": "Nouvelle tentative de lancement",

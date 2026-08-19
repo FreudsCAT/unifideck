@@ -293,6 +293,9 @@
     "repairPrefixFailed": "Onarım Başarısız",
     "repairPrefixFailedMessage": "Önek onarılamadı: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "Kendi Steam dışı oyunlarınızın kaldırılmaması için Steam'in kısayol dosyasına dokunulmadı. Bu sorun çözülene kadar Unifideck kitaplığınız güncel görünmeyebilir. Neden: {{reason}}"
+    },
     "launcher": {
       "networkError": "Ağ Hatası",
       "launchRetry": "Başlatma yeniden deneniyor",

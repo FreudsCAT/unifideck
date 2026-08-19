@@ -293,6 +293,9 @@
     "repairPrefixFailed": "Naprawa nie powiodła się",
     "repairPrefixFailedMessage": "Nie można naprawić prefiksu: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "Plik skrótów Steam pozostał nietknięty, aby uniknąć usunięcia Twoich własnych gier spoza Steam. Twoja biblioteka Unifideck może wyglądać na nieaktualną, dopóki problem nie zostanie rozwiązany. Powód: {{reason}}"
+    },
     "launcher": {
       "networkError": "Błąd sieci",
       "launchRetry": "Ponawianie uruchamiania",

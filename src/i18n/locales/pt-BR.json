@@ -293,6 +293,9 @@
     "repairPrefixFailed": "Falha ao Reparar",
     "repairPrefixFailedMessage": "Não foi possível reparar o prefixo: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "O arquivo de atalhos do Steam não foi alterado para evitar a remoção dos seus próprios jogos que não são do Steam. Sua biblioteca do Unifideck pode parecer desatualizada até que isso seja resolvido. Motivo: {{reason}}"
+    },
     "launcher": {
       "networkError": "Erro de Rede",
       "launchRetry": "Tentando iniciar novamente",

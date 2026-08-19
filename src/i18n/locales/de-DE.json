@@ -293,6 +293,9 @@
     "repairPrefixFailed": "Reparatur fehlgeschlagen",
     "repairPrefixFailedMessage": "Präfix konnte nicht repariert werden: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "Die Verknüpfungsdatei von Steam wurde nicht verändert, um deine eigenen Nicht-Steam-Spiele nicht zu entfernen. Deine Unifideck-Bibliothek sieht möglicherweise veraltet aus, bis das Problem behoben ist. Grund: {{reason}}"
+    },
     "launcher": {
       "networkError": "Netzwerkfehler",
       "launchRetry": "Start wird wiederholt",

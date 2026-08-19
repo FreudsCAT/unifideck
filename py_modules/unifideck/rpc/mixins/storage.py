@@ -181,6 +181,28 @@ def _external_label(m: mounts.MountInfo) -> str:
     return f"External Drive ({mount_naming.display_name(m.mount_point)})"
 
 
+def _remap_name_derived_id(
+    default: str, locations: list[dict[str, Any]],
+) -> str | None:
+    """Match an ``ext:<name>`` id by re-deriving it from ``device_path``."""
+    for loc in locations:
+        device_path = loc.get("device_path")
+        if not isinstance(device_path, str) or not device_path:
+            continue
+        if mount_naming.legacy_mount_id(device_path) == default:
+            return str(loc["id"])
+    return None
+
+
+def _first_external_id(locations: list[dict[str, Any]]) -> str | None:
+    """First external location, standing in for the old shared ``sdcard`` id."""
+    for loc in locations:
+        loc_id = loc["id"]
+        if isinstance(loc_id, str) and loc_id.startswith("ext:"):
+            return loc_id
+    return None
+
+
 def _remap_legacy_default(default: str, locations: list[dict[str, Any]]) -> str:
     """Remap a persisted default saved under an older id scheme.
 
@@ -198,19 +220,12 @@ def _remap_legacy_default(default: str, locations: list[dict[str, Any]]) -> str:
     ids = {loc["id"] for loc in locations}
     if default in ids:
         return default
+    remapped: str | None = None
     if default.startswith("ext:"):
-        for loc in locations:
-            device_path = loc.get("device_path")
-            if not isinstance(device_path, str) or not device_path:
-                continue
-            if mount_naming.legacy_mount_id(device_path) == default:
-                return str(loc["id"])
-    if default == "sdcard":
-        for loc in locations:
-            loc_id = loc["id"]
-            if isinstance(loc_id, str) and loc_id.startswith("ext:"):
-                return loc_id
-    return "internal"
+        remapped = _remap_name_derived_id(default, locations)
+    elif default == "sdcard":
+        remapped = _first_external_id(locations)
+    return remapped or "internal"
 
 
 # ─── Module-level helpers ─────────────────────────────────────

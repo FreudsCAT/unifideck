@@ -293,6 +293,9 @@
     "repairPrefixFailed": "Riparazione fallita",
     "repairPrefixFailedMessage": "Impossibile riparare il prefisso: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "Il file dei collegamenti di Steam non è stato modificato per evitare di rimuovere i tuoi giochi non Steam. La tua libreria Unifideck potrebbe sembrare non aggiornata finché il problema non viene risolto. Motivo: {{reason}}"
+    },
     "launcher": {
       "networkError": "Errore di rete",
       "launchRetry": "Nuovo tentativo di avvio",

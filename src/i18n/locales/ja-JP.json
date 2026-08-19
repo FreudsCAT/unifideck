@@ -293,6 +293,9 @@
     "repairPrefixFailed": "修復に失敗しました",
     "repairPrefixFailedMessage": "プレフィックスを修復できませんでした: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "ご自身で追加した非Steamゲームが削除されるのを防ぐため、Steamのショートカットファイルは変更されませんでした。この問題が解決するまで、Unifideckのライブラリが最新でないように見える場合があります。理由: {{reason}}"
+    },
     "launcher": {
       "networkError": "ネットワークエラー",
       "launchRetry": "起動を再試行しています",

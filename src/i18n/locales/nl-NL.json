@@ -293,6 +293,9 @@
     "repairPrefixFailed": "Reparatie mislukt",
     "repairPrefixFailedMessage": "Kan prefix niet repareren: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "Het snelkoppelingenbestand van Steam is ongewijzigd gelaten om te voorkomen dat je eigen niet-Steam-games worden verwijderd. Je Unifideck-bibliotheek kan verouderd lijken totdat dit is opgelost. Reden: {{reason}}"
+    },
     "launcher": {
       "networkError": "Netwerkfout",
       "launchRetry": "Opnieuw starten",

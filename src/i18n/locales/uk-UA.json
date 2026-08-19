@@ -293,6 +293,9 @@
     "repairPrefixFailed": "Не вдалося виправити",
     "repairPrefixFailedMessage": "Не вдалося виправити префікс: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "Файл ярликів Steam залишився без змін, щоб не видалити ваші власні ігри не зі Steam. Бібліотека Unifideck може виглядати застарілою, доки проблему не буде усунено. Причина: {{reason}}"
+    },
     "launcher": {
       "networkError": "Помилка мережі",
       "launchRetry": "Повторний запуск",

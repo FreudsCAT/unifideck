@@ -293,6 +293,9 @@
     "repairPrefixFailed": "修復失敗",
     "repairPrefixFailedMessage": "無法修復執行環境: {{error}}",
     "unifideck": "Unifideck:",
+    "shortcuts": {
+      "writeRefused": "為避免移除您自己新增的非 Steam 遊戲，Steam 的捷徑檔案未被修改。在此問題解決之前，您的 Unifideck 收藏庫可能顯示為過時狀態。原因：{{reason}}"
+    },
     "launcher": {
       "networkError": "網路錯誤",
       "launchRetry": "正在重試啟動",
