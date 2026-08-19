@@ -3,7 +3,9 @@
 # CI pipeline for Unifideck. Triggered on every PR and push to
 # main/staging. Runs the full build pipeline:
 #
-#   1. Python setup + i18n translation (DeepL, only if en-US.json changed)
+#   1. Python setup + i18n translation (DeepL, only when a
+#      DEEPL_API_KEY secret is configured AND en-US.json changed;
+#      otherwise skipped — locale JSONs are maintained by hand)
 #   2. TypeScript locale catalog generation from config.json
 #   3. RTL-safety lint (scripts/lint_rtl.py)
 #   4. pnpm install + ESLint + TypeScript type check
@@ -44,12 +46,29 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Translate en-US.json via DeepL (if changed)
+      - name: Detect DeepL API key
+        # The `secrets` context is not usable in a step-level
+        # `if:`, so probe the secret once here and gate on this
+        # step's output. Scoping the env to this one step keeps
+        # the key out of pnpm, the Decky CLI, and everything else.
+        id: deepl
+        env:
+          DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
+        run: |
+          if [ -n "$DEEPL_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No DEEPL_API_KEY - skipping machine translation; locale JSONs are maintained manually."
+          fi
+
+      - name: Translate en-US.json via DeepL (if key present)
         # Only calls DeepL for keys whose MD5 has changed since
         # the last run. If en-US.json is unchanged → zero API
-        # calls, zero quota consumed. If running on a fork PR
-        # without DEEPL_API_KEY and en-US.json HAS changed →
-        # exits 1 with a clear message for the maintainer.
+        # calls, zero quota consumed. With no key configured (the
+        # current manual-translation workflow, and fork PRs) the
+        # step is skipped entirely and the build carries on.
+        if: steps.deepl.outputs.present == 'true'
         env:
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
         run: python3 scripts/translate_at_build.py
@@ -70,7 +89,8 @@ jobs:
       - name: Commit regenerated locale files
         # Only on push (not PR) — PRs can't write to the target
         # repo. Commits any locale JSONs or generated TS that
-        # were updated by the translate/gen steps above.
+        # were updated by the translate/gen steps above. With
+        # DeepL skipped only locales.generated.ts can change.
         if: github.event_name == 'push'
         run: |
           git config user.name "unifideck-bot"
@@ -79,7 +99,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No locale changes to commit"
           else
-            git commit -m "chore(i18n): auto-regenerate locales via DeepL"
+            git commit -m "chore(i18n): regenerate locale catalog"
             git push
           fi
 
