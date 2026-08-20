@@ -535,6 +535,8 @@
   },
   "deckTabs": {
     "greatOnDeck": "Deck 推荐",
+    "greatOnMachine": "Steam Machine 推荐",
+    "steamOSCompatible": "SteamOS 兼容",
     "allGames": "全部游戏",
     "installed": "已安装",
     "nonSteam": "非 Steam",

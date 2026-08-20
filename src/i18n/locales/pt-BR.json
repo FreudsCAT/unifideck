@@ -535,6 +535,8 @@
   },
   "deckTabs": {
     "greatOnDeck": "Ótimos no Deck",
+    "greatOnMachine": "Ótimos no Steam Machine",
+    "steamOSCompatible": "Compatíveis com SteamOS",
     "allGames": "Todos os Jogos",
     "installed": "Instalado",
     "nonSteam": "Não Steam",

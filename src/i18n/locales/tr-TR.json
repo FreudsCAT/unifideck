@@ -535,6 +535,8 @@
   },
   "deckTabs": {
     "greatOnDeck": "Deck'te Harika",
+    "greatOnMachine": "Steam Machine'de Harika",
+    "steamOSCompatible": "SteamOS Uyumlu",
     "allGames": "Tüm Oyunlar",
     "installed": "Yüklü",
     "nonSteam": "Steam Dışı",

@@ -33,6 +33,8 @@ import {
 import { AccountSwitchModal, SteamRestartModal } from "./components/modals";
 import { uploadSteamOwnedTitles } from "./lib/steam-bridge/owned-library";
 import { uploadActiveSteamUser } from "./lib/steam-bridge/active-user";
+import { loadDeviceType } from "./lib/device-type";
+import { tabManager } from "./lib/steam-bridge/tab-container";
 import type { Unregisterable } from "./types/steam";
 /** Language pref — the `data` payload of `get_language_preference`
  *  after the `{success, error, data}` envelope is unwrapped.
@@ -97,6 +99,24 @@ export async function applyLanguagePreference(): Promise<void> {
  * @returns a promise resolving once the check (and
  *   any required cache clear) is done.
  */
+/**
+ * Bootstrap task : resolve the device class and re-title the
+ * compatibility tab if it is not a Steam Deck.
+ *
+ * Only rebuilds when the value actually changed, so the common case
+ * (an actual Deck, which is already the default) costs nothing.
+ */
+export async function applyDeviceType(): Promise<void> {
+  try {
+    const changed = await loadDeviceType();
+    if (changed && tabManager.isInitialized()) {
+      tabManager.rebuildTabs();
+    }
+  } catch {
+    // Non-fatal — the "deck" default label stays.
+  }
+}
+
 export async function checkAccountSwitch(): Promise<void> {
   try {
     const r = await call<[], AccountSwitchInfo>(rpcRoutes.checkAccountSwitch);
@@ -306,8 +326,12 @@ export async function runBootstrapTasks(): Promise<Unregisterable | null> {
   // 100%-correct source of the active account, and everything below (account-
   // switch check, owned-titles, any sync) must target the right userdata dir.
   await uploadActiveSteamUser();
-  const [, , , , listener] = await Promise.all([
+  const [, , , , , listener] = await Promise.all([
     applyLanguagePreference(),
+    // Name the compatibility tab after the actual hardware. Defaults to
+    // "deck", so a failure here leaves the pre-existing label rather
+    // than blanking the tab.
+    applyDeviceType(),
     checkAccountSwitch(),
     // Seed the owned-Steam-library snapshot early so a backend-triggered
     // (auto) sync can hide Steam-linked Ubisoft games before the user's

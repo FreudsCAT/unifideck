@@ -535,6 +535,8 @@
   },
   "deckTabs": {
     "greatOnDeck": "Deck 추천 게임",
+    "greatOnMachine": "Steam Machine 추천 게임",
+    "steamOSCompatible": "SteamOS 호환",
     "allGames": "모든 게임",
     "installed": "설치됨",
     "nonSteam": "비 Steam",

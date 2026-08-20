@@ -535,6 +535,8 @@
   },
   "deckTabs": {
     "greatOnDeck": "Zgodne z Deckiem",
+    "greatOnMachine": "Zgodne ze Steam Machine",
+    "steamOSCompatible": "Zgodne z SteamOS",
     "allGames": "Wszystkie gry",
     "installed": "Zainstalowane",
     "nonSteam": "Spoza Steam",

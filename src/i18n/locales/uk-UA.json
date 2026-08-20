@@ -535,6 +535,8 @@
   },
   "deckTabs": {
     "greatOnDeck": "Чудово на Deck",
+    "greatOnMachine": "Чудово на Steam Machine",
+    "steamOSCompatible": "Сумісно зі SteamOS",
     "allGames": "Усі ігри",
     "installed": "Встановлено",
     "nonSteam": "Сторонні ігри",

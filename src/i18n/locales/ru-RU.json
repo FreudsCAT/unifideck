@@ -535,6 +535,8 @@
   },
   "deckTabs": {
     "greatOnDeck": "Отлично на Deck",
+    "greatOnMachine": "Отлично на Steam Machine",
+    "steamOSCompatible": "Совместимо со SteamOS",
     "allGames": "Все игры",
     "installed": "Установлено",
     "nonSteam": "Сторонние игры",

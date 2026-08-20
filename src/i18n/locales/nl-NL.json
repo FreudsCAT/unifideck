@@ -535,6 +535,8 @@
   },
   "deckTabs": {
     "greatOnDeck": "Geweldig op Deck",
+    "greatOnMachine": "Geweldig op Steam Machine",
+    "steamOSCompatible": "SteamOS-compatibel",
     "allGames": "Alle games",
     "installed": "Geïnstalleerd",
     "nonSteam": "Niet-Steam",

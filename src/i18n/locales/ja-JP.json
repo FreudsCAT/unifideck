@@ -535,6 +535,8 @@
   },
   "deckTabs": {
     "greatOnDeck": "Deckで快適",
+    "greatOnMachine": "Steam Machineで快適",
+    "steamOSCompatible": "SteamOS対応",
     "allGames": "すべてのゲーム",
     "installed": "インストール済み",
     "nonSteam": "非Steam",
