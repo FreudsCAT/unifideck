@@ -105,6 +105,21 @@ class StoreBase(ABC):
         reads legendary's ``installed.json``.
         """
         return None
+
+    def get_prefix_path(self, game_id: str) -> str | None:
+        """The Wine prefix a game lives in, for stores where that is the install.
+
+        Only meaningful for a **wrapper store**: its vendor client runs inside
+        the prefix and installs the game into it, so the prefix is the game's
+        real footprint and what uninstalling reclaims. Every other store
+        downloads outside its prefix and leaves this ``None`` — the default —
+        which is what keeps ``resolve_size_root`` a shared rule keyed on
+        ``prefix_owns_game_install`` rather than a store-name branch.
+
+        Synchronous: for both wrapper stores this is an in-memory id-map read,
+        and it is called from a size lookup that is already off the hot path.
+        """
+        return None
     def _find_binary(self, tool: CLITool) -> str | None:
         """Find binary.
 

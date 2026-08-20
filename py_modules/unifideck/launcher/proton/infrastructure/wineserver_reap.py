@@ -18,9 +18,23 @@ dev=66312 ino=0x3e07ce had four wineservers piled on
 
 This module reaps the wineserver(s) bound to a given prefix (by matching
 the server dir in their open fds), and sweeps server dirs whose owning
-prefix no longer exists. Deliberately *surgical* — it targets the server
-dir of a specific prefix, so a wineserver for a game the user is actually
-running (a different prefix → different server dir) is never touched.
+prefix no longer exists.
+
+**The scope is one prefix, not one process tree. Every process in that
+prefix dies — live or orphaned, whoever started it.** A different prefix
+means a different server dir and is never touched, but that is the only
+thing this is surgical about. Callers must own the prefix.
+
+An earlier version of this docstring promised that "a wineserver for a
+game the user is actually running is never touched", reasoning that a
+running game lives in its own prefix. That holds for every store whose
+prefix hosts exactly one umu run — and is false for Battle.net, where a
+long-lived client and its short-lived ``--exec`` commands share one
+prefix. The launcher's phase-C exec is cancelled on a 60 s timeout,
+which reached here and SIGKILLed the client the *user's own launch* had
+started: the Battle.net Agent died mid-download, and every Diablo II
+install stalled inside a minute. See ``handlers/battlenet.py`` and
+``umu_runtime.run_umu_with_retry``'s ``reap_wineserver`` opt-out.
 """
 from __future__ import annotations
 

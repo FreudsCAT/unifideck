@@ -35,23 +35,45 @@ logger = logging.getLogger(__name__)
 
 SETTINGS_PATH = Path.home() / ".local/share/unifideck/settings.json"
 
-# Auth token file locations (shared across all Steam accounts). Existence
-# of any one means there's a signed-in store worth migrating/clearing.
-AUTH_TOKEN_PATHS: dict[str, Path] = {
-    "epic": Path.home() / ".config/legendary/user.json",
-    "gog": Path.home() / ".config/unifideck/gog_token.json",
-    "gogdl": Path.home() / ".config/unifideck/gogdl_auth.json",
-    "amazon": Path.home() / ".config/nile/user.json",
-    "amazon_library": Path.home() / ".config/nile/library.json",
-    "amazon_installed": Path.home() / ".config/nile/installed.json",
-    "ubisoft": Path.home() / ".local/share/unifideck/ubisoft_token.json",
-    "ubisoft_session": Path.home() / ".local/share/unifideck/ubisoft_upc_session.txt",
-    "microsoft": Path.home() / ".config/unifideck/microsoft_token.json",
+# Auth token file locations (shared across all Steam accounts), relative to
+# the user's home. Existence of any one means there's a signed-in store worth
+# migrating/clearing.
+#
+# Relative fragments rather than resolved paths, because a module-level
+# ``Path.home()`` is captured at import — before pytest's autouse fixture
+# redirects ``HOME`` — and a test then reads (or writes) the developer's real
+# credentials. That has already happened once here: a unit test for the nile
+# self-heal renamed the live ``~/.config/nile/user.json`` and signed the
+# machine out of Amazon. :func:`auth_token_paths` resolves them per call.
+_AUTH_TOKEN_FRAGMENTS: dict[str, str] = {
+    "epic": ".config/legendary/user.json",
+    "gog": ".config/unifideck/gog_token.json",
+    "gogdl": ".config/unifideck/gogdl_auth.json",
+    "amazon": ".config/nile/user.json",
+    "amazon_library": ".config/nile/library.json",
+    "amazon_installed": ".config/nile/installed.json",
+    "ubisoft": ".local/share/unifideck/ubisoft_token.json",
+    "ubisoft_session": ".local/share/unifideck/ubisoft_upc_session.txt",
+    "microsoft": ".config/unifideck/microsoft_token.json",
+    # Battle.net keeps no token file of ours — its credential lives inside
+    # the auth prefix, which is also where installed games live, so the
+    # prefix is deliberately NOT listed here (clearing it would delete the
+    # user's games). The id map is the account-scoped state worth clearing:
+    # it holds which uid installed to which prefix for the previous account.
+    "battlenet": ".local/share/unifideck/battlenet_id_map.json",
 }
 
-# Shared Unifideck data file (same path on the new branch —
-# see services/shortcut/registry.py DEFAULT_REGISTRY_PATH).
-REGISTRY_PATH = Path.home() / ".local/share/unifideck/shortcuts_registry.json"
+
+def auth_token_paths() -> dict[str, Path]:
+    """Every store's auth-token path, resolved against the current home."""
+    home = Path.home()
+    return {store: home / frag for store, frag in _AUTH_TOKEN_FRAGMENTS.items()}
+
+
+def registry_path() -> Path:
+    """Shared Unifideck shortcut registry (same file as
+    ``services/shortcut/registry.py`` ``DEFAULT_REGISTRY_PATH``)."""
+    return Path.home() / ".local/share/unifideck/shortcuts_registry.json"
 
 
 class AccountManager:
@@ -121,7 +143,7 @@ class AccountManager:
 
     def has_active_auth_tokens(self) -> bool:
         """True if any store auth-token file exists on disk."""
-        for store, path in AUTH_TOKEN_PATHS.items():
+        for store, path in auth_token_paths().items():
             if path.exists():
                 logger.debug(
                     "[AccountSwitch] Found auth token for %s: %s", store, path
@@ -132,8 +154,9 @@ class AccountManager:
     def has_registry_entries(self) -> bool:
         """True if ``shortcuts_registry.json`` has any entries."""
         try:
-            if REGISTRY_PATH.exists():
-                with REGISTRY_PATH.open() as f:
+            path = registry_path()
+            if path.exists():
+                with path.open() as f:
                     registry = json.load(f)
                 return len(registry) > 0
         except Exception:

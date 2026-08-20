@@ -246,14 +246,30 @@ Key architectural landmarks post-restructure:
 ### Script usage
 
 ```bash
-./build-plugin.sh [dev|prod] [install]
+./build-plugin.sh [dev|prod] [install|quick-install] [push]
 
 # Examples:
-./build-plugin.sh          # dev build, no install
-./build-plugin.sh dev      # dev build, no install
-./build-plugin.sh prod     # production build
-./build-plugin.sh dev install  # dev build + auto-install to Decky
+./build-plugin.sh                # dev build, no install
+./build-plugin.sh prod           # production build
+./build-plugin.sh install        # dev build + auto-install to Decky
+./build-plugin.sh quick-install  # no build; rsync source into the live install
+./build-plugin.sh push           # dev build + publish it as a Dev-* prerelease
+./build-plugin.sh install push   # all three
 ```
+
+The mode is optional and defaults to `dev`, so `install`, `quick-install` and
+`push` all stand on their own; spelling out `dev` first is equivalent. If a mode
+is named it must come first.
+
+Every argument is validated; an unrecognised one exits 1 with the usage banner
+rather than being silently ignored. `-h` / `--help` prints the same banner.
+
+`push` is the only argument that contacts GitHub, and it is dev-only. Without it
+a build stays entirely local. With it, the zip is published as a **new**
+`Dev-<date>-<time>-<sha>` prerelease and the previous `Dev-*` release (and its
+tag ref) is deleted — that is what testers pick up through the in-plugin
+updater. Production releases do not use this path; they go through the draft
+release flow instead.
 
 ### Build flow
 

@@ -56,9 +56,20 @@ _LOGS: tuple[SourceSpec, ...] = (
         root="launches", pattern="*.game.log", arch_dir="launches",
         policy="tail", max_bytes=CAP_GAME_LOG, scrub="text",
         priority=30, newest_n=MAX_GAME_LOGS, expect="launch",
-        writer="launcher/proton/infrastructure/umu_runtime.py::open_game_log",
+        writer="launcher/proton/infrastructure/game_log.py::open_game_log",
         note="Install-time prefix warmup runs outside a launch id, so a "
              "'-.game.log' orphan is normal and often the largest file.",
+    ),
+    SourceSpec(
+        key="vendor_client_logs",
+        what="A wrapper store's own client logs, salvaged before its prefix was deleted",
+        root="launches", pattern="*.vendor.txt", arch_dir="launches",
+        policy="tail", max_bytes=CAP_GAME_LOG, scrub="text",
+        priority=25, newest_n=MAX_LAUNCH_LOGS, expect="optional",
+        writer="stores/shared/prefix_forensics.py::preserve_vendor_logs",
+        note="For a wrapper store the prefix IS the install, so a failed "
+             "install deletes the only first-hand account of why the vendor "
+             "client would not start. This is that account, kept.",
     ),
     SourceSpec(
         key="launcher_events",
@@ -231,6 +242,13 @@ _STATE_MEDIUM: tuple[SourceSpec, ...] = (
         writer="stores/ubisoft/config.py",
     ),
     SourceSpec(
+        key="battlenet_id_map",
+        what="Battle.net uid to family code, prefix and proven-launch state",
+        root="data", pattern="battlenet_id_map.json", arch_dir="data",
+        max_bytes=CAP_SMALL_JSON, scrub="json", priority=55, expect="battlenet",
+        writer="stores/battlenet/id_map.py",
+    ),
+    SourceSpec(
         key="steam_owned_titles", what="Titles already owned on Steam (dedup input)",
         root="data", pattern="steam_owned_titles.json", arch_dir="data",
         max_bytes=CAP_SMALL_JSON, scrub="json", priority=55, expect="sync",
@@ -283,6 +301,17 @@ _HEAVY: tuple[SourceSpec, ...] = (
         writer="Steam, plus services/shortcut on sync",
         note="Mode matters: losing the exec bit made an external tool "
              "wipe library entries.",
+    ),
+    SourceSpec(
+        key="shortcuts_vdf_backups",
+        what="Pre-write snapshots of shortcuts.vdf (newest first)",
+        root="data", pattern="shortcuts_backups/shortcuts.vdf.bak.*",
+        arch_dir="steam",
+        max_bytes=CAP_VDF, scrub="none", priority=85, expect="sync",
+        writer="services/shortcut/vdf_backup.py before every write",
+        note="Diff against shortcuts_vdf to see exactly which entries a "
+             "write removed - the question every 'my non-Steam games "
+             "disappeared' report turns on.",
     ),
     SourceSpec(
         key="libraryfolders_vdf",

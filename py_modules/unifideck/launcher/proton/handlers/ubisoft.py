@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from unifideck.launcher.frontend_bridge import launcher_toast
+from unifideck.launcher.game_title import resolve_title
 from unifideck.launcher.proton.handlers.ubisoft_recovery import (
     ID_MAP_FILE,
     clone_template_into,
@@ -107,7 +108,7 @@ async def ubisoft_launch(plan: ProtonLaunchPlan) -> int:
     launcher_toast(
         "toasts.launcher.startingUbisoftGame",
         i18n_title_key="toasts.launcher.launchingGame",
-        game_title=plan.context.game_key,
+        game_title=resolve_title(plan.context.game_key),
     )
     await _apply_epic_wrapper_fix(plan)
     if not await _inject_registry_keys(plan):
@@ -123,7 +124,7 @@ async def ubisoft_launch(plan: ProtonLaunchPlan) -> int:
         launcher_toast(
             "toasts.launcher.ubisoftPrefixNotReadyMessage",
             i18n_title_key="toasts.launcher.ubisoftPrefixNotReady",
-            game_title=plan.context.game_key,
+            game_title=resolve_title(plan.context.game_key),
             severity="error",
         )
         raise GameFailedError(
@@ -158,7 +159,7 @@ async def ubisoft_launch(plan: ProtonLaunchPlan) -> int:
         launcher_toast(
             "toasts.launcher.ubisoftLaunchIdMissingMessage",
             i18n_title_key="toasts.launcher.ubisoftLaunchIdMissing",
-            game_title=plan.context.game_key,
+            game_title=resolve_title(plan.context.game_key),
             severity="warning",
         )
     env = plan.env

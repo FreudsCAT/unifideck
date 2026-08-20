@@ -28,6 +28,10 @@ import { call } from "@decky/api";
 import { EventBusClient } from "../../api/event-bus-client";
 import { rpcRoutes } from "../../api/rpc-routes";
 import { unwrapRpcEnvelope } from "../../api/useRPC";
+import {
+  type ShortcutLaunchResult,
+  watchAppStopped,
+} from "../../lib/steam-bridge/shortcut-types";
 import { Events } from "../../types/events";
 import {
   launchAmazonAuthViaShortcut,
@@ -36,9 +40,21 @@ import {
   launchMicrosoftAuthViaShortcut,
 } from "../../utils/authShortcutLaunch";
 import { launchUbisoftAuthViaShortcut } from "../../utils/ubisoftShortcutLaunch";
+import { launchBattlenetAuthViaShortcut } from "../../utils/battlenetShortcutLaunch";
 import type { StoreId, AuthResult } from "../../types/api";
 
 const AUTH_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes ceiling
+
+/** How long a second press is treated as a double-click on the same flow
+ *  rather than a deliberate retry. Anything longer is the user telling us
+ *  the previous attempt is dead — see {@link AuthDispatcherImpl.start}. */
+const DEDUPE_WINDOW_MS = 3000;
+
+/** Grace after the auth app exits before the flow is called failed. The
+ *  backend monitor polls the auth prefix every 2s and the vendor client
+ *  flushes its token as it shuts down, so a successful sign-in's
+ *  ``STORE_AUTH_COMPLETE`` routinely lands *after* the app has stopped. */
+const AUTH_APP_STOPPED_GRACE_MS = 20 * 1000;
 
 /** Auth event payload. */
 interface AuthEventPayload {
@@ -57,29 +73,70 @@ interface StoreAuthResponse {
   error?: string;
 }
 
+/** What the two-stage kick learned: an immediate verdict, if the backend
+ *  had one, and the appid Steam was asked to run, if a shortcut launched. */
+interface KickOutcome {
+  early: AuthResult | null;
+  appId?: number;
+}
+
+/** One in-flight auth flow, plus what it takes to abandon it. */
+interface InflightAuth {
+  promise: Promise<AuthResult>;
+  startedAt: number;
+  /** Settle this flow early so a fresh attempt can take over. */
+  supersede: (reason: string) => void;
+}
+
 /** Auth dispatcher impl. */
 class AuthDispatcherImpl {
   /** Per-store in-flight auth: allows concurrent auth for
    *  DIFFERENT stores (e.g. user starts GOG then clicks
    *  Microsoft — both run in parallel). Only deduplicates
-   *  the SAME store (clicking Connect twice returns the
-   *  existing promise). */
-  private inflight = new Map<StoreId, Promise<AuthResult>>();
+   *  the SAME store, and only briefly — see {@link start}. */
+  private inflight = new Map<StoreId, InflightAuth>();
 
   /** Start the auth flow for `store`. Resolves when the
    *  backend emits `STORE_AUTH_COMPLETE` / `STORE_AUTH_FAILED`
    *  for that store, or rejects on timeout / shortcut launch
-   *  failure. */
+   *  failure.
+   *
+   *  A second press is only deduplicated inside
+   *  {@link DEDUPE_WINDOW_MS}. Past that it supersedes the old
+   *  flow instead of returning it, because this map is a
+   *  module singleton and handing back a stale pending promise
+   *  is indistinguishable from a dead button: the press makes
+   *  no RPC and launches nothing. A store whose backend never
+   *  emitted a terminal event therefore stayed unusable until
+   *  Steam was restarted (which is simply what rebuilds this
+   *  singleton). Reported from a Battle.net sign-in that ended
+   *  on a rejected login. */
   async start(store: StoreId): Promise<AuthResult> {
     const existing = this.inflight.get(store);
-    if (existing) return existing;
+    if (existing) {
+      if (Date.now() - existing.startedAt < DEDUPE_WINDOW_MS) {
+        return existing.promise;
+      }
+      console.log(
+        `[AuthDispatcher:${store}] superseding a previous sign-in attempt`,
+      );
+      existing.supersede("superseded by a new sign-in attempt");
+    }
 
     EventBusClient.bumpToFast();
-    const promise = this.runFlow(store);
-    this.inflight.set(store, promise);
-    promise.finally(() => {
-      this.inflight.delete(store);
-    });
+    const { promise, supersede } = this.runFlow(store);
+    const entry: InflightAuth = { promise, startedAt: Date.now(), supersede };
+    this.inflight.set(store, entry);
+    promise
+      .finally(() => {
+        // Only clear our own entry: ``supersede`` settles the old promise,
+        // whose ``finally`` runs as a microtask *after* the replacement has
+        // been stored, and an unguarded delete would drop the live one.
+        if (this.inflight.get(store) === entry) this.inflight.delete(store);
+      })
+      // The derived promise is otherwise unhandled, so a rejected flow
+      // (timeout, launch failure) surfaced as an unhandled rejection.
+      .catch(() => {});
     return promise;
   }
 
@@ -90,8 +147,14 @@ class AuthDispatcherImpl {
    *  - launch the auth shortcut so the user sees the flow
    *  - resolve / reject + dispose every listener.
    */
-  private async runFlow(store: StoreId): Promise<AuthResult> {
-    return new Promise<AuthResult>((resolve, reject) => {
+  private runFlow(store: StoreId): {
+    promise: Promise<AuthResult>;
+    supersede: (reason: string) => void;
+  } {
+    // Assigned synchronously by the Promise executor below, which runs
+    // before this function returns.
+    let supersede: (reason: string) => void = () => {};
+    const promise = new Promise<AuthResult>((resolve, reject) => {
       /** Cleanup. */
       const cleanup: Array<() => void> = [];
 
@@ -102,6 +165,11 @@ class AuthDispatcherImpl {
       }, AUTH_TIMEOUT_MS);
 
       cleanup.push(() => clearTimeout(timer));
+
+      supersede = (reason: string): void => {
+        for (const fn of cleanup) fn();
+        resolve({ success: false, store, error: reason });
+      };
 
       /** On resolved. */
       const onResolved = (result: AuthResult): void => {
@@ -144,24 +212,53 @@ class AuthDispatcherImpl {
         }),
       );
 
+      /** Settle once the launched auth app has exited.
+       *
+       *  The backend emitting a terminal event is necessary but not
+       *  sufficient: any store whose emitter is missing, or whose event
+       *  is lost, would otherwise hold this promise — and with it the
+       *  button — for the full timeout. The app's own exit is a signal
+       *  we always get, so it is the backstop. */
+      const onAuthAppStopped = (): void => {
+        console.log(
+          `[AuthDispatcher:${store}] auth app stopped; waiting ` +
+            `${AUTH_APP_STOPPED_GRACE_MS}ms for a verdict`,
+        );
+        const grace = setTimeout(() => {
+          onResolved({
+            success: false,
+            store,
+            error: "sign-in was closed before it completed",
+          });
+        }, AUTH_APP_STOPPED_GRACE_MS);
+        cleanup.push(() => clearTimeout(grace));
+      };
+
       // Fire the kick + shortcut launch only after the
       // listeners are installed — otherwise a fast backend
       // flow could emit its terminal event before we
       // subscribe.
       void this.kickAndLaunch(store)
-        .then((early) => {
+        .then(({ early, appId }) => {
           // Fast-path : the backend's ``store_auth`` returned
           // ``success: true`` right away (already-authed user).
           // Don't wait for an EventBus echo — the event may
           // race the RPC response and arrive before our poll
           // tick, leaving the Promise hung. Resolve directly.
-          if (early) onResolved(early);
+          if (early) {
+            onResolved(early);
+            return;
+          }
+          if (appId !== undefined) {
+            cleanup.push(watchAppStopped(appId, onAuthAppStopped));
+          }
         })
         .catch((e) => {
           for (const fn of cleanup) fn();
           reject(e);
         });
     });
+    return { promise, supersede };
   }
 
   /** Two-stage kick : backend prep then frontend shortcut
@@ -184,7 +281,7 @@ class AuthDispatcherImpl {
    *  Throws if either stage fails outright (so ``runFlow``
    *  rejects the Promise).
    */
-  private async kickAndLaunch(store: StoreId): Promise<AuthResult | null> {
+  private async kickAndLaunch(store: StoreId): Promise<KickOutcome> {
     console.log(`[AuthDispatcher:${store}] backend prep via store_auth`);
     const raw = await call<[StoreId, string], unknown>(
       rpcRoutes.storeAuth,
@@ -205,7 +302,7 @@ class AuthDispatcherImpl {
         `[AuthDispatcher:${store}] backend reports already-authed, ` +
           `resolving without shortcut launch`,
       );
-      return { success: true, store };
+      return { early: { success: true, store } };
     }
     // Backend reported a structured failure (e.g. ``edge_not_installed``)
     // before any shortcut was needed. Surface it as the resolved
@@ -218,10 +315,12 @@ class AuthDispatcherImpl {
           `${startResult.error} — skipping shortcut launch`,
       );
       return {
-        success: false,
-        store,
-        error: startResult.error,
-      } as AuthResult;
+        early: {
+          success: false,
+          store,
+          error: startResult.error,
+        } as AuthResult,
+      };
     }
     console.log(`[AuthDispatcher:${store}] launching shortcut`);
     const launchResult = await this.launchForStore(store);
@@ -234,15 +333,14 @@ class AuthDispatcherImpl {
         launchResult.error ?? `${store} auth shortcut failed to launch`,
       );
     }
-    // Slow path : shortcut launched, wait for the backend's
-    // terminal event to land on the EventBus.
-    return null;
+    // Slow path : shortcut launched, wait for the backend's terminal event
+    // to land on the EventBus — or, failing that, for the launched app to
+    // stop, which is why the appid comes back with the result.
+    return { early: null, appId: launchResult.app_id };
   }
 
   /** Dispatch to the per-store shortcut launcher. */
-  private async launchForStore(
-    store: StoreId,
-  ): Promise<{ success: boolean; error?: string }> {
+  private async launchForStore(store: StoreId): Promise<ShortcutLaunchResult> {
     switch (store) {
       case "epic":
         return launchEpicAuthViaShortcut();
@@ -254,6 +352,8 @@ class AuthDispatcherImpl {
         return launchMicrosoftAuthViaShortcut();
       case "ubisoft":
         return launchUbisoftAuthViaShortcut();
+      case "battlenet":
+        return launchBattlenetAuthViaShortcut();
       default:
         return { success: false, error: `no launcher wired for ${store}` };
     }

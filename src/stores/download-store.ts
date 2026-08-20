@@ -21,11 +21,40 @@ import { call, toaster } from "@decky/api";
 import i18n from "i18next";
 import { rpcRoutes } from "../api/rpc-routes";
 import { unwrapRpcEnvelope } from "../api/useRPC";
+import type { EventName } from "../types/events";
 import { EventBusClient } from "../api/event-bus-client";
 import { invalidateGameInfo } from "../hooks/useGameInfo";
 import { bumpGameStateVersion } from "../lib/game-state-version";
+import { invalidateGameSize } from "../lib/game-size-cache";
 import { friendlyDownloadError } from "../lib/download-errors";
 import { launchUbisoftInstallViaShortcut } from "../utils/ubisoftShortcutLaunch";
+import { launchBattlenetInstallViaShortcut } from "../utils/battlenetShortcutLaunch";
+
+/**
+ * Wrapper stores whose install flow needs the frontend to open their vendor
+ * client. `[event, launcher, label]` — adding EA App is one more row.
+ */
+const WRAPPER_INSTALL_LAUNCHERS: ReadonlyArray<
+  readonly [
+    EventName,
+    (storeGameId: string) => Promise<{ success: boolean; error?: string }>,
+    string,
+  ]
+> = [
+  [
+    "ubisoft_install_launch_requested",
+    (id) =>
+      launchUbisoftInstallViaShortcut(id, {
+        UNIFIDECK_UBISOFT_ACTION: "install",
+      }),
+    "Ubisoft UPC",
+  ],
+  [
+    "battlenet_install_launch_requested",
+    launchBattlenetInstallViaShortcut,
+    "Battle.net",
+  ],
+];
 import type { DownloadItem, DownloadQueueInfo } from "../types/downloads";
 
 // ── Helpers (moved from DownloadContext) ─────────────────
@@ -124,7 +153,7 @@ class DownloadStoreImpl {
   private _snapshot: DownloadSnapshot = { queue: null, loading: true };
   private _listeners = new Set<Listener>();
   private _unsubs: (() => void)[] = [];
-  private _ubisoftLaunched = new Set<string>();
+  private _wrapperLaunched = new Set<string>();
 
   /** Start subscriptions and initial fetch. */
   start(): void {
@@ -168,9 +197,14 @@ class DownloadStoreImpl {
       if (appId != null) {
         invalidateGameInfo(appId);
         bumpGameStateVersion(appId);
+        // An install/update that just ended moved the game's bytes on disk.
+        // The install-state flip covers a first install; this also covers an
+        // update, where `installed` never changes and nothing else would tell
+        // the size caches to forget.
+        invalidateGameSize(appId);
       }
       const storeGameId = extractStoreGameId(payload);
-      if (storeGameId) this._ubisoftLaunched.delete(storeGameId);
+      if (storeGameId) this._wrapperLaunched.delete(storeGameId);
       void this._fetchQueue();
     };
 
@@ -204,30 +238,33 @@ class DownloadStoreImpl {
       EventBusClient.subscribe("download_cancelled", onTerminal),
     );
 
-    // Ubisoft install — open UPC via Steam's RunGame
-    this._unsubs.push(
-      EventBusClient.subscribe(
-        "ubisoft_install_launch_requested",
-        (payload) => {
+    // Wrapper-store installs — open the vendor client via Steam's RunGame.
+    // The backend cannot spawn it: in Gaming Mode a bare subprocess has no
+    // gamescope session and the window never appears.
+    //
+    // One subscription per store, built from a table so adding EA App is a
+    // row rather than another copy of this block. The dedup set is shared
+    // because the key is the full `store:game_id`.
+    for (const [event, launch, label] of WRAPPER_INSTALL_LAUNCHERS) {
+      this._unsubs.push(
+        EventBusClient.subscribe(event, (payload) => {
           const storeGameId = (payload as { store_game_id?: unknown })
             .store_game_id;
           if (typeof storeGameId !== "string" || !storeGameId) return;
-          if (this._ubisoftLaunched.has(storeGameId)) return;
-          this._ubisoftLaunched.add(storeGameId);
-          void launchUbisoftInstallViaShortcut(storeGameId, {
-            UNIFIDECK_UBISOFT_ACTION: "install",
-          }).then((result) => {
+          if (this._wrapperLaunched.has(storeGameId)) return;
+          this._wrapperLaunched.add(storeGameId);
+          void launch(storeGameId).then((result) => {
             if (!result.success) {
-              this._ubisoftLaunched.delete(storeGameId);
+              this._wrapperLaunched.delete(storeGameId);
               console.error(
-                "[DownloadStore] Ubisoft UPC RunGame failed:",
+                `[DownloadStore] ${label} RunGame failed:`,
                 result.error,
               );
             }
           });
-        },
-      ),
-    );
+        }),
+      );
+    }
   }
 
   /** Stop all subscriptions. */

@@ -9,10 +9,13 @@ that launches UPC inside a dedicated auth prefix; once the user signs
 in, UPC writes credentials to the prefix and we propagate them to
 every game prefix afterwards (via ``UbisoftSession``, OP-60a).
 
-``UbisoftAuth`` is the orchestration class that wires together the four
+``UbisoftAuth`` is the orchestration class that wires together the
 sub-modules: ``context`` (UI payload), ``shortcut`` (Steam shortcut
-creation), ``session_monitor`` (signal on credential file appearance),
-``direct_signin`` (fallback for already-signed-in installs).
+creation), ``direct_signin`` (fallback for already-signed-in installs).
+Watching the auth prefix for the credentials UPC writes is no longer one
+of them — that is ``stores/shared/wrapper_auth_monitor``, shared with
+Battle.net, which also reports the *failure* path this store used to
+leave silent.
 
 ``UbisoftAuthState`` and ``UbisoftAuthServices`` are frozen dataclasses
 holding the dependencies. State is "owned data" (config, paths,
@@ -33,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from unifideck.core.types import AuthResult, Events, Result
 from unifideck.security import audit_auth_flow
+from unifideck.stores.shared.wrapper_auth_monitor import WrapperAuthMonitor
 from unifideck.stores.ubisoft.binaries import UbisoftBinaryResolver
 from unifideck.stores.ubisoft.config import UbisoftConfig
 from unifideck.stores.ubisoft.paths import UbisoftPrefixPaths
@@ -40,7 +44,6 @@ from unifideck.stores.ubisoft.session import UbisoftSession
 
 from .context import _AuthContext
 from .direct_signin import _DirectSignIn
-from .session_monitor import _AuthSessionMonitor
 from .shortcut import _AuthShortcut
 from .shortcut_ops import _ShortcutRegistryOps
 
@@ -98,10 +101,10 @@ class UbisoftAuth:
         self._shortcut_service = services.shortcut_service
         self._steamgriddb = services.steamgriddb
         self._registry_ops = _ShortcutRegistryOps(config=self._config)
-        self._monitor = _AuthSessionMonitor(
-            config=self._config,
-            session=self._session,
-            queue_auth_assets_ensure=self._queue_auth_assets_ensure,
+        self._monitor = WrapperAuthMonitor(
+            store="ubisoft",
+            is_signed_in=self._capture_auth_session,
+            on_captured=self._on_auth_session_captured,
             bus=self._bus,
         )
         self._direct_signin = _DirectSignIn(
@@ -206,6 +209,9 @@ class UbisoftAuth:
         out), then delete the renamed directory off the event loop
         without making logout wait for it.
         """
+        # A sign-in still being watched is moot once the user signs out, and
+        # the prefix it is watching is about to be renamed out from under it.
+        await self._monitor.stop()
         self._session.clear_session_file()
         auth_dir = self._config.auth_prefix_dir_expanded
         trash = await asyncio.to_thread(self._rename_to_trash, auth_dir)
@@ -265,9 +271,28 @@ class UbisoftAuth:
         _PURGE_TASKS.add(task)
         task.add_done_callback(_PURGE_TASKS.discard)
 
+    async def _capture_auth_session(self) -> bool:
+        """The monitor's sign-in probe: has UPC written credentials yet?
+
+        Capturing *is* the probe for this store — ``UbisoftSession.capture``
+        returns falsy until the credential files exist, and moves them once
+        they do. The auth prefix is resolved per call rather than closed over,
+        so a config change between sign-ins is picked up.
+        """
+        return bool(self._session.capture(self._config.auth_prefix_dir_expanded))
+
+    async def _on_auth_session_captured(self) -> None:
+        """Fan the freshly captured credentials out to every game prefix."""
+        self._session.propagate_all_to_all()
+        self._queue_auth_assets_ensure("post-auth-session-capture")
+
     async def start_auth_session_monitor(self) -> Result:
         """Start auth session monitor."""
         return await self._monitor.start()
+
+    async def stop_auth_session_monitor(self) -> None:
+        """Abandon a pending sign-in watch silently."""
+        await self._monitor.stop()
 
     def check_auth_session_status(self) -> dict[str, Any]:
         """Check auth session status."""

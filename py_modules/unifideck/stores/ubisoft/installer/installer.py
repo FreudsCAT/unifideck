@@ -29,6 +29,11 @@ from pathlib import Path
 from typing import Any
 
 from unifideck.core.types import InstallResult, Result
+from unifideck.stores.shared.prefix_placement import (
+    cleanup_abandoned_prefix,
+    reset_for_fresh_install,
+    resolve_prefix_target,
+)
 from unifideck.stores.ubisoft.binaries import UbisoftBinaryResolver
 from unifideck.stores.ubisoft.config import UbisoftConfig
 from unifideck.stores.ubisoft.id_map import UbisoftIdMap
@@ -181,10 +186,13 @@ class UbisoftInstaller:
             # (no reuse). Play never reaches this path, so it never resets a
             # prefix; and the button is "Installing" during an active install,
             # so this only runs when no install is in flight.
-            new_prefix = (
-                self._prefix_path_for_base(install_path, game_id)
-                if install_path
-                else self._paths.get_prefix_path(game_id)
+            new_prefix = str(
+                resolve_prefix_target(
+                    "ubisoft",
+                    game_id,
+                    install_path,
+                    self._paths.get_prefix_path(game_id),
+                ),
             )
             old_prefix = self._id_map.resolve_prefix_path(game_id)
             await self._reset_prefix_for_fresh_install(old_prefix, new_prefix)
@@ -267,10 +275,11 @@ class UbisoftInstaller:
                 )
         game_name = self._library._detector._get_game_name(game_id)
         try:
-            launch_env = self._build_upc_launch_env(
-                game_id,
-                prefix_path,
-            )
+            # Called for its preconditions, not its value: UPC is opened by
+            # the frontend now, so nothing here spawns it, but a missing
+            # upc.exe or umu-run still has to fail the install with a specific
+            # error code rather than surface later as a silent no-op launch.
+            self._build_upc_launch_env(game_id, prefix_path)
         except UpcLaunchEnvBuildError as e:
             return InstallResult(
                 success=False,
@@ -283,7 +292,6 @@ class UbisoftInstaller:
                 game_id=game_id,
                 game_name=game_name,
                 prefix_path=prefix_path,
-                env=launch_env.env,
                 progress_cb=progress_cb,
                 install_path=install_path,
                 on_ready=on_ready,
@@ -304,27 +312,30 @@ class UbisoftInstaller:
     ) -> None:
         """Delete any pre-existing per-game prefix(es) so Install starts clean.
 
-        Removes both the previously recorded location (an orphan from a prior
-        install to a different disk, or a leftover from a prior uninstall) and
-        the resolved target location. The subsequent ``set_prefix_path`` +
-        ``bootstrap_game_prefix`` then build a fresh, auth-injected prefix with
-        no reuse. Guarded/retrying delete via the uninstall pipeline (protected
-        paths + depth check); best-effort — a failed delete still lets bootstrap
-        proceed (it clones over the top).
+        Policy lives in ``stores/shared/prefix_placement``; the subsequent
+        ``set_prefix_path`` + ``bootstrap_game_prefix`` then build a fresh,
+        auth-injected prefix with no reuse.
         """
-        seen: set[str] = set()
-        for path in (old_prefix, new_prefix):
-            if not path or path in seen:
-                continue
-            seen.add(path)
-            # Safe closure over ``path``: to_thread invokes the lambda during
-            # this await, before the loop advances.
-            is_dir = await asyncio.to_thread(Path(path).is_dir)
-            if is_dir:
-                await self._uninstall_pipeline.delete_tree_with_retries(
-                    path,
-                    "fresh-install prefix reset",
-                )
+        await reset_for_fresh_install(
+            old_prefix,
+            new_prefix,
+            self._prefix_remover("fresh-install prefix reset"),
+            label="UbisoftInstaller",
+        )
+
+    def _prefix_remover(self, reason: str) -> Callable[[Path], Awaitable[bool]]:
+        """Ubisoft's guarded remover: protected paths + depth check + retries.
+
+        Handed to the shared placement helpers so the *policy* is shared
+        while the deletion stays behind this store's own backstop.
+        """
+
+        async def _remove(path: Path) -> bool:
+            return await self._uninstall_pipeline.delete_tree_with_retries(
+                str(path), reason,
+            )
+
+        return _remove
 
     async def _cleanup_abandoned_prefix(
         self,
@@ -335,58 +346,41 @@ class UbisoftInstaller:
 
         Triggered on a cancelled / failed Ubisoft install so abandoned
         prefixes don't accumulate at the user's chosen storage location.
-
-        SAFETY (double-guarded — the user explicitly warned against deleting
-        a prefix that holds a game): keep the prefix ONLY if EITHER the install
-        detector finds a game OR the UPC ``games/`` dir actually contains a
-        game folder. The second guard matters because the snapshot-based
-        install detector can false-negative (it does not always notice a
-        completed install), and we must never delete real game files.
+        Gating (recorded locations only, never one holding a game) is shared
+        in ``stores/shared/prefix_placement``; the guard below is ours.
 
         A bootstrapped-but-no-game prefix (upc.exe present, no game folder) is
-        NOW deleted — resume is intentionally not preserved: each Install
-        rebuilds the prefix fresh, so keeping an abandoned UPC prefix would
-        only orphan disk. Only prefixes placed at a recorded (user-picked)
-        location are removed; the shared internal default is left for reuse.
+        deleted — resume is intentionally not preserved: each Install rebuilds
+        the prefix fresh, so keeping an abandoned UPC prefix would only orphan
+        disk.
         """
-        recorded = self._id_map.resolve_prefix_path(game_id)
-        if not recorded:
-            return
-        game_info = self._library._detector._detect_installed_game(
-            game_id, prefix_path,
-        )
-        if (
-            (game_info and game_info.get("install_path"))
-            or _reg.prefix_has_game_files(prefix_path)
-        ):
-            logger.info(
-                "[UbisoftInstaller] abandoned install for %s but prefix holds "
-                "a game — keeping prefix %s",
-                game_id,
-                prefix_path,
-            )
-            return
-        deleted = await self._uninstall_pipeline.delete_tree_with_retries(
+        deleted = await cleanup_abandoned_prefix(
             prefix_path,
-            "abandoned Ubisoft prefix",
+            recorded=self._id_map.resolve_prefix_path(game_id),
+            holds_game=lambda path: self._prefix_holds_game(game_id, str(path)),
+            remover=self._prefix_remover("abandoned Ubisoft prefix"),
+            label="UbisoftInstaller",
         )
         if deleted:
             self._id_map.clear_prefix_path(game_id)
-            logger.info(
-                "[UbisoftInstaller] removed abandoned prefix for %s at %s",
-                game_id,
-                prefix_path,
-            )
 
-    @staticmethod
-    def _prefix_path_for_base(base: str, space_id: str) -> str:
-        """Per-game Wine-prefix path under a user-picked storage base.
+    def _prefix_holds_game(self, game_id: str, prefix_path: str) -> bool:
+        """Whether this prefix holds a real game — double-guarded.
 
-        Mirrors the internal layout (``prefixes/ubisoft/<space_id>``) so the
-        on-disk shape is consistent wherever the prefix lives, and the dir
-        name stays the ``space_id`` that detection / enumeration key on.
+        The user explicitly warned against deleting a prefix that holds a
+        game, so this answers True if EITHER the install detector finds one
+        OR the UPC ``games/`` dir actually contains a game folder. The second guard
+        matters because the snapshot-based detector can false-negative (it
+        does not always notice a completed install), and we must never delete
+        real game files.
         """
-        return str(Path(base).expanduser() / "prefixes" / "ubisoft" / space_id)
+        game_info = self._library._detector._detect_installed_game(
+            game_id, prefix_path,
+        )
+        return bool(
+            (game_info and game_info.get("install_path"))
+            or _reg.prefix_has_game_files(prefix_path),
+        )
 
     def is_install_session_active(self, game_id: str) -> bool:
         """Check whether install session active."""

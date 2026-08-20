@@ -10,6 +10,7 @@ import {
   SiAmazongames,
   SiEpicgames,
   SiGogdotcom,
+  SiBattledotnet,
   SiUbisoft,
 } from "react-icons/si";
 import { FaGamepad, FaSteam, FaXbox } from "react-icons/fa";
@@ -23,6 +24,7 @@ const STORE_ICONS: Record<StoreId, IconType> = {
   amazon: SiAmazongames,
   microsoft: FaXbox,
   ubisoft: SiUbisoft,
+  battlenet: SiBattledotnet,
 };
 
 interface Props {

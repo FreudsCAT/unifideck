@@ -16,6 +16,8 @@
  * its session ends.
  */
 
+import { watchAppStopped } from "./shortcut-types";
+
 const SHORTCUT_POLL_DELAY_MS = 250;
 const SHORTCUT_POLL_TIMEOUT_MS = 5000;
 /** Safety-net delay for removing a temporary shortcut when the "game
@@ -140,7 +142,6 @@ export function scheduleTemporaryShortcutCleanup(
   const steamApps = window.SteamClient?.Apps;
   const cleanup: Array<() => void> = [];
   let removed = false;
-  let sawRunning = false;
 
   const remove = (reason: string): void => {
     if (removed) return;
@@ -157,20 +158,9 @@ export function scheduleTemporaryShortcutCleanup(
     }
   };
 
-  const sub =
-    window.SteamClient?.GameSessions?.RegisterForAppLifetimeNotifications?.(
-      (n) => {
-        if (n.unAppID !== appId) return;
-        if (n.bRunning) {
-          sawRunning = true;
-        } else if (sawRunning) {
-          // The launcher (and with it the window) has exited; the session
-          // is gone, so removing the entry now is safe.
-          remove("game stopped");
-        }
-      },
-    );
-  if (sub) cleanup.push(() => sub.unregister());
+  // The launcher (and with it the window) has exited; the session is gone,
+  // so removing the entry now is safe.
+  cleanup.push(watchAppStopped(appId, () => remove("game stopped")));
 
   // Safety net: clean up even if the "stopped" notification never lands,
   // but only well past the launcher's 600s auth ceiling so it can't fire

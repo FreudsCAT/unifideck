@@ -63,6 +63,7 @@ export const Events = {
   // by the download worker once the per-game prefix is bootstrapped.
   // Payload: { store_game_id: "ubisoft:<game_id>" }.
   UBISOFT_INSTALL_LAUNCH_REQUESTED: "ubisoft_install_launch_requested",
+  BATTLENET_INSTALL_LAUNCH_REQUESTED: "battlenet_install_launch_requested",
   // Game state
   GAME_INSTALLED: "game_installed",
   GAME_UNINSTALLED: "game_uninstalled",
@@ -100,6 +101,8 @@ export interface ToastActionPayload {
   /** Optional bold title rendered above `i18n_key`'s message. */
   i18n_title_key?: string;
   i18n_params?: Record<string, unknown>;
+  /** Resolved game title. Merged into the i18n params as `gameTitle`. */
+  game_title?: string;
   duration_ms?: number;
   action?: { verb: string; args: string[] };
 }

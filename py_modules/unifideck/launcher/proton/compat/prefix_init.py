@@ -43,14 +43,20 @@ from unifideck.launcher.proton.compat.ge_fallback import fallback_to_ge_proton
 from unifideck.launcher.proton.compat.save_migration import (
     restore_or_migrate_saves,
 )
+from unifideck.launcher.proton.infrastructure.container_escape import (
+    escape_argv,
+)
+from unifideck.launcher.proton.infrastructure.game_log import open_game_log
 from unifideck.launcher.proton.infrastructure.prefix_layout import (
     normalize_prefix_root,
     resolve_registry_prefix,
 )
 from unifideck.launcher.proton.infrastructure.umu_runtime import (
     ensure_umu_runtime_ready,
-    open_game_log,
     repair_incomplete_umu_runtime,
+)
+from unifideck.launcher.wrapper_stores import (
+    prefix_owns_game_install,
 )
 
 if TYPE_CHECKING:
@@ -75,10 +81,16 @@ _UMU_STEP_TIMEOUT_SECONDS = 120.0
 def _prefix_owns_game_install(plan: ProtonLaunchPlan) -> bool:
     """True when the game's own files live INSIDE the prefix.
 
-    Ubisoft is the one store where they do: UPC runs in-prefix and installs
-    titles to ``drive_c/Program Files (x86)/Ubisoft/Ubisoft Game
-    Launcher/games/``. Every other store downloads outside the prefix, so a
-    reset there costs a rebuild; here it costs the user their game.
+    True for the launcher-wrapper stores, where the vendor client runs
+    in-prefix and installs there: Ubisoft to ``drive_c/Program Files
+    (x86)/Ubisoft/Ubisoft Game Launcher/games/``, Battle.net to
+    ``drive_c/Program Files (x86)/<Game>`` (confirmed on-device by a real
+    Hearthstone install). Every other store downloads outside the prefix,
+    so a reset there costs a rebuild; here it costs the user their game.
+
+    The membership test lives in :mod:`launcher.proton.wrapper_stores` so
+    this can never disagree with ``prefix_setup`` — that disagreement is
+    precisely what caused the incident below.
 
     Confirmed live 2026-08-01: launching Rayman Origins resolved
     ``proton_experimental``, ``prefix_setup`` borrowed managed GE-Proton for
@@ -86,18 +98,50 @@ def _prefix_owns_game_install(plan: ProtonLaunchPlan) -> bool:
     the prefix — deleting the install. The borrow was for a step
     ``apply_prefix_compat`` skips for Ubisoft anyway.
     """
-    return getattr(plan.context, "store", "") == "ubisoft"
+    return prefix_owns_game_install(getattr(plan.context, "store", ""))
 
 
 def _proton_family(tool_id: str) -> str:
-    """Coarse Proton family — a change here means the prefix must reset."""
+    """Coarse Proton family — a change here means the prefix must reset.
+
+    The same family is spelled two different ways depending on where the id
+    came from: the on-disk directory name (``GE-Proton11-3``) or Steam's
+    compatibility-tool DISPLAY name, which the user picks in Properties >
+    Compatibility (``Proton-GE Latest``). Matching raw substrings got both
+    directions wrong, and each mistake is expensive — a false family change
+    WIPES the prefix (see :func:`_should_reset_for_proton`).
+
+    From a field bundle (2026-08-12/13) where one GOG prefix was reset six
+    times in two days::
+
+        Proton-GE Latest   -> GE-Proton11-3        family change -> RESET
+        GE-Proton11-3      -> Proton-GE Latest     family change -> RESET
+        Proton-CachyOS Latest -> Proton-GE Latest  "minor"       -> kept
+
+    The first two are the SAME family (``Proton-GE Latest`` is a pointer to a
+    GE-Proton build) and must never reset; the third is a genuine family
+    change that was missed, because ``proton-ge latest`` and
+    ``proton-cachyos latest`` both failed every check and collapsed to
+    ``other``.
+
+    So compare on an alphanumeric-only form, which makes ``GE-Proton11-3``
+    and ``Proton-GE Latest`` both match ``geproton``/``protonge``. Order
+    matters: ``umuproton904e`` also contains ``proton9``, so the named
+    families are checked before the numeric ones.
+    """
     t = tool_id.lower()
-    if "experimental" in t:
+    normalized = "".join(ch for ch in t if ch.isalnum())
+    if "experimental" in normalized:
         return "experimental"
-    if "ge-proton" in t:
-        return "ge-proton"
-    if "umu-proton" in t:
+    # CachyOS ships as "Proton-CachyOS Latest" / "cachyos-11.0-...-slr";
+    # before this it fell through to "other" and silently shared a family
+    # with every other display-name tool.
+    if "cachyos" in normalized:
+        return "cachyos"
+    if "umuproton" in normalized or "protonumu" in normalized:
         return "umu-proton"
+    if "geproton" in normalized or "protonge" in normalized:
+        return "ge-proton"
     if "proton9" in t or "proton_9" in t or "proton 9" in t or "9.0" in t:
         return "proton9"
     if "proton10" in t or "proton_10" in t or "proton 10" in t or "10.0" in t:
@@ -429,7 +473,14 @@ async def _run_umu(
     goes to the same per-launch ``game.log`` the real launch uses, so a
     support bundle carries it.
     """
-    argv = [str(plan.python_bin), str(plan.umu_wrapper), *umu_args]
+    # Force-Compat puts US inside Steam's pressure-vessel, and nesting a
+    # second container makes umu die with "bwrap: execvp true: No such file
+    # or directory" — every createprefix/wineboot exit 1, so the prefix is
+    # never built and the launch cannot recover (field bundle 2026-08-12).
+    # No-op when unwrapped. See infrastructure.container_escape.
+    argv = escape_argv(
+        [str(plan.python_bin), str(plan.umu_wrapper), *umu_args], env, None,
+    )
     game_log = open_game_log()
     out = game_log if game_log is not None else asyncio.subprocess.DEVNULL
     try:

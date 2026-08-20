@@ -118,7 +118,7 @@ async def test_collects_size_and_location_keyed_by_store_game_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stat_dev_map(monkeypatch, {"/home/deck/Games/Bastion": HOME_DEV})
-    monkeypatch.setattr(mod, "resolve_installed_dir", _resolver())
+    monkeypatch.setattr(mod, "resolve_size_root", _resolver())
     monkeypatch.setattr(mod, "dir_size_bytes", lambda p: 2048)
 
     result = await mod.collect_installed_disk_info(
@@ -133,7 +133,7 @@ async def test_not_installed_games_are_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stat_dev_map(monkeypatch, {"/home/deck/Games/Bastion": HOME_DEV})
-    monkeypatch.setattr(mod, "resolve_installed_dir", _resolver())
+    monkeypatch.setattr(mod, "resolve_size_root", _resolver())
     monkeypatch.setattr(mod, "dir_size_bytes", lambda p: 2048)
 
     result = await mod.collect_installed_disk_info(
@@ -152,7 +152,7 @@ async def test_games_missing_identity_are_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No store or no store_game_id → nothing the frontend could key on."""
-    monkeypatch.setattr(mod, "resolve_installed_dir", _resolver())
+    monkeypatch.setattr(mod, "resolve_size_root", _resolver())
     monkeypatch.setattr(mod, "dir_size_bytes", lambda p: 2048)
 
     result = await mod.collect_installed_disk_info(
@@ -169,10 +169,12 @@ async def test_gone_install_dir_is_omitted(
     """Neither a size nor a location → no entry, so the row shows no meta."""
     _stat_dev_map(monkeypatch, {})
 
-    async def _unresolvable(adapter: Any, path: Any, game_id: Any) -> str | None:
+    async def _unresolvable(
+        adapter: Any, path: Any, game_id: Any, store: Any = None,
+    ) -> str | None:
         return None
 
-    monkeypatch.setattr(mod, "resolve_installed_dir", _unresolvable)
+    monkeypatch.setattr(mod, "resolve_size_root", _unresolvable)
 
     result = await mod.collect_installed_disk_info([_game()], registry=None)
 
@@ -184,7 +186,7 @@ async def test_walk_failure_omits_the_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stat_dev_map(monkeypatch, {"/home/deck/Games/Bastion": HOME_DEV})
-    monkeypatch.setattr(mod, "resolve_installed_dir", _resolver())
+    monkeypatch.setattr(mod, "resolve_size_root", _resolver())
 
     def _boom(path: str) -> int:
         raise OSError("permission denied")
@@ -210,10 +212,12 @@ async def test_location_describes_the_directory_that_was_sized(
     real_dir = "/run/media/deck/SD/Games/Bastion"
     _stat_dev_map(monkeypatch, {real_dir: OTHER_DEV, "/stale/path": HOME_DEV})
 
-    async def _resolve_elsewhere(adapter: Any, path: Any, game_id: Any) -> str:
+    async def _resolve_elsewhere(
+        adapter: Any, path: Any, game_id: Any, store: Any = None,
+    ) -> str:
         return real_dir
 
-    monkeypatch.setattr(mod, "resolve_installed_dir", _resolve_elsewhere)
+    monkeypatch.setattr(mod, "resolve_size_root", _resolve_elsewhere)
     monkeypatch.setattr(mod, "dir_size_bytes", lambda p: 4096)
 
     result = await mod.collect_installed_disk_info(
@@ -229,7 +233,7 @@ async def test_second_call_is_served_from_the_memo(
 ) -> None:
     """The walk is the expensive part — a repeat panel open must not pay it."""
     _stat_dev_map(monkeypatch, {"/home/deck/Games/Bastion": HOME_DEV})
-    monkeypatch.setattr(mod, "resolve_installed_dir", _resolver())
+    monkeypatch.setattr(mod, "resolve_size_root", _resolver())
     walks: list[str] = []
 
     def _counting(path: str) -> int:
@@ -250,7 +254,7 @@ async def test_expired_memo_entry_is_recomputed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stat_dev_map(monkeypatch, {"/home/deck/Games/Bastion": HOME_DEV})
-    monkeypatch.setattr(mod, "resolve_installed_dir", _resolver())
+    monkeypatch.setattr(mod, "resolve_size_root", _resolver())
     sizes = iter([1024, 8192])
     monkeypatch.setattr(mod, "dir_size_bytes", lambda p: next(sizes))
     monkeypatch.setattr(mod, "MEMO_TTL_S", -1.0)
@@ -268,7 +272,7 @@ async def test_registry_failure_still_yields_an_entry(
 ) -> None:
     """A broken store adapter must not cost the cached-path size lookup."""
     _stat_dev_map(monkeypatch, {"/home/deck/Games/Bastion": HOME_DEV})
-    monkeypatch.setattr(mod, "resolve_installed_dir", _resolver())
+    monkeypatch.setattr(mod, "resolve_size_root", _resolver())
     monkeypatch.setattr(mod, "dir_size_bytes", lambda p: 512)
 
     class _Broken:
@@ -287,9 +291,11 @@ async def test_empty_input_short_circuits() -> None:
 
 
 def _resolver() -> Any:
-    """Stub ``resolve_installed_dir`` that echoes the cached path back."""
+    """Stub ``resolve_size_root`` that echoes the cached path back."""
 
-    async def _resolve(adapter: Any, path: Any, game_id: Any) -> str | None:
+    async def _resolve(
+        adapter: Any, path: Any, game_id: Any, store: Any = None,
+    ) -> str | None:
         return path or None
 
     return _resolve

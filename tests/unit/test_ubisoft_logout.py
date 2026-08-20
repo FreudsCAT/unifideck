@@ -11,6 +11,7 @@ import asyncio
 
 import pytest
 
+from unifideck.stores.shared.wrapper_auth_monitor import WrapperAuthMonitor
 from unifideck.stores.ubisoft.auth import facade as facade_mod
 from unifideck.stores.ubisoft.auth.facade import UbisoftAuth
 
@@ -41,6 +42,13 @@ def _make_auth(auth_dir: str) -> UbisoftAuth:
     auth._session = _Session()
     auth._bus = _Bus()
     auth._config = _Cfg(auth_dir)
+    # Logout abandons any sign-in still being watched. Never started here, so
+    # ``stop`` is a no-op — it is present because the collaborator is real.
+    auth._monitor = WrapperAuthMonitor(
+        store="ubisoft",
+        is_signed_in=auth._capture_auth_session,
+        bus=auth._bus,
+    )
     return auth
 
 

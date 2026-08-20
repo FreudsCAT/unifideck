@@ -46,6 +46,7 @@ DEFAULT_TOOLS: dict[str, str] = {
     "gog": "",
     "amazon": "",
     "ubisoft": "",
+    "battlenet": "",
     "microsoft": "",  # xCloud uses the browser — no compat tool
 }
 

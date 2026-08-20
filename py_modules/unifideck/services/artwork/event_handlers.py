@@ -109,6 +109,7 @@ _AUTH_TITLE_FOR_LOOKUP: dict[str, str] = {
     "gog": "GOG Galaxy",
     "microsoft": "Xbox",
     "ubisoft": "Ubisoft Connect",
+    "battlenet": "Battle.net",
 }
 
 

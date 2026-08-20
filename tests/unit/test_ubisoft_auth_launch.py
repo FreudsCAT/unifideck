@@ -77,40 +77,74 @@ async def test_auth_launch_missing_upc_raises(tmp_path, _quiet_toast):
 
 @pytest.mark.asyncio
 async def test_handle_auth_path_routes_ubisoft_to_proton(monkeypatch):
+    """Ubisoft auth must reach its Proton handler, not the Edge OAuth flow.
+
+    Routing is now shared across wrapper stores, so this asserts the
+    resolved handler rather than a Ubisoft-specific method.
+    """
     from unittest.mock import AsyncMock
 
     from unifideck.services.launcher import service as svc_mod
 
     svc = svc_mod.LauncherService.__new__(svc_mod.LauncherService)
-    svc._launch_ubisoft_auth = AsyncMock(return_value="UBI")
-    svc._launch_ubisoft_install = AsyncMock(return_value="INSTALL")
+    svc._launch_wrapper_client = AsyncMock(return_value="UBI")
     svc._edge_browser = object()
 
     out = await svc._handle_auth_path(
         types.SimpleNamespace(auth_store="ubisoft", action="auth"),
     )
     assert out == "UBI"
-    svc._launch_ubisoft_auth.assert_awaited_once()
-    svc._launch_ubisoft_install.assert_not_awaited()
+    svc._launch_wrapper_client.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_handle_auth_path_routes_ubisoft_install_to_proton(monkeypatch):
+async def test_wrapper_handler_selection_is_per_store_and_action():
+    """The shared router must pick the right handler for each combination."""
+    from unifideck.launcher.proton.handlers.battlenet import (
+        battlenet_auth_launch,
+        battlenet_install_launch,
+    )
+    from unifideck.launcher.proton.handlers.ubisoft import (
+        ubisoft_auth_launch,
+        ubisoft_install_launch,
+    )
+    from unifideck.services.launcher import service as svc_mod
+
+    pick = svc_mod.LauncherService._wrapper_handler
+    assert pick("ubisoft", "auth") is ubisoft_auth_launch
+    assert pick("ubisoft", "install") is ubisoft_install_launch
+    assert pick("battlenet", "auth") is battlenet_auth_launch
+    assert pick("battlenet", "install") is battlenet_install_launch
+    # Non-wrapper stores have no handler; they go through the Edge flow.
+    assert pick("epic", "auth") is None
+    assert pick(None, "auth") is None
+
+
+@pytest.mark.asyncio
+async def test_non_wrapper_stores_still_use_the_edge_auth_flow(monkeypatch):
+    """Regression guard: generalising the router must not swallow OAuth."""
     from unittest.mock import AsyncMock
 
     from unifideck.services.launcher import service as svc_mod
 
     svc = svc_mod.LauncherService.__new__(svc_mod.LauncherService)
-    svc._launch_ubisoft_auth = AsyncMock(return_value="UBI")
-    svc._launch_ubisoft_install = AsyncMock(return_value="INSTALL")
+    svc._launch_wrapper_client = AsyncMock(return_value="WRAPPER")
     svc._edge_browser = object()
 
-    out = await svc._handle_auth_path(
-        types.SimpleNamespace(auth_store="ubisoft", action="install"),
+    called = {}
+
+    async def fake_handle_store_auth(ctx, edge):
+        called["ctx"] = ctx
+        return "EDGE"
+
+    monkeypatch.setattr(
+        "unifideck.launcher.flows.auth.handle_store_auth", fake_handle_store_auth,
     )
-    assert out == "INSTALL"
-    svc._launch_ubisoft_install.assert_awaited_once()
-    svc._launch_ubisoft_auth.assert_not_awaited()
+    out = await svc._handle_auth_path(
+        types.SimpleNamespace(auth_store="epic", action="auth"),
+    )
+    assert out == "EDGE"
+    svc._launch_wrapper_client.assert_not_awaited()
 
 
 @pytest.mark.asyncio

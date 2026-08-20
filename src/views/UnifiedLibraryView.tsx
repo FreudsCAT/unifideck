@@ -183,6 +183,7 @@ const UnifiedLibraryViewInner: FC<UnifiedLibraryViewProps> = ({
               <option value="gog">{t("deckTabs.gog")}</option>
               <option value="amazon">{t("deckTabs.amazon")}</option>
               <option value="ubisoft">{t("deckTabs.ubisoft")}</option>
+              <option value="battlenet">{t("deckTabs.battlenet")}</option>
               <option value="microsoft">{t("deckTabs.microsoft")}</option>
             </select>
           </div>

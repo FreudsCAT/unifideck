@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/src893/unifideck/config.schema.json",
   "title": "Unifideck Configuration Schema",
-  "description": "JSON Schema for defaults/config.json and user overrides. Strict mode (additionalProperties: false) everywhere to catch typos in key names. Covers all 24 top-level sections (paths, cache_ttl, sync, dedup, download, cli_timeouts, stores, metadata, artwork, cdp, accounts, cloud, logs, circuit_breaker, disk_space, compat, auth, discovery, probes, proton, binary_resolver, i18n, security — the 23 content sections plus _comment). To add a new config key, add it both to the backend code AND to this schema — the validator will reject unknown keys at boot.",
+  "description": "JSON Schema for defaults/config.json and user overrides. Strict mode (additionalProperties: false) everywhere to catch typos in key names. Covers all 27 top-level sections (paths, cache_ttl, sync, dedup, download, cli_timeouts, stores, metadata, artwork, cdp, accounts, cloud, steam, logs, circuit_breaker, disk_space, compat, auth, discovery, ui, probes, proton, binary_resolver, i18n, security \u2014 the 25 content sections plus _comment and _comments). To add a new config key, add it both to the backend code AND to this schema \u2014 the validator will reject unknown keys at boot.",
   "type": "object",
   "additionalProperties": false,
   "required": ["paths", "stores", "dedup"],
@@ -20,24 +20,40 @@
       "additionalProperties": false,
       "required": ["data_dir", "cache_dir"],
       "properties": {
-        "data_dir": { "$ref": "#/$defs/nonEmptyString" },
-        "cache_dir": { "$ref": "#/$defs/nonEmptyString" },
+        "data_dir": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "cache_dir": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "steam_candidates": {
           "type": "array",
-          "items": { "$ref": "#/$defs/nonEmptyString" },
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
           "minItems": 1
         },
-        "games_map": { "$ref": "#/$defs/nonEmptyString" },
-        "sd_card_root": { "$ref": "#/$defs/nonEmptyString" }
+        "games_map": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "sd_card_root": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
       }
     },
     "cache_ttl": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "steam_metadata": { "$ref": "#/$defs/positiveInt" },
-        "compat": { "$ref": "#/$defs/positiveInt" },
-        "metacritic_metadata": { "$ref": "#/$defs/positiveInt" }
+        "steam_metadata": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "compat": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "metacritic_metadata": {
+          "$ref": "#/$defs/positiveInt"
+        }
       }
     },
     "sync": {
@@ -63,7 +79,7 @@
         },
         "tracked_stores": {
           "type": "array",
-          "description": "Stores subject to dedup, in priority order (first wins on install-status ties). Stores absent from this list pass through untouched and don't enter the claimed set — that is how Microsoft xCloud / Game Pass entries stay visible regardless of duplicates elsewhere. Open list: any non-empty string is accepted, so an operator can opt a future store into dedup without patching the schema. Must contain at least one store: an empty list disables dedup entirely, which is never the intent — to opt out of dedup, simply remove every store of interest from your config.",
+          "description": "Stores subject to dedup, in priority order (first wins on install-status ties). Stores absent from this list pass through untouched and don't enter the claimed set \u2014 that is how Microsoft xCloud / Game Pass entries stay visible regardless of duplicates elsewhere. Open list: any non-empty string is accepted, so an operator can opt a future store into dedup without patching the schema. Must contain at least one store: an empty list disables dedup entirely, which is never the intent \u2014 to opt out of dedup, simply remove every store of interest from your config.",
           "items": {
             "type": "string",
             "minLength": 1,
@@ -74,7 +90,7 @@
         },
         "cross_store_enabled": {
           "type": "boolean",
-          "description": "Opt-in: collapse a title owned on several tracked stores down to a single shortcut (\"one shortcut per game\"). Default false — each store's copy is its own shortcut. Groundwork; the precedence order is dedup.tracked_stores."
+          "description": "Opt-in: collapse a title owned on several tracked stores down to a single shortcut (\"one shortcut per game\"). Default false \u2014 each store's copy is its own shortcut. Groundwork; the precedence order is dedup.tracked_stores."
         }
       }
     },
@@ -82,19 +98,33 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "custom_path": { "type": "string" },
-        "default_location": { "type": "string" }
+        "custom_path": {
+          "type": "string"
+        },
+        "default_location": {
+          "type": "string"
+        }
       }
     },
     "cli_timeouts": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "auth_check": { "$ref": "#/$defs/positiveInt" },
-        "version_check": { "$ref": "#/$defs/positiveInt" },
-        "library_fetch": { "$ref": "#/$defs/positiveInt" },
-        "install_poll": { "$ref": "#/$defs/positiveInt" },
-        "uninstall": { "$ref": "#/$defs/positiveInt" }
+        "auth_check": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "version_check": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "library_fetch": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "install_poll": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "uninstall": {
+          "$ref": "#/$defs/positiveInt"
+        }
       }
     },
     "stores": {
@@ -102,11 +132,24 @@
       "additionalProperties": false,
       "required": ["gog", "epic", "amazon", "ubisoft", "microsoft"],
       "properties": {
-        "gog": { "$ref": "#/$defs/gogStore" },
-        "epic": { "$ref": "#/$defs/epicStore" },
-        "amazon": { "$ref": "#/$defs/amazonStore" },
-        "ubisoft": { "$ref": "#/$defs/ubisoftStore" },
-        "microsoft": { "$ref": "#/$defs/microsoftStore" }
+        "gog": {
+          "$ref": "#/$defs/gogStore"
+        },
+        "epic": {
+          "$ref": "#/$defs/epicStore"
+        },
+        "amazon": {
+          "$ref": "#/$defs/amazonStore"
+        },
+        "ubisoft": {
+          "$ref": "#/$defs/ubisoftStore"
+        },
+        "microsoft": {
+          "$ref": "#/$defs/microsoftStore"
+        },
+        "battlenet": {
+          "$ref": "#/$defs/battlenetStore"
+        }
       }
     },
     "metadata": {
@@ -117,29 +160,41 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "composer_url": { "$ref": "#/$defs/httpsUrl" },
-            "fetch_timeout_seconds": { "$ref": "#/$defs/positiveInt" }
+            "composer_url": {
+              "$ref": "#/$defs/httpsUrl"
+            },
+            "fetch_timeout_seconds": {
+              "$ref": "#/$defs/positiveInt"
+            }
           }
         },
         "unifidb": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "cdn_base": { "$ref": "#/$defs/httpsUrl" },
+            "cdn_base": {
+              "$ref": "#/$defs/httpsUrl"
+            },
             "match_threshold": {
               "type": "number",
               "minimum": 0.0,
               "maximum": 1.0
             },
-            "fetch_timeout_seconds": { "$ref": "#/$defs/positiveInt" }
+            "fetch_timeout_seconds": {
+              "$ref": "#/$defs/positiveInt"
+            }
           }
         },
         "steam_store": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "search_url": { "$ref": "#/$defs/httpsUrl" },
-            "search_timeout_seconds": { "$ref": "#/$defs/positiveInt" }
+            "search_url": {
+              "$ref": "#/$defs/httpsUrl"
+            },
+            "search_timeout_seconds": {
+              "$ref": "#/$defs/positiveInt"
+            }
           }
         }
       }
@@ -148,62 +203,111 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "steamgriddb_api_key": { "type": "string" },
-        "steamgriddb_api_base": { "$ref": "#/$defs/httpsUrl" },
-        "download_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
-        "failure_cooldown_seconds": { "$ref": "#/$defs/positiveInt" }
+        "steamgriddb_api_key": {
+          "type": "string"
+        },
+        "steamgriddb_api_base": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "download_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "failure_cooldown_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        }
       }
     },
     "cdp": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "host": { "$ref": "#/$defs/nonEmptyString" },
+        "host": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "port": {
           "type": "integer",
           "minimum": 1,
           "maximum": 65535
         },
-        "eval_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
-        "response_timeout_seconds": { "$ref": "#/$defs/positiveInt" }
+        "eval_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "response_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        }
       }
     },
     "accounts": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "poll_interval_seconds": { "$ref": "#/$defs/positiveInt" }
+        "poll_interval_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        }
       }
     },
     "cloud": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "_comment": { "type": "string" },
-        "enabled": { "type": "boolean" },
-        "root": { "type": "string" },
+        "_comment": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "root": {
+          "type": "string"
+        },
         "auto_pull_on_launch": {
           "type": "boolean",
-          "description": "Automatically download cloud saves when a game launches (sync_down is non-destructive — it snapshots before pulling). Default true."
+          "description": "Automatically download cloud saves when a game launches (sync_down is non-destructive \u2014 it snapshots before pulling). Default true."
         },
         "auto_push_on_stop": {
           "type": "boolean",
-          "description": "Automatically upload local saves when a game stops. Default false — uploads are the destructive direction, so by default they are manual via the cloud-save button. Set true to restore fully-automatic sync."
+          "description": "Automatically upload local saves when a game stops. Default false \u2014 uploads are the destructive direction, so by default they are manual via the cloud-save button. Set true to restore fully-automatic sync."
         },
-        "tolerance_seconds": { "$ref": "#/$defs/positiveInt" },
-        "sync_wait_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
+        "tolerance_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "sync_wait_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
         "failure_behavior": {
           "type": "object",
-          "description": "Per-store policy for cloud sync failures at game launch. Values: 'silent' (log only, no UI) or 'toast' (dismissable warning). Microsoft is intentionally absent — xCloud streaming has no local save state.",
+          "description": "Per-store policy for cloud sync failures at game launch. Values: 'silent' (log only, no UI) or 'toast' (dismissable warning). Microsoft is intentionally absent \u2014 xCloud streaming has no local save state.",
           "additionalProperties": false,
           "properties": {
-            "_comment": { "type": "string" },
-            "default": { "$ref": "#/$defs/cloudFailureBehavior" },
-            "epic": { "$ref": "#/$defs/cloudFailureBehavior" },
-            "gog": { "$ref": "#/$defs/cloudFailureBehavior" },
-            "amazon": { "$ref": "#/$defs/cloudFailureBehavior" },
-            "ubisoft": { "$ref": "#/$defs/cloudFailureBehavior" }
+            "_comment": {
+              "type": "string"
+            },
+            "default": {
+              "$ref": "#/$defs/cloudFailureBehavior"
+            },
+            "epic": {
+              "$ref": "#/$defs/cloudFailureBehavior"
+            },
+            "gog": {
+              "$ref": "#/$defs/cloudFailureBehavior"
+            },
+            "amazon": {
+              "$ref": "#/$defs/cloudFailureBehavior"
+            },
+            "ubisoft": {
+              "$ref": "#/$defs/cloudFailureBehavior"
+            }
           }
+        }
+      }
+    },
+    "steam": {
+      "type": "object",
+      "description": "Steam client facts the frontend confirms and the backend persists. Written by steam/current_user.py::set_authoritative (CONFIG_ACTIVE_USER_KEY = 'steam.active_user'). It MUST be declared here: this schema is strict, so an undeclared key fails validation and puts the plugin into degraded mode on every boot, silently dropping the user's other overrides. Observed in the field on a ROG Ally X, where every session logged \"'steam' was unexpected\".",
+      "additionalProperties": false,
+      "properties": {
+        "active_user": {
+          "type": "string",
+          "description": "Steam account id (the userdata directory name) the frontend confirmed. Read first by the service-path resolver so a stale or ambiguous probe cannot shadow the live user."
         }
       }
     },
@@ -212,9 +316,15 @@
       "description": "Per-launch log archive. Each launcher dispatcher run writes to an archive file keyed by correlation ID, pruned on startup when older than retention_days.",
       "additionalProperties": false,
       "properties": {
-        "_comment": { "type": "string" },
-        "archive_path": { "$ref": "#/$defs/nonEmptyString" },
-        "export_path": { "$ref": "#/$defs/nonEmptyString" },
+        "_comment": {
+          "type": "string"
+        },
+        "archive_path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "export_path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "retention_days": {
           "type": "integer",
           "minimum": 1,
@@ -227,7 +337,9 @@
       "description": "Per-game launch failure protection. When a game fails to launch failures_threshold times within window_seconds, the circuit opens and subsequent Play clicks return immediately with a typed error code. fast_boot_seconds defines what counts as a failed boot (quick-exit crash vs. game-logic crash).",
       "additionalProperties": false,
       "properties": {
-        "_comment": { "type": "string" },
+        "_comment": {
+          "type": "string"
+        },
         "failures_threshold": {
           "type": "integer",
           "minimum": 1,
@@ -247,10 +359,12 @@
     },
     "disk_space": {
       "type": "object",
-      "description": "Pre-launch disk space verification. Before each cloud save sync, the launcher checks free space on the user-data filesystem against max(min_free_bytes, observed × size_multiplier). EWMA smoothing on observed sizes absorbs outliers; stale cache entries (older than size_cache_ttl_seconds) are re-observed.",
+      "description": "Pre-launch disk space verification. Before each cloud save sync, the launcher checks free space on the user-data filesystem against max(min_free_bytes, observed \u00d7 size_multiplier). EWMA smoothing on observed sizes absorbs outliers; stale cache entries (older than size_cache_ttl_seconds) are re-observed.",
       "additionalProperties": false,
       "properties": {
-        "_comment": { "type": "string" },
+        "_comment": {
+          "type": "string"
+        },
         "min_free_bytes": {
           "type": "integer",
           "minimum": 0
@@ -260,16 +374,24 @@
           "minimum": 1.0,
           "maximum": 100.0
         },
-        "size_cache_path": { "$ref": "#/$defs/nonEmptyString" },
-        "size_cache_ttl_seconds": { "$ref": "#/$defs/positiveInt" }
+        "size_cache_path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "size_cache_ttl_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        }
       }
     },
     "compat": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "protondb_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
-        "deck_verified_timeout_seconds": { "$ref": "#/$defs/positiveInt" }
+        "protondb_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "deck_verified_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        }
       }
     },
     "auth": {
@@ -281,22 +403,28 @@
           "minimum": 0.01,
           "maximum": 60.0
         },
-        "browser_oauth_timeout_seconds": { "$ref": "#/$defs/positiveInt" }
+        "browser_oauth_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        }
       }
     },
     "discovery": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "manifest_filename": { "$ref": "#/$defs/nonEmptyString" }
+        "manifest_filename": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
       }
     },
     "ui": {
       "type": "object",
-      "description": "Frontend-facing preferences. `locale` drives the React i18next selection and is persisted to disk when the user changes it via the settings UI. Accepted values are the `auto` sentinel (auto-detect from the system, the shipped default) or a BCP-47 tag following the en-US / fr-FR / de-DE shape; the validator checks the pattern but does not enforce the locale exists in src/i18n/locales/ — missing locales silently fall back to en-US at runtime.",
+      "description": "Frontend-facing preferences. `locale` drives the React i18next selection and is persisted to disk when the user changes it via the settings UI. Accepted values are the `auto` sentinel (auto-detect from the system, the shipped default) or a BCP-47 tag following the en-US / fr-FR / de-DE shape; the validator checks the pattern but does not enforce the locale exists in src/i18n/locales/ \u2014 missing locales silently fall back to en-US at runtime.",
       "additionalProperties": false,
       "properties": {
-        "_comment": { "type": "string" },
+        "_comment": {
+          "type": "string"
+        },
         "locale": {
           "type": "string",
           "pattern": "^(auto|[a-z]{2}(-[A-Z]{2})?)$"
@@ -307,19 +435,25 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "_comment": { "type": "string" },
+        "_comment": {
+          "type": "string"
+        },
         "probe_to_features": {
           "type": "object",
           "additionalProperties": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           }
         },
         "probe_to_handlers": {
           "type": "object",
           "additionalProperties": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           }
         }
       }
@@ -328,26 +462,36 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "settings_path": { "$ref": "#/$defs/nonEmptyString" },
-        "shortcuts_registry_path": { "$ref": "#/$defs/nonEmptyString" }
+        "settings_path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "shortcuts_registry_path": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
       }
     },
     "binary_resolver": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "version_check_timeout_seconds": { "$ref": "#/$defs/positiveInt" }
+        "version_check_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        }
       }
     },
     "i18n": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "_comment": { "type": "string" },
+        "_comment": {
+          "type": "string"
+        },
         "locales": {
           "type": "array",
           "description": "List of locale entries, format intentionally loose to allow build-time extension without schema updates",
-          "items": { "type": "object" }
+          "items": {
+            "type": "object"
+          }
         }
       }
     },
@@ -355,7 +499,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "_comment": { "type": "string" },
+        "_comment": {
+          "type": "string"
+        },
         "audit_log_capacity": {
           "type": "integer",
           "minimum": 10,
@@ -374,10 +520,14 @@
           "type": "integer",
           "minimum": 1
         },
-        "fingerprint_path": { "$ref": "#/$defs/nonEmptyString" },
+        "fingerprint_path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "token_files_to_wipe_on_reset": {
           "type": "array",
-          "items": { "$ref": "#/$defs/nonEmptyString" }
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
         }
       }
     }
@@ -394,7 +544,7 @@
     "cloudFailureBehavior": {
       "type": "string",
       "enum": ["silent", "toast"],
-      "description": "Cloud sync failure UI policy. 'silent' logs only, 'toast' shows a dismissable banner. A blocking 'prompt' mode was rejected — it would require IPC between the out-of-process launcher and the long-lived plugin."
+      "description": "Cloud sync failure UI policy. 'silent' logs only, 'toast' shows a dismissable banner. A blocking 'prompt' mode was rejected \u2014 it would require IPC between the out-of-process launcher and the long-lived plugin."
     },
     "httpsUrl": {
       "type": "string",
@@ -409,22 +559,46 @@
       "additionalProperties": false,
       "required": ["client_id", "auth_url", "token_url", "token_file"],
       "properties": {
-        "client_id": { "$ref": "#/$defs/nonEmptyString" },
-        "client_secret": { "$ref": "#/$defs/nonEmptyString" },
-        "auth_url": { "$ref": "#/$defs/httpsUrl" },
-        "token_url": { "$ref": "#/$defs/httpsUrl" },
-        "redirect_uri": { "$ref": "#/$defs/httpsUrl" },
+        "client_id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "client_secret": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "auth_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "token_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "redirect_uri": {
+          "$ref": "#/$defs/httpsUrl"
+        },
         "allowed_redirect_uris": {
           "type": "array",
-          "items": { "$ref": "#/$defs/httpsUrl" },
+          "items": {
+            "$ref": "#/$defs/httpsUrl"
+          },
           "minItems": 1
         },
-        "base_url": { "$ref": "#/$defs/httpsUrl" },
-        "api_gog_url": { "$ref": "#/$defs/httpsUrl" },
-        "token_file": { "$ref": "#/$defs/nonEmptyString" },
-        "gogdl_config_dir": { "$ref": "#/$defs/nonEmptyString" },
-        "download_dir": { "$ref": "#/$defs/nonEmptyString" },
-        "token_refresh_threshold_seconds": { "$ref": "#/$defs/positiveInt" },
+        "base_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "api_gog_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "token_file": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "gogdl_config_dir": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "download_dir": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "token_refresh_threshold_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
         "supported_languages": {
           "type": "array",
           "items": {
@@ -433,7 +607,9 @@
           },
           "minItems": 1
         },
-        "user_agent": { "$ref": "#/$defs/nonEmptyString" }
+        "user_agent": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
       }
     },
     "epicStore": {
@@ -441,28 +617,50 @@
       "additionalProperties": false,
       "required": ["cli_binary_search_paths", "user_file"],
       "properties": {
-        "_comment": { "type": "string" },
+        "_comment": {
+          "type": "string"
+        },
         "cli_binary_search_paths": {
           "type": "array",
-          "items": { "$ref": "#/$defs/nonEmptyString" },
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
           "minItems": 1
         },
-        "cli_version_flag": { "$ref": "#/$defs/nonEmptyString" },
-        "user_file": { "$ref": "#/$defs/nonEmptyString" },
-        "default_install_root": { "$ref": "#/$defs/nonEmptyString" },
+        "cli_version_flag": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "user_file": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "default_install_root": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "auth_redirect_urls": {
           "type": "array",
-          "items": { "$ref": "#/$defs/httpsUrl" },
+          "items": {
+            "$ref": "#/$defs/httpsUrl"
+          },
           "minItems": 1
         },
         "auth_url_markers": {
           "type": "array",
-          "items": { "$ref": "#/$defs/nonEmptyString" }
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
         },
-        "info_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
-        "list_updates_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
-        "installed_cache_ttl_seconds": { "$ref": "#/$defs/positiveInt" },
-        "size_cache_ttl_seconds": { "$ref": "#/$defs/positiveInt" }
+        "info_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "list_updates_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "installed_cache_ttl_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "size_cache_ttl_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        }
       }
     },
     "amazonStore": {
@@ -470,28 +668,50 @@
       "additionalProperties": false,
       "required": ["cli_binary_search_paths", "user_file"],
       "properties": {
-        "_comment": { "type": "string" },
+        "_comment": {
+          "type": "string"
+        },
         "cli_binary_search_paths": {
           "type": "array",
-          "items": { "$ref": "#/$defs/nonEmptyString" },
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
           "minItems": 1
         },
-        "cli_version_flag": { "$ref": "#/$defs/nonEmptyString" },
-        "nile_config_dir": { "$ref": "#/$defs/nonEmptyString" },
-        "user_file": { "$ref": "#/$defs/nonEmptyString" },
-        "default_install_root": { "$ref": "#/$defs/nonEmptyString" },
+        "cli_version_flag": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "nile_config_dir": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "user_file": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "default_install_root": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "auth_redirect_urls": {
           "type": "array",
-          "items": { "$ref": "#/$defs/httpsUrl" },
+          "items": {
+            "$ref": "#/$defs/httpsUrl"
+          },
           "minItems": 1
         },
         "nile_register_success_markers": {
           "type": "array",
-          "items": { "$ref": "#/$defs/nonEmptyString" }
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
         },
-        "list_updates_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
-        "get_size_timeout_seconds": { "$ref": "#/$defs/positiveInt" },
-        "library_sync_timeout_seconds": { "$ref": "#/$defs/positiveInt" }
+        "list_updates_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "get_size_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "library_sync_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        }
       }
     },
     "ubisoftStore": {
@@ -499,39 +719,91 @@
       "additionalProperties": false,
       "required": ["data_dir", "prefixes_dir"],
       "properties": {
-        "data_dir": { "$ref": "#/$defs/nonEmptyString" },
-        "id_map_file": { "$ref": "#/$defs/nonEmptyString" },
-        "visible_games_file": { "$ref": "#/$defs/nonEmptyString" },
-        "prefixes_dir": { "$ref": "#/$defs/nonEmptyString" },
-        "installer_cache_dir": { "$ref": "#/$defs/nonEmptyString" },
-        "upc_session_file": { "$ref": "#/$defs/nonEmptyString" },
-        "game_id_db_file": { "$ref": "#/$defs/nonEmptyString" },
-        "default_install_base": { "$ref": "#/$defs/nonEmptyString" },
-        "sdcard_install_base": { "$ref": "#/$defs/nonEmptyString" },
-        "template_prefix_name": { "$ref": "#/$defs/nonEmptyString" },
-        "auth_prefix_name": { "$ref": "#/$defs/nonEmptyString" },
-        "auth_shortcut_store_id": { "$ref": "#/$defs/nonEmptyString" },
-        "auth_shortcut_launch_wait_ms": { "$ref": "#/$defs/positiveInt" },
-        "installer_url": { "$ref": "#/$defs/httpsUrl" },
-        "installer_filename": { "$ref": "#/$defs/nonEmptyString" },
-        "bootstrap_marker": { "$ref": "#/$defs/nonEmptyString" },
-        "game_id_db_url": { "$ref": "#/$defs/httpsUrl" },
-        "game_id_db_max_age_seconds": { "$ref": "#/$defs/positiveInt" },
-        "upc_relative_path": { "$ref": "#/$defs/nonEmptyString" },
-        "upc_connect_relative_path": { "$ref": "#/$defs/nonEmptyString" },
-        "configurations_relative_path": { "$ref": "#/$defs/nonEmptyString" },
-        "ownership_relative_path": { "$ref": "#/$defs/nonEmptyString" },
+        "data_dir": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "id_map_file": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "visible_games_file": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "prefixes_dir": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "installer_cache_dir": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "upc_session_file": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "game_id_db_file": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "default_install_base": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "sdcard_install_base": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "template_prefix_name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "auth_prefix_name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "auth_shortcut_store_id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "auth_shortcut_launch_wait_ms": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "installer_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "installer_filename": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "bootstrap_marker": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "game_id_db_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "game_id_db_max_age_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "upc_relative_path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "upc_connect_relative_path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "configurations_relative_path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "ownership_relative_path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "upc_credential_files": {
           "type": "array",
-          "items": { "$ref": "#/$defs/nonEmptyString" }
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
         },
         "wine_system_users": {
           "type": "array",
-          "items": { "$ref": "#/$defs/nonEmptyString" },
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
           "minItems": 1
         },
-        "filter_steam_linked": { "type": "boolean" },
-        "steam_library_cross_ref": { "type": "boolean" }
+        "filter_steam_linked": {
+          "type": "boolean"
+        },
+        "steam_library_cross_ref": {
+          "type": "boolean"
+        }
       }
     },
     "microsoftStore": {
@@ -539,24 +811,92 @@
       "additionalProperties": false,
       "required": ["client_id", "token_file", "auth_url", "token_url"],
       "properties": {
-        "client_id": { "$ref": "#/$defs/nonEmptyString" },
-        "token_file": { "$ref": "#/$defs/nonEmptyString" },
-        "scope": { "$ref": "#/$defs/nonEmptyString" },
-        "auth_url": { "$ref": "#/$defs/httpsUrl" },
-        "token_url": { "$ref": "#/$defs/httpsUrl" },
-        "redirect_uri": { "$ref": "#/$defs/httpsUrl" },
+        "client_id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "token_file": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "scope": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "auth_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "token_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "redirect_uri": {
+          "$ref": "#/$defs/httpsUrl"
+        },
         "allowed_redirect_uris": {
           "type": "array",
-          "items": { "$ref": "#/$defs/httpsUrl" },
+          "items": {
+            "$ref": "#/$defs/httpsUrl"
+          },
           "minItems": 1
         },
-        "xbl_auth_url": { "$ref": "#/$defs/httpsUrl" },
-        "xsts_url": { "$ref": "#/$defs/httpsUrl" },
-        "xcloud_catalog_url": { "$ref": "#/$defs/httpsUrl" },
-        "xcloud_titles_url": { "$ref": "#/$defs/httpsUrl" },
-        "xcloud_launch_url": { "$ref": "#/$defs/httpsUrl" },
-        "gssv_relying_party": { "$ref": "#/$defs/nonEmptyString" },
-        "subscription_check_url": { "$ref": "#/$defs/httpsUrl" }
+        "xbl_auth_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "xsts_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "xcloud_catalog_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "xcloud_titles_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "xcloud_launch_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "gssv_relying_party": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "subscription_check_url": {
+          "$ref": "#/$defs/httpsUrl"
+        }
+      }
+    },
+    "battlenetStore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data_dir", "prefixes_dir"],
+      "properties": {
+        "data_dir": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "prefixes_dir": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "installer_url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "installer_filename": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "client_ready_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "game_appear_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "install_poll_interval_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "install_timeout_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "catalog_max_age_seconds": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "harvest_client_cookies": {
+          "type": "boolean"
+        },
+        "enable_web_enrichment": {
+          "type": "boolean"
+        }
       }
     }
   }

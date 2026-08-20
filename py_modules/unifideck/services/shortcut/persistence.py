@@ -18,6 +18,7 @@ import vdf
 
 from .games_map import GameMapEntry, format_games_map, parse_games_map
 from .orphan_scan import _is_launcher_exe
+from .vdf_read import count_entries_in_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -47,68 +48,130 @@ async def read_vdf(shortcuts_path: str) -> dict[str, Any]:
     return await asyncio.to_thread(_read_sync)
 
 
-async def write_vdf(shortcuts_path: str, data: dict[str, Any]) -> None:
+def _assert_exec_bit(shortcuts_path: str, *, was_exec: bool) -> None:
+    """Re-assert ``0o755`` on ``shortcuts_path`` — NSL's init sentinel.
+
+    ``0o755`` is required, not permissive-by-accident. **NonSteamLaunchers
+    (NSL)**'s persistent ``nslgamescanner.service`` treats the executable
+    bit as its "already-initialised" sentinel: on each scan, if
+    ``shortcuts.vdf`` is *not* executable it overwrites the whole file
+    with an empty ``{"shortcuts": {}}``, wiping every shortcut, ours
+    included. NSL always chmods to ``0o755`` after writing; our
+    tmp+``os.replace`` creates the destination inode at the umask default
+    instead, which silently disarms the sentinel. A stricter mode
+    reintroduces the library wipe.
+
+    ``was_exec`` must be sampled from the **pre-existing** file, before
+    the replace. Sampling after it reports the mode of the brand-new tmp
+    inode — always non-executable, since ``open("wb")`` creates at base
+    ``0o666`` — so the "restored" line fired on literally every write and
+    read like a recurring rescue from an external tool.
+    """
+    try:
+        os.chmod(shortcuts_path, 0o755)  # noqa: S103
+    except OSError as e:
+        logger.warning(
+            "[ShortcutPersistence] could not set executable bit on "
+            "shortcuts.vdf: %s (NSL, if installed, may reset the file)", e,
+        )
+        return
+    if not was_exec:
+        logger.info(
+            "[ShortcutPersistence] restored executable bit on shortcuts.vdf "
+            "(0o755) — it was missing before this write, which is what makes "
+            "NonSteamLaunchers' scanner wipe the library on its next pass",
+        )
+
+
+def _validate_written(shortcuts_path: str, expected: int) -> bool:
+    """True when the file on disk holds ``expected`` entries.
+
+    Counted from the raw bytes, not by re-parsing: the point is to catch
+    a write that lost content, and a check that shares the writer's view
+    of the file cannot see the writer losing part of it.
+    """
+    try:
+        raw = Path(shortcuts_path).read_bytes()
+    except OSError:
+        logger.exception(
+            "[ShortcutPersistence] could not re-read shortcuts.vdf to "
+            "validate the write",
+        )
+        return False
+    actual = count_entries_in_bytes(raw)
+    if actual == expected:
+        return True
+    logger.error(
+        "[ShortcutPersistence] post-write validation FAILED: wrote %d "
+        "entries but the file holds %d", expected, actual,
+    )
+    return False
+
+
+async def write_vdf(
+    shortcuts_path: str, data: dict[str, Any], data_dir: str = "",
+) -> None:
     """Persist shortcuts.vdf atomically, keeping the file executable.
 
-    Uses tmpfile + os.replace to prevent corruption on crash.
+    Uses tmpfile + os.replace so Steam never reads a half-written file.
 
-    The final ``os.chmod(..., 0o755)`` is load-bearing for coexistence
-    with **NonSteamLaunchers (NSL)**. NSL's persistent
-    ``nslgamescanner.service`` treats the *executable bit* as its
-    "already-initialised" sentinel: on each scan, if ``shortcuts.vdf``
-    is **not** executable it overwrites the whole file with an empty
-    ``{"shortcuts": {}}`` (NSLGameScanner.py) — wiping every shortcut,
-    ours included. NSL itself always chmods the file to ``0o755`` after
-    writing. Our tmp+``os.replace`` creates the destination inode at the
-    process umask default (typically ``0o644`` — non-executable), which
-    silently disarms that sentinel and makes the next scan erase the
-    user's library ("0 games after sync"). Re-asserting ``0o755`` here —
-    on the single lowest-level byte-writer of shortcuts.vdf, so every
-    write path inherits it — matches the state Steam/NSL already leave
-    and lets the two tools coexist. (Foreign NSL entries are separately
-    preserved by :func:`merge_foreign_shortcuts`.)
+    Around that, three guarantees this writer lacked while a *dead*
+    module (``steam/shortcuts.py``, zero callers) implemented them:
+
+    * the previous contents are snapshotted first, so a bad write is
+      recoverable rather than merely regrettable;
+    * the written file is re-counted afterwards and rolled back if it
+      lost entries;
+    * the NSL executable-bit sentinel is re-asserted (see
+      :func:`_assert_exec_bit`).
+
+    ``data_dir`` is where snapshots go; passing ``""`` disables them
+    (unit tests that only exercise the byte path).
     """
     def _write_sync() -> None:
-        parent = str(Path(shortcuts_path).parent)
-        if parent:
-            Path(parent).mkdir(parents=True, exist_ok=True)
+        from .vdf_backup import rotate_and_snapshot
 
-        tmp_path = shortcuts_path + ".tmp"
-        try:
-            with Path(tmp_path).open("wb") as f:
-                f.write(vdf.binary_dumps(data))  # type: ignore[no-untyped-call]
-            Path(tmp_path).replace(shortcuts_path)
-        except Exception:
-            logger.exception("[ShortcutPersistence] failed to write shortcuts.vdf")
-            if Path(tmp_path).exists():
-                with contextlib.suppress(OSError):
-                    Path(tmp_path).unlink()
+        was_exec = os.access(shortcuts_path, os.X_OK)
+        backed_up = bool(data_dir) and rotate_and_snapshot(
+            shortcuts_path, data_dir,
+        )
+        if not _atomic_write(shortcuts_path, data):
             return
-
-        # Preserve the executable bit NSL's scanner uses as its
-        # "already-initialised" sentinel (see docstring). A chmod
-        # failure (exotic filesystem) must not fail the write — the
-        # bytes are already safely in place.
-        try:
-            was_exec = os.access(shortcuts_path, os.X_OK)
-            # 0o755 is required, not permissive-by-accident: it is the
-            # exact mode Steam/NSL keep and NSL's scanner requires (see
-            # docstring). A stricter mode reintroduces the library wipe.
-            os.chmod(shortcuts_path, 0o755)  # noqa: S103
-            if not was_exec:
-                logger.info(
-                    "[ShortcutPersistence] restored executable bit on "
-                    "shortcuts.vdf (0o755) — prevents NonSteamLaunchers' "
-                    "scanner from wiping the library on its next pass",
-                )
-        except OSError as e:
-            logger.warning(
-                "[ShortcutPersistence] could not set executable bit on "
-                "shortcuts.vdf: %s (NSL, if installed, may reset the file)",
-                e,
-            )
+        _assert_exec_bit(shortcuts_path, was_exec=was_exec)
+        _rollback_if_lossy(shortcuts_path, data, data_dir, backed_up=backed_up)
 
     await asyncio.to_thread(_write_sync)
+
+
+def _atomic_write(shortcuts_path: str, data: dict[str, Any]) -> bool:
+    """tmp-file + ``os.replace`` so Steam never reads a partial file."""
+    target = Path(shortcuts_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(shortcuts_path + ".tmp")
+    try:
+        with tmp.open("wb") as f:
+            f.write(vdf.binary_dumps(data))  # type: ignore[no-untyped-call]
+        tmp.replace(target)
+    except Exception:
+        logger.exception("[ShortcutPersistence] failed to write shortcuts.vdf")
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        return False
+    return True
+
+
+def _rollback_if_lossy(
+    shortcuts_path: str, data: dict[str, Any], data_dir: str, *,
+    backed_up: bool,
+) -> None:
+    """Restore the snapshot when the written file lost entries."""
+    from .vdf_backup import restore_newest
+
+    expected = len(_shortcut_entries(data))
+    if _validate_written(shortcuts_path, expected) or not backed_up:
+        return
+    restore_newest(shortcuts_path, data_dir)
+    _assert_exec_bit(shortcuts_path, was_exec=True)
 
 
 def _shortcut_entries(data: dict[str, Any]) -> dict[str, Any]:
@@ -126,6 +189,7 @@ def _merge_one_foreign(
     mem_inner: dict[str, Any],
     known_appids: set[Any],
     launcher_path: str,
+    skip_appids: frozenset[int] = frozenset(),
 ) -> bool:
     """Merge a single disk *entry* back into *mem_inner* if it is a foreign
     shortcut memory lost. Returns ``True`` if it was merged.
@@ -142,6 +206,13 @@ def _merge_one_foreign(
     if _is_launcher_exe(exe, launcher_path):
         return False
     appid = entry.get("appid")
+    # A drop the caller declared on purpose (the Ubisoft auth prunes
+    # target bare foreign-looking rows). Without this the merge would
+    # re-inject the very entry the caller just removed, silently undoing
+    # a deliberate deletion — the mirror image of the loss this function
+    # exists to prevent.
+    if isinstance(appid, int) and appid in skip_appids:
+        return False
     # Foreign entry already represented in memory — leave memory's
     # copy (our writes never mutate foreign entries anyway).
     if appid is not None and appid in known_appids:
@@ -156,7 +227,10 @@ def _merge_one_foreign(
 
 
 def merge_foreign_shortcuts(
-    mem: dict[str, Any], disk: dict[str, Any], launcher_path: str,
+    mem: dict[str, Any],
+    disk: dict[str, Any],
+    launcher_path: str,
+    skip_appids: frozenset[int] = frozenset(),
 ) -> int:
     """Re-inject foreign shortcuts that ``mem`` lost since it was loaded.
 
@@ -198,7 +272,9 @@ def merge_foreign_shortcuts(
     }
     merged = 0
     for entry in disk_inner.values():
-        if _merge_one_foreign(entry, mem_inner, known_appids, launcher_path):
+        if _merge_one_foreign(
+            entry, mem_inner, known_appids, launcher_path, skip_appids,
+        ):
             merged += 1
 
     if merged:

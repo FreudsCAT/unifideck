@@ -312,7 +312,17 @@ class UbisoftStore(StoreBase):
         game_id: str,
         **kwargs: Any,
     ) -> InstallResult:
-        """Update game."""
+        """Update game.
+
+        Deliberately ignores the ``on_ready`` the wrapper dispatch now offers:
+        this path still spawns UPC from the backend (``update_op``) instead of
+        asking the frontend to ``RunGame`` it. That is a pre-existing gap — a
+        backend-spawned window does not render in Gaming Mode — and declining
+        the hook is a store's choice, not a branch in shared code. Converting
+        it to the watcher is a separate change; ``install_game`` already works
+        that way.
+        """
+        del kwargs
         return await self._installer.update_game(game_id)
 
     async def check_for_updates(self) -> list[str]:
@@ -338,6 +348,24 @@ class UbisoftStore(StoreBase):
         )
         path = info.get("install_path") if isinstance(info, dict) else None
         return path if isinstance(path, str) and path else None
+
+    def get_prefix_path(self, game_id: str) -> str | None:
+        """The game's Wine prefix — for this store, the whole install footprint.
+
+        UPC installs into ``<prefix>/drive_c/Program Files (x86)/Ubisoft/…``
+        and uninstalling removes the prefix, so the prefix is both what the
+        game costs on disk and what the user gets back.
+
+        This resolves through ``paths``, which prefers the recorded location
+        and falls back to the internal default for games installed before that
+        was recorded. The "recorded, never reconstructed" rule that governs the
+        prefix elsewhere guards a *destructive* site — a rebuilt path once
+        stamped a marker into a directory no launch had opened and produced a
+        permanent reset loop. Here the path is only walked for a byte count,
+        and the caller drops it unless the directory exists.
+        """
+        prefix = self._paths.get_prefix_path(game_id)
+        return prefix if isinstance(prefix, str) and prefix else None
 
     async def get_installed(self) -> dict[str, Any]:
         """Get installed."""

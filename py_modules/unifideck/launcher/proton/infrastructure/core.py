@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -106,11 +107,32 @@ def _ubisoft_prefix_path(ctx: LaunchContext, prefixes_dir: Path) -> Path:
         pass
     ubi_name = os.environ.get("UNIFIDECK_UBISOFT_PREFIX_NAME") or ctx.game_id
     return prefixes_dir / "ubisoft" / ubi_name
+def _battlenet_prefix_path(ctx: LaunchContext, prefixes_dir: Path) -> Path:
+    """Per-game Battle.net prefix, read from the id map — never rebuilt.
+
+    A reconstructed path once stamped a marker into a directory no launch
+    opened, wedging a Ubisoft prefix in a permanent reset loop. It also lets
+    a game live on an SD card without the resolver guessing.
+    """
+    try:
+        from unifideck.launcher.proton.handlers.battlenet_client import resolve_prefix
+
+        recorded = resolve_prefix(ctx.game_id)
+        if recorded is not None:
+            return recorded
+    except (OSError, ValueError, ImportError):
+        pass
+    override = os.environ.get("UNIFIDECK_BATTLENET_PREFIX_NAME") or ctx.game_id
+    return prefixes_dir / "battlenet" / override
+
+
 def _resolve_prefix(ctx: LaunchContext) -> Path:
     """Resolve prefix."""
     prefixes_dir = Path("~/.local/share/unifideck/prefixes").expanduser()
     if ctx.store == "ubisoft":
         path = _ubisoft_prefix_path(ctx, prefixes_dir)
+    elif ctx.store == "battlenet":
+        path = _battlenet_prefix_path(ctx, prefixes_dir)
     else:
         path = prefixes_dir / ctx.game_id
         while path.name == "pfx":
@@ -180,6 +202,43 @@ def _epic_store_value(
     return "egs" if is_rockstar_egs(game_id, umu_id, exe_name) else "none"
 
 
+def _apply_battlenet_env(env: dict[str, str]) -> None:
+    """Environment the Battle.net client needs, on every invocation.
+
+    ``WINE_SIMULATE_WRITECOPY=1`` — without it the login window is
+    unresponsive (confirmed on-device).
+
+    ``PROTON_USE_XALIA=0`` — precautionary. Note the July 2026 study
+    recommended ``PROTON_DISABLE_XALIA=1``; that variable **does not exist**
+    in the Proton script and was always a no-op. Xalia ran throughout a
+    later on-device session and the client was healthy, so this is belt and
+    braces rather than the gating fix it was believed to be.
+
+    ``DISABLE_GAMESCOPE_WSI=1`` — **only on a host that has already been
+    measured to need it**, which is why it comes from a recorded marker
+    rather than being set unconditionally. See
+    :mod:`~unifideck.launcher.proton.handlers.battlenet_wsi`: the client's
+    ANGLE renderer aborts inside gamescope's Vulkan WSI layer on some GPUs
+    and not others, and turning the layer off costs the XWayland-bypass
+    path (direct scanout, HDR) for the game too, since the game inherits
+    the client's environment. Applying it everywhere would charge that to
+    every working host to fix a minority of them.
+
+    ``locationapi=d`` is **merged** into any existing WINEDLLOVERRIDES
+    rather than replacing it — Proton appends its own long default list.
+    """
+    from unifideck.launcher.proton.handlers import battlenet_wsi
+
+    env["WINE_SIMULATE_WRITECOPY"] = "1"
+    env["PROTON_USE_XALIA"] = "0"
+    battlenet_wsi.apply_if_recorded(env)
+    existing = env.get("WINEDLLOVERRIDES", "")
+    if "locationapi" not in existing:
+        env["WINEDLLOVERRIDES"] = (
+            f"locationapi=d;{existing}" if existing else "locationapi=d"
+        )
+
+
 def _apply_rockstar_dll_overrides(env: dict[str, str], umu_id: str | None) -> None:
     """Add the RDR2/GTA5 WINEDLLOVERRIDES to ``env`` in place.
 
@@ -199,6 +258,56 @@ def _apply_rockstar_dll_overrides(env: dict[str, str], umu_id: str | None) -> No
         "[launcher.proton.core] Rockstar-EGS (%s): STORE=egs, "
         "WINEDLLOVERRIDES+=%s", umu_id, ROCKSTAR_WINEDLLOVERRIDES,
     )
+
+
+def _apply_icu_dll_overrides(env: dict[str, str], game_id: str | None) -> None:
+    """Add the native-ICU WINEDLLOVERRIDES to ``env`` in place.
+
+    Merges with any existing overrides rather than clobbering (Proton
+    appends its own long default list, and battlenet may already have put
+    ``locationapi=d`` here); a user's explicit ``ctx.env_overrides`` still
+    wins, since that is applied afterwards.
+    """
+    from unifideck.launcher.proton.fixes.game_fixes import (
+        ICU_NATIVE_WINEDLLOVERRIDES,
+    )
+    existing = env.get("WINEDLLOVERRIDES", "")
+    if "icuuc" in existing:
+        return
+    env["WINEDLLOVERRIDES"] = (
+        f"{existing};{ICU_NATIVE_WINEDLLOVERRIDES}"
+        if existing else ICU_NATIVE_WINEDLLOVERRIDES
+    )
+    logger.info(
+        "[launcher.proton.core] native-ICU title (%s): WINEDLLOVERRIDES+=%s",
+        game_id, ICU_NATIVE_WINEDLLOVERRIDES,
+    )
+
+
+def _apply_per_title_env(
+    env: dict[str, str],
+    ctx: LaunchContext,
+    *,
+    umu_id: str | None,
+    exe_name: str,
+    rockstar_egs: bool,
+) -> None:
+    """Layer the per-title / per-store env quirks onto ``env`` in place.
+
+    Split out of :func:`_build_umu_env` to keep it under the line cap. Every
+    branch here is gated so a title that matches nothing is left byte-for-byte
+    unchanged, and all of them run BEFORE ``ctx.env_overrides`` so a user's
+    explicit value still wins.
+    """
+    from unifideck.launcher.proton.fixes.game_fixes import needs_native_icu
+    if rockstar_egs:
+        _apply_rockstar_dll_overrides(env, umu_id)
+    if ctx.store == "battlenet":
+        _apply_battlenet_env(env)
+    # Store-independent: keyed off the exe/id, not ctx.store, because the
+    # same title ships the same bundled ICU on GOG and Epic alike.
+    if needs_native_icu(ctx.game_id, umu_id, exe_name):
+        _apply_icu_dll_overrides(env, ctx.game_id)
 
 
 def _build_umu_env(
@@ -269,8 +378,9 @@ def _build_umu_env(
     # one on atomic hosts.
     env.pop("STEAM_COMPAT_CLIENT_INSTALL_PATH", None)
     env["PROTON_VERB"] = "waitforexitandrun"
-    if rockstar_egs:
-        _apply_rockstar_dll_overrides(env, umu_id)
+    _apply_per_title_env(
+        env, ctx, umu_id=umu_id, exe_name=exe_name, rockstar_egs=rockstar_egs,
+    )
     env.update(ctx.env_overrides)
     logger.info(
         "[launcher.proton.core] plan ready: store=%s umu_store=%s "

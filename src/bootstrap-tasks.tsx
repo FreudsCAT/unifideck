@@ -170,7 +170,12 @@ export function purgeLeftoverAuthShortcuts(): void {
           m_mapApps?: {
             forEach?: (
               cb: (
-                app: { LaunchOptions?: unknown; launch_options?: unknown },
+                app: {
+                  LaunchOptions?: unknown;
+                  launch_options?: unknown;
+                  display_name?: unknown;
+                  appname?: unknown;
+                },
                 id: number,
               ) => void,
             ) => void;
@@ -186,19 +191,25 @@ export function purgeLeftoverAuthShortcuts(): void {
       "amazon:amazon-auth",
       "microsoft:ms-auth",
     ];
-    const victims: number[] = [];
+    // No ownership gate is possible here: `m_mapApps` entries carry no
+    // Exe/target field, so unlike every backend sweep this one cannot
+    // prove a shortcut is ours. The four prefixes are specific enough
+    // that the residual risk is small, but log the name we are about to
+    // remove so the action is auditable from a support bundle.
+    const victims: { appId: number; name: unknown }[] = [];
     map.forEach((app, appId) => {
       const lo = app?.LaunchOptions ?? app?.launch_options;
       if (typeof lo !== "string") return;
       if (stalePrefixes.some((p) => lo.startsWith(p))) {
-        victims.push(appId);
+        victims.push({ appId, name: app?.display_name ?? app?.appname });
       }
     });
     const steamApps = window.SteamClient?.Apps;
     if (!steamApps?.RemoveShortcut) return;
-    for (const appId of victims) {
+    for (const { appId, name } of victims) {
       console.log(
-        `[Bootstrap] Removing leftover persistent auth shortcut appId=${appId}`,
+        `[Bootstrap] Removing leftover persistent auth shortcut ` +
+          `appId=${appId} name=${JSON.stringify(name ?? null)}`,
       );
       try {
         steamApps.RemoveShortcut(appId);

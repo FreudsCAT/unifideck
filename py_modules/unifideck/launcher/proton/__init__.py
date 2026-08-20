@@ -8,6 +8,7 @@ cache management.
 
 from __future__ import annotations
 
+from unifideck.launcher.proton.handlers.battlenet import battlenet_launch
 from unifideck.launcher.types.errors import UmuRuntimeError
 
 from .handlers.epic import epic_launch
@@ -76,6 +77,8 @@ async def dispatch(plan: ProtonLaunchPlan) -> int:
         )
 
     store = plan.context.store
+    if store == "battlenet":
+        return await battlenet_launch(plan)
     if store == "ubisoft":
         return await ubisoft_launch(plan)
     if store == "epic":
@@ -86,6 +89,7 @@ async def dispatch(plan: ProtonLaunchPlan) -> int:
 __all__ = [
     "UMU_CACHE_DIR",
     "ProtonLaunchPlan",
+    "battlenet_launch",
     "cleanup_umu_runtime_cache",
     "dispatch",
     "ensure_umu_runtime_ready",

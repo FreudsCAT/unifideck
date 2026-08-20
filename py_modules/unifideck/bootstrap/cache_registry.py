@@ -15,7 +15,7 @@ exist and how long their entries survive. TTL semantics (from
     time)
   - positive integer — seconds until entry becomes stale
 
-Four stores (epic, gog, amazon, microsoft, ubisoft) also get
+Six stores (epic, gog, amazon, microsoft, ubisoft, battlenet) also get
 one cache slot each, all TTL=0 — they're used to memoize the
 per-store ``is_available`` result inside a single plugin session
 so we don't re-probe every RPC call.
@@ -85,7 +85,7 @@ _NAMED_CACHES: tuple[tuple[str, int], ...] = (
 )
 
 _STORE_CACHES: tuple[str, ...] = (
-    "epic", "gog", "amazon", "microsoft", "ubisoft",
+    "epic", "gog", "amazon", "microsoft", "ubisoft", "battlenet",
 )
 
 

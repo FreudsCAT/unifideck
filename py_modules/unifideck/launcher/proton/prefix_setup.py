@@ -34,6 +34,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from unifideck.launcher.wrapper_stores import prefix_owns_game_install
+
 if TYPE_CHECKING:
     from unifideck.launcher.types.context import LaunchContext, RuntimeState
 
@@ -327,11 +329,11 @@ def _nothing_to_do(
     and each Proton change makes Proton re-run ``wineboot -u`` and rewrite
     ``system.reg``.
     """
-    if ctx.store == "ubisoft":
+    if prefix_owns_game_install(ctx.store):
         logger.info(
-            "[prefix_setup] skipping setup for ubisoft:%s — UPC owns this "
+            "[prefix_setup] skipping setup for %s — the %s client owns this "
             "prefix (compat is skipped and a reset would delete the game)",
-            ctx.game_id,
+            ctx.game_key, ctx.store,
         )
         return True
     if not _compat_pending(ctx, state, python_bin, default):

@@ -219,9 +219,11 @@ class SyncRPCMixin(CleanupRPCMixin):
 
         if info.get("installed"):
             # Exact on-disk size — shared across all stores. See
-            # ``stores/shared/installed_size.py``.
+            # ``stores/shared/installed_size.py``. ``store`` is what lets a
+            # wrapper store be sized by its prefix, which for those stores is
+            # the game's real footprint and what an uninstall reclaims.
             return await installed_size_bytes(
-                adapter, info.get("install_path"), game_id,
+                adapter, info.get("install_path"), game_id, store,
             )
 
         if not store or not game_id:

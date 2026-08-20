@@ -116,6 +116,10 @@
       "xcloud_launch_url": "https://www.xbox.com/play/launch",
       "gssv_relying_party": "http://gssv.xboxlive.com/",
       "subscription_check_url": "https://xgpuweb.gssv-play-prod.xboxlive.com/v2/login/user"
+    },
+    "battlenet": {
+      "data_dir": "~/.local/share/unifideck",
+      "prefixes_dir": "~/.local/share/unifideck/prefixes/battlenet"
     }
   },
   "metadata": {
@@ -222,15 +226,40 @@
   },
   "i18n": {
     "locales": [
-      { "tag": "en-US", "deepl_code": null, "name": "English", "rtl": false },
-      { "tag": "fr-FR", "deepl_code": "FR", "name": "Français", "rtl": false },
-      { "tag": "de-DE", "deepl_code": "DE", "name": "Deutsch", "rtl": false },
-      { "tag": "es-ES", "deepl_code": "ES", "name": "Español", "rtl": false },
-      { "tag": "it-IT", "deepl_code": "IT", "name": "Italiano", "rtl": false },
+      {
+        "tag": "en-US",
+        "deepl_code": null,
+        "name": "English",
+        "rtl": false
+      },
+      {
+        "tag": "fr-FR",
+        "deepl_code": "FR",
+        "name": "Fran\u00e7ais",
+        "rtl": false
+      },
+      {
+        "tag": "de-DE",
+        "deepl_code": "DE",
+        "name": "Deutsch",
+        "rtl": false
+      },
+      {
+        "tag": "es-ES",
+        "deepl_code": "ES",
+        "name": "Espa\u00f1ol",
+        "rtl": false
+      },
+      {
+        "tag": "it-IT",
+        "deepl_code": "IT",
+        "name": "Italiano",
+        "rtl": false
+      },
       {
         "tag": "pt-BR",
         "deepl_code": "PT-BR",
-        "name": "Português (Brasil)",
+        "name": "Portugu\u00eas (Brasil)",
         "rtl": false
       },
       {
@@ -239,17 +268,42 @@
         "name": "Nederlands",
         "rtl": false
       },
-      { "tag": "pl-PL", "deepl_code": "PL", "name": "Polski", "rtl": false },
-      { "tag": "ru-RU", "deepl_code": "RU", "name": "Русский", "rtl": false },
+      {
+        "tag": "pl-PL",
+        "deepl_code": "PL",
+        "name": "Polski",
+        "rtl": false
+      },
+      {
+        "tag": "ru-RU",
+        "deepl_code": "RU",
+        "name": "\u0420\u0443\u0441\u0441\u043a\u0438\u0439",
+        "rtl": false
+      },
       {
         "tag": "uk-UA",
         "deepl_code": "UK",
-        "name": "Українська",
+        "name": "\u0423\u043a\u0440\u0430\u0457\u043d\u0441\u044c\u043a\u0430",
         "rtl": false
       },
-      { "tag": "tr-TR", "deepl_code": "TR", "name": "Türkçe", "rtl": false },
-      { "tag": "ja-JP", "deepl_code": "JA", "name": "Japanese", "rtl": false },
-      { "tag": "ko-KR", "deepl_code": "KO", "name": "Korean", "rtl": false },
+      {
+        "tag": "tr-TR",
+        "deepl_code": "TR",
+        "name": "T\u00fcrk\u00e7e",
+        "rtl": false
+      },
+      {
+        "tag": "ja-JP",
+        "deepl_code": "JA",
+        "name": "Japanese",
+        "rtl": false
+      },
+      {
+        "tag": "ko-KR",
+        "deepl_code": "KO",
+        "name": "Korean",
+        "rtl": false
+      },
       {
         "tag": "zh-CN",
         "deepl_code": "ZH-HANS",
@@ -262,7 +316,12 @@
         "name": "Traditional Chinese",
         "rtl": false
       },
-      { "tag": "ar-SA", "deepl_code": "AR", "name": "Arabic", "rtl": true }
+      {
+        "tag": "ar-SA",
+        "deepl_code": "AR",
+        "name": "Arabic",
+        "rtl": true
+      }
     ]
   },
   "security": {

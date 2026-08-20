@@ -1,10 +1,11 @@
 """Installed-game on-disk size — one process for every store.
 
 Measuring the exact "Installed size" is the SAME for every store:
-locate the install directory, then sum the bytes under it. Only the
-*source* of the path differs per store, and that's exposed uniformly
-through :meth:`StoreBase.get_installed_path`. Everything else — the
-path fallback and the directory walk — lives here, once, so the RPC
+locate the directory the game occupies, then sum the bytes under it.
+Only the *source* of the path differs per store, and that's exposed
+uniformly through :meth:`StoreBase.get_installed_path` (and, for a
+wrapper store, :meth:`StoreBase.get_prefix_path`). Everything else —
+the path fallback and the directory walk — lives here, once, so the RPC
 layer and every store share a single implementation.
 """
 from __future__ import annotations
@@ -13,6 +14,8 @@ import asyncio
 import contextlib
 import os
 from typing import Any
+
+from unifideck.launcher.wrapper_stores import prefix_owns_game_install
 
 
 def dir_size_bytes(path: str) -> int:
@@ -76,7 +79,10 @@ async def resolve_installed_dir(
     (:mod:`unifideck.services.installed_disk_info`), which labels each
     game internal/external: it must classify the SAME directory this
     function sizes, or a game whose cached path is stale would be sized
-    from its real install dir and labelled from the dead one.
+    from its real install dir and labelled from the dead one. Both
+    callers therefore go through :func:`resolve_size_root`, never this
+    directly — otherwise a wrapper store would be sized by prefix and
+    labelled by install dir.
     """
     path = cache_path if isinstance(cache_path, str) and cache_path else None
     if path is not None and await asyncio.to_thread(os.path.isdir, path):
@@ -92,19 +98,49 @@ async def resolve_installed_dir(
     return None
 
 
-async def installed_size_bytes(
-    adapter: Any, cache_path: Any, game_id: Any,
-) -> int:
-    """Exact on-disk size (bytes) of an installed game's directory.
+async def resolve_size_root(
+    adapter: Any, cache_path: Any, game_id: Any, store: str | None = None,
+) -> str | None:
+    """The directory whose bytes ARE this game's footprint on disk.
 
-    Resolves the directory via :func:`resolve_installed_dir`, then walks
-    it off the event loop.
+    For nearly every store that is the install directory, and this just
+    defers to :func:`resolve_installed_dir`.
+
+    A **wrapper store** is the exception, and deliberately so. Its vendor
+    client runs inside the Wine prefix and installs the game *into* it
+    (``prefix_owns_game_install``), and uninstalling removes the whole
+    prefix — so the prefix is both what the game costs and what deleting
+    it gives back. Sizing only the game directory would under-report by
+    the client and the Wine tree that exist solely to run that one game,
+    and would disagree with the space the user actually reclaims.
+
+    The install directory is still resolved as the fallback: a prefix path
+    we cannot get is no reason to show nothing.
+    """
+    if store and prefix_owns_game_install(store) and adapter is not None:
+        with contextlib.suppress(Exception):
+            prefix = adapter.get_prefix_path(game_id)
+            if (
+                isinstance(prefix, str) and prefix
+                and await asyncio.to_thread(os.path.isdir, prefix)
+            ):
+                return prefix
+    return await resolve_installed_dir(adapter, cache_path, game_id)
+
+
+async def installed_size_bytes(
+    adapter: Any, cache_path: Any, game_id: Any, store: str | None = None,
+) -> int:
+    """Exact on-disk size (bytes) of an installed game's footprint.
+
+    Resolves the directory via :func:`resolve_size_root`, then walks it
+    off the event loop.
 
     Returns ``0`` ("—") rather than ever falling back to a download
     size: an installed game must never display its (smaller) download
     size as the installed size.
     """
-    path = await resolve_installed_dir(adapter, cache_path, game_id)
+    path = await resolve_size_root(adapter, cache_path, game_id, store)
     if path is None:
         return 0
     try:

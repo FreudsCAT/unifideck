@@ -23,6 +23,7 @@ import {
   meetsGreatOnDeckCriteria,
 } from "../protondb-cache";
 import { getCompatByShortcutAppId, loadFacets } from "../library-facets";
+import { invalidateGameSize } from "../game-size-cache";
 import type { SteamAppOverview } from "../../types/steam";
 
 export type StoreSlug =
@@ -31,6 +32,7 @@ export type StoreSlug =
   | "gog"
   | "amazon"
   | "ubisoft"
+  | "battlenet"
   | "microsoft";
 
 export type FilterType =
@@ -382,6 +384,7 @@ export async function loadUnifideckCache(): Promise<void> {
       gog: 0,
       amazon: 0,
       ubisoft: 0,
+      battlenet: 0,
       microsoft: 0,
     };
     for (const g of games ?? []) {
@@ -476,5 +479,8 @@ export function startUnifideckCacheAutoload(): void {
       store: store as Exclude<StoreSlug, "steam">,
       isInstalled: installed,
     });
+    // The bytes on disk just changed by an entire game. Every cached size
+    // for this app is now wrong in one direction or the other.
+    invalidateGameSize(appId);
   });
 }

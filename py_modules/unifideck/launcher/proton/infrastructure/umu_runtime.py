@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from unifideck.launcher.frontend_bridge import launcher_toast
+from unifideck.launcher.proton.infrastructure.game_log import (
+    open_game_log,
+)
 
 from .container_escape import escape_argv
 
@@ -21,7 +24,6 @@ logger = logging.getLogger(__name__)
 # Ns" toast truthful.
 _RETRY_BACKOFF_SECONDS = 3
 UMU_CACHE_DIR = Path("~/.local/share/umu").expanduser()
-_LAUNCHES_DIR = Path("~/.local/share/unifideck/launches").expanduser()
 # umu-run picks the Steam Runtime *generation* per Proton build (it reads
 # the selected PROTONPATH's own toolmanifest.vdf) — a newer GE-Proton can
 # require "steamrt4" instead of the default "sniper"/"steamrt3". Mirrors
@@ -139,24 +141,6 @@ def _reap_prefix_wineserver(env: dict[str, str] | None) -> None:
         logger.exception("[launcher.umu] wineserver reap failed for %s", prefix)
 
 
-def open_game_log() -> Any:
-    """Open the per-launch game-output log for umu stdout+stderr.
-
-    Proton / Wine / the game itself write to stdout+stderr, which the
-    Python logging archive does NOT capture — so a game that exits
-    nonzero left no trace and had to be reproduced by hand. Routing
-    that output to ``launches/<launch_id>.game.log`` makes every
-    failure diagnosable from disk. Returns ``None`` on any error, in
-    which case the caller inherits stdout/stderr as before.
-    """
-    from unifideck.launcher.diagnostics.correlation import get_launch_id
-    try:
-        _LAUNCHES_DIR.mkdir(parents=True, exist_ok=True)
-        path = _LAUNCHES_DIR / f"{get_launch_id()}.game.log"
-        return path.open("a", encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug("[launcher.umu] game log open failed: %s", e)
-        return None
 def cleanup_umu_runtime_cache() -> None:
     """Cleanup UMU runtime cache."""
     targets = [
@@ -374,6 +358,7 @@ async def run_umu_with_retry(
     max_attempts: int = 2,
     on_start: Callable[[object], None] | None = None,
     timeout: float | None = None,  # noqa: ASYNC109 — bounds a subprocess wait via wait_for + killpg, not an asyncio.timeout() wrapper
+    reap_wineserver: bool = True,
 ) -> int:
 
     """Run UMU with retry.
@@ -385,6 +370,14 @@ async def run_umu_with_retry(
     process group is force-killed and the attempt returns
     :data:`UMU_TIMEOUT_RC`, which is deliberately *not* recoverable, so
     a hung Proton fails the step instead of retrying into the same hang.
+
+    Pass ``reap_wineserver=False`` when this run shares a prefix with a
+    wineserver it does **not** own — Battle.net phase C, which sends an
+    ``--exec`` to a client another run started. The reap is prefix-scoped,
+    not tree-scoped: it SIGKILLs every holder of that prefix's server dir,
+    so on the timeout path it killed the live client mid-download. The
+    default stays ``True`` — one umu run per prefix is the norm, and the
+    reap is what keeps a timed-out compat step from wedging its retry.
     """
     last_rc = 1
     game_log = open_game_log()
@@ -397,7 +390,9 @@ async def run_umu_with_retry(
                 "game.log" if out is not None else "inherited",
             )
             started_at = _now()
-            rc = await _run_umu_once(argv, env, cwd, out, on_start, timeout)
+            rc = await _run_umu_once(
+                argv, env, cwd, out, on_start, timeout, reap_wineserver,
+            )
             ran_for = _now() - started_at
             last_rc = rc
             logger.info(
@@ -456,15 +451,22 @@ def _strip_loader_env(env: dict[str, str] | None) -> None:
 async def _reap_umu_tree(
     proc: asyncio.subprocess.Process,
     env: dict[str, str] | None,
+    *,
+    reap_wineserver: bool = True,
 ) -> None:
     """Kill umu's whole process group plus its prefix wineserver, then wait.
 
     ``start_new_session=True`` detaches the umu-run / pressure-vessel /
     wineserver descendants, so without this they outlive both the timeout
     and the cancellation path and keep spinning.
+
+    The killpg is unconditional — it only ever reaches *this* run's own
+    session. The wineserver reap is prefix-scoped and therefore opt-out;
+    see :func:`run_umu_with_retry`.
     """
     _kill_process_group(proc)
-    _reap_prefix_wineserver(env)
+    if reap_wineserver:
+        _reap_prefix_wineserver(env)
     with contextlib.suppress(Exception):
         await asyncio.wait_for(proc.wait(), timeout=5)
 
@@ -476,6 +478,7 @@ async def _run_umu_once(
     out: Any,
     on_start: Callable[[object], None] | None,
     timeout: float | None = None,  # noqa: ASYNC109 — bounds a subprocess wait via wait_for + killpg, not an asyncio.timeout() wrapper
+    reap_wineserver: bool = True,
 ) -> int:
     """Spawn one umu process, fire ``on_start``, await its exit code.
 
@@ -516,9 +519,9 @@ async def _run_umu_once(
                 "[launcher.umu] %s exceeded %ds — killing process group",
                 argv[:3], int(timeout),
             )
-            await _reap_umu_tree(proc, env)
+            await _reap_umu_tree(proc, env, reap_wineserver=reap_wineserver)
             return UMU_TIMEOUT_RC
     except asyncio.CancelledError:
         # Reap the whole tree before unwinding the cancellation.
-        await _reap_umu_tree(proc, env)
+        await _reap_umu_tree(proc, env, reap_wineserver=reap_wineserver)
         raise

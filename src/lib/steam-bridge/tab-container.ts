@@ -79,15 +79,21 @@ export function getUnifideckTabs(): UnifideckTab[] {
       filters: [{ type: "store", params: { store: "ubisoft" } }],
     },
     {
+      id: "unifideck-battlenet",
+      title: t("deckTabs.battlenet"),
+      position: 8,
+      filters: [{ type: "store", params: { store: "battlenet" } }],
+    },
+    {
       id: "unifideck-microsoft",
       title: t("deckTabs.microsoft"),
-      position: 8,
+      position: 9,
       filters: [{ type: "store", params: { store: "microsoft" } }],
     },
     {
       id: "unifideck-nonsteam",
       title: t("deckTabs.nonSteam"),
-      position: 9,
+      position: 10,
       filters: [{ type: "nonSteam", params: {} }],
     },
   ];
@@ -346,7 +352,13 @@ export class UnifideckTabContainer {
   }
 }
 
-type ConnectableStore = "epic" | "gog" | "amazon" | "ubisoft" | "microsoft";
+type ConnectableStore =
+  | "epic"
+  | "gog"
+  | "amazon"
+  | "ubisoft"
+  | "battlenet"
+  | "microsoft";
 
 class TabManager {
   private tabs: UnifideckTabContainer[] = [];
@@ -356,6 +368,7 @@ class TabManager {
     gog: 0,
     amazon: 0,
     ubisoft: 0,
+    battlenet: 0,
     microsoft: 0,
   };
   private version = 0;
@@ -407,6 +420,7 @@ class TabManager {
       "unifideck-gog": "gog",
       "unifideck-amazon": "amazon",
       "unifideck-ubisoft": "ubisoft",
+      "unifideck-battlenet": "battlenet",
       "unifideck-microsoft": "microsoft",
     };
     const store = m[id];

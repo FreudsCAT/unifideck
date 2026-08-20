@@ -58,8 +58,23 @@ def _ubisoft_prefix(game_id: str) -> Path:
     return compat_bridge.PREFIX_ROOT / "ubisoft" / game_id
 
 
+def _battlenet_prefix(game_id: str) -> Path:
+    """Per-game Battle.net prefix, read from the id map — never rebuilt."""
+    try:
+        from unifideck.launcher.proton.handlers.battlenet_client import resolve_prefix as _rp
+
+        recorded = _rp(game_id)
+        if recorded is not None:
+            return recorded
+    except (OSError, ValueError, ImportError):
+        pass
+    return _DATA_DIR / "prefixes" / "battlenet" / game_id
+
+
 def resolve_prefix(store: str, game_id: str) -> Path:
     """Prefix path for *store*/*game_id*, matching the launcher's resolution."""
+    if store == "battlenet":
+        return _battlenet_prefix(game_id)
     if store == "ubisoft":
         return _ubisoft_prefix(game_id)
     return compat_bridge.PREFIX_ROOT / game_id

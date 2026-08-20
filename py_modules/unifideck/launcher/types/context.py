@@ -5,12 +5,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from unifideck.launcher.wrapper_stores import is_wrapper_store
+
 KNOWN_STORES: tuple[str, ...] = (
     "epic",
     "gog",
     "amazon",
     "microsoft",
     "ubisoft",
+    "battlenet",
 )
 
 
@@ -51,7 +54,10 @@ class LaunchContext:
     @property
     def is_windows_game(self) -> bool:
         """Check whether windows game."""
-        if self.store == "ubisoft":
+        # Wrapper stores launch through a vendor client; their games
+        # legitimately carry no exe_path, so the extension sniff below
+        # would misroute them to the native path.
+        if is_wrapper_store(self.store):
             return True
         exe_str = str(self.exe_path).lower()
         return exe_str.endswith((".exe", ".cmd", ".bat"))

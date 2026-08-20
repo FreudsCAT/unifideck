@@ -80,35 +80,51 @@ class AuthShortcutsRPCMixin:
         """Auth-shortcut context for the Microsoft / xCloud launcher."""
         return _build_and_log("microsoft")
 
-    async def get_ubisoft_auth_shortcut_context(self) -> Any:
-        """Auth-shortcut context for the Ubisoft Connect launcher.
+    async def _wrapper_auth_shortcut_context(self, store_id: str) -> Any:
+        """Auth-shortcut context for any wrapper store.
 
-        Delegates to ``UbisoftStore.get_auth_shortcut_context``
-        which has its own VDF-scan + repair logic. Falls back to
-        a structured error if the Ubisoft store isn't registered
-        (test installs, partial deployments).
+        Wrapper stores (Ubisoft Connect, Battle.net, EA App next) sign in
+        through a vendor client launched from a Steam shortcut, and each
+        store owns its own VDF scan + repair. This resolves the store and
+        delegates; it is shared because the delegation is identical and a
+        per-store copy would drift.
+
+        Returns a structured error rather than raising when the store is
+        absent (test installs, partial deployments) so the frontend can
+        fall back to a temporary shortcut.
         """
-        logger.info("[AuthShortcuts:ubisoft] context requested")
-        store = self.registry.get("ubisoft")
+        tag = f"[AuthShortcuts:{store_id}]"
+        logger.info("%s context requested", tag)
+        # ``get`` RAISES KeyError for an unregistered store; ``get_store``
+        # is the None-returning variant this function's contract needs.
+        store = self.registry.get_store(store_id)
         if store is None:
-            logger.warning(
-                "[AuthShortcuts:ubisoft] store not registered",
-            )
+            logger.warning("%s store not registered", tag)
             return {"success": False, "error": "store_not_found"}
         if not hasattr(store, "get_auth_shortcut_context"):
-            logger.warning(
-                "[AuthShortcuts:ubisoft] store lacks "
-                "get_auth_shortcut_context method",
-            )
+            logger.warning("%s store lacks get_auth_shortcut_context", tag)
             return {"success": False, "error": "auth_shortcut_not_supported"}
         result = await store.get_auth_shortcut_context()
         logger.info(
-            "[AuthShortcuts:ubisoft] context resolved: success=%s "
-            "appid=%s",
+            "%s context resolved: success=%s appid=%s",
+            tag,
             result.get("success"),
             result.get("appid_unsigned"),
         )
         return result
+
+    async def get_ubisoft_auth_shortcut_context(self) -> Any:
+        """Auth-shortcut context for Ubisoft Connect.
+
+        A thin named route: the frontend addresses RPC methods by name, so
+        each wrapper store needs its own entry point even though the body
+        is shared.
+        """
+        return await self._wrapper_auth_shortcut_context("ubisoft")
+
+    async def get_battlenet_auth_shortcut_context(self) -> Any:
+        """Auth-shortcut context for the Battle.net client."""
+        return await self._wrapper_auth_shortcut_context("battlenet")
 
     async def get_compat_tool_for_game(self, store_game_id: str) -> Any:
         """See full doc on the body — logging-wrapped variant."""

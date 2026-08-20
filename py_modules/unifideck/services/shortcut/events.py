@@ -28,16 +28,23 @@ def _find_icon_for_appid(grid_dir: str, appid: int) -> str:
 
 
 def _apply_icon_updates(
-    shortcuts: dict[str, Any], grid_dir: str,
+    shortcuts: dict[str, Any], grid_dir: str, launcher_path: str = "",
 ) -> int:
-    """Walk ``shortcuts`` and update each entry's ``icon`` field in place.
+    """Walk *our* shortcuts and update each entry's ``icon`` field in place.
 
     Returns the count of entries actually mutated (skips entries
     whose ``icon`` field already points at the on-disk file).
+
+    Foreign entries are skipped. ``grid/`` is shared with every other
+    non-Steam tool on the device, so a file named for a foreign
+    shortcut's appid is *their* artwork — pointing that entry's ``icon``
+    at our resolved path rewrites a tile we do not own.
     """
+    from .write_guard import is_ours
+
     updated = 0
     for entry in shortcuts.values():
-        if not isinstance(entry, dict):
+        if not isinstance(entry, dict) or not is_ours(entry, launcher_path):
             continue
         appid = entry.get("appid")
         if not isinstance(appid, int):
@@ -48,6 +55,18 @@ def _apply_icon_updates(
         entry["icon"] = icon_path
         updated += 1
     return updated
+
+
+def _data_dir_of(svc: Any) -> str:
+    """Plugin data dir for *svc*, or ``""`` when it cannot be derived.
+
+    ``games.map`` sits at the data-dir root, so its parent is the dir.
+    Returning ``""`` disables backups rather than raising — this runs on
+    a background artwork handler, and a stub service without the
+    attribute must not break the icon refresh.
+    """
+    games_map = getattr(svc, "_games_map_path", "") or ""
+    return str(Path(games_map).parent) if games_map else ""
 
 
 async def _update_icons_from_grid(svc: Any) -> int:
@@ -74,9 +93,10 @@ async def _update_icons_from_grid(svc: Any) -> int:
     if not isinstance(shortcuts, dict):
         return 0
 
-    updated = _apply_icon_updates(shortcuts, grid_dir)
+    launcher = getattr(svc, "_launcher_path", "") or ""
+    updated = _apply_icon_updates(shortcuts, grid_dir, launcher)
     if updated > 0:
-        await write_vdf(shortcuts_path, data)
+        await write_vdf(shortcuts_path, data, _data_dir_of(svc))
         logger.info(
             "[ShortcutService] updated icons for %d shortcuts in shortcuts.vdf",
             updated,

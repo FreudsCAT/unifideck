@@ -30,19 +30,107 @@ log_warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # ── Argument parsing ─────────────────────────────────────────
-# Usage: ./build-plugin.sh [dev|prod] [install|quick-install]
-#   dev (default)     development build (auto-incremented dev number)
-#   prod              production build (uses package.json version)
-#   install           after build, full reinstall to ~/homebrew/plugins/Unifideck
-#                     (rm -rf + unzip + chown - ~30s)
-#   quick-install     skip build entirely, rsync source → install in seconds.
-#                     Use after editing Python / config / bundled binaries.
-#                     Includes defaults/ so config never drifts. For frontend
-#                     edits, run ``pnpm run build`` first to refresh dist/.
-ENV_MODE="${1:-dev}"
-# If the second argument is 'install', the script will automatically
-# copy the plugin to the Decky directory and restart the plugin_loader.
-INSTALL_AFTER="${2:-}"
+usage() {
+    cat <<'EOF'
+Usage: ./build-plugin.sh [dev|prod] [install|quick-install] [push]
+
+The mode is optional and defaults to dev, so it can be left off entirely.
+If you do name one, it must come first.
+
+  dev (default)     development build; stays entirely on this machine
+  prod              production build (uses package.json version)
+
+  install           after build, full reinstall to ~/homebrew/plugins/Unifideck
+                    (rm -rf + unzip + chown - ~30s)
+  quick-install     skip build entirely, rsync source → install in seconds.
+                    Use after editing Python / config / bundled binaries.
+                    Includes defaults/ so config never drifts. For frontend
+                    edits, run `pnpm run build` first to refresh dist/.
+  push              dev only: publish the built zip to GitHub as a new
+                    "Dev-*" prerelease and retire the previous one. WITHOUT
+                    this argument nothing is ever uploaded to GitHub.
+  -h, --help        show this message
+
+Examples:
+  ./build-plugin.sh                  # local dev zip, no install, no upload
+  ./build-plugin.sh quick-install    # fastest deploy to the live plugin
+  ./build-plugin.sh install push     # rebuild, install, publish for testers
+  ./build-plugin.sh push             # dev build, publish it for testers
+  ./build-plugin.sh prod             # release zip in out/
+EOF
+}
+
+# `push` is deliberately opt-in. Publishing creates a remote tag + prerelease
+# AND deletes the previous dev release, so an ordinary local iteration build
+# must never touch the repo of its own accord (see publish_dev_release).
+case "${1:-}" in
+    -h|--help|help)
+        usage
+        exit 0
+        ;;
+esac
+
+# The mode is OPTIONAL, not merely defaulted: only consume $1 when it actually
+# names one. Eating $1 unconditionally made every mode-less invocation die on
+# "Unknown mode: push" - a dev build is the overwhelmingly common case and
+# should not have to be spelled out.
+ENV_MODE="dev"
+case "${1:-}" in
+    dev|prod)
+        ENV_MODE="$1"
+        shift
+        ;;
+esac
+INSTALL_AFTER=""
+PUSH_DEV_RELEASE=0
+
+# Every argument is validated. Silently ignoring an unrecognised one (as this
+# used to for $2) costs a full build cycle to notice - a typo'd "instal" simply
+# never installed.
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help|help)
+            usage
+            exit 0
+            ;;
+        install|quick-install)
+            if [ -n "$INSTALL_AFTER" ] && [ "$INSTALL_AFTER" != "$arg" ]; then
+                log_error "Cannot combine 'install' and 'quick-install'."
+                echo ""
+                usage
+                exit 1
+            fi
+            INSTALL_AFTER="$arg"
+            ;;
+        push)
+            PUSH_DEV_RELEASE=1
+            ;;
+        dev|prod)
+            # Only reachable when the mode is misplaced ("push dev"), since a
+            # leading mode was already consumed above.
+            log_error "'$arg' is a build mode: put it first, or omit it"
+            log_error "  entirely for a dev build."
+            exit 1
+            ;;
+        *)
+            log_error "Unknown argument: $arg"
+            echo ""
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+if [ "$PUSH_DEV_RELEASE" = "1" ] && [ "$ENV_MODE" = "prod" ]; then
+    log_error "'push' is a dev-only argument. Production releases go through"
+    log_error "  the draft-release flow, not the dev prerelease tag."
+    exit 1
+fi
+if [ "$PUSH_DEV_RELEASE" = "1" ] && [ "$INSTALL_AFTER" = "quick-install" ]; then
+    log_error "'push' cannot be combined with 'quick-install': quick-install"
+    log_error "  rsyncs the source tree and never builds a zip to publish."
+    exit 1
+fi
 
 # Parse the base version from package.json (the JS/UI project).
 # We use grep/sed here instead of `jq` so we don't require the user to have `jq` installed.
@@ -67,16 +155,18 @@ elif [[ "$ENV_MODE" == "dev" ]]; then
     mkdir -p "$OUTPUT_DIR"
 
     # ── Dev build identifier ──────────────────────────────────
-    # Each dev build publishes its own GitHub prerelease, tagged
-    # "Dev-<date>-<time>-<sha>" (see publish_dev_release). That tag is
-    # deliberately free of any "X.Y" substring, so the updater's version
-    # parser can't turn it into a semver - meaning nothing in the GitHub
-    # API's version field can tell two dev builds apart. We bake a
-    # self-describing identifier (branch + short commit SHA) into the asset
-    # FILENAME itself, and stamp the same value into dev_build.json
-    # inside the zip (see _write_dev_build_json), so the pre-install
-    # dropdown (reads the filename) and the post-install "Current" line
-    # (reads dev_build.json) show the same build id.
+    # A dev build that is pushed (the `push` argument) publishes its own
+    # GitHub prerelease, tagged "Dev-<date>-<time>-<sha>" (see
+    # publish_dev_release). That tag is deliberately free of any "X.Y"
+    # substring, so the updater's version parser can't turn it into a semver -
+    # meaning nothing in the GitHub API's version field can tell two dev builds
+    # apart. We bake a self-describing identifier (branch + short commit SHA)
+    # into the asset FILENAME itself, and stamp the same value into
+    # dev_build.json inside the zip (see _write_dev_build_json), so the
+    # pre-install dropdown (reads the filename) and the post-install "Current"
+    # line (reads dev_build.json) show the same build id. Local-only builds
+    # carry the same identifier - it is what tells two unpushed zips in out/
+    # apart too.
     #
     # Branch name (not $PACKAGE_VERSION) leads the identifier: working
     # branches are named after the target version (e.g. "0.7.1") while
@@ -121,6 +211,8 @@ elif [[ "$ENV_MODE" == "dev" ]]; then
     PLUGIN_VERSION="$PACKAGE_VERSION-dev.$DEV_BUILD_ID"
     log_info "Building in DEVELOPMENT mode ($VERSION_TAG)"
 else
+    # Unreachable: the parser above only ever assigns "dev" or "prod". Kept as
+    # a backstop so a future edit to that case can't silently build nothing.
     log_error "Unknown mode: $ENV_MODE. Use 'dev' or 'prod'."
     exit 1
 fi
@@ -616,10 +708,93 @@ _stage_plugin_files() {
     done
 
     # Build-time leftovers that must never ship: the per-binary download stamps
-    # (see prebuild_binaries) and any half-finished download, plus mypy's cache,
-    # which the copy above otherwise drags in from py_modules/.
+    # (see prebuild_binaries) and any half-finished download, plus the lint
+    # caches, which the copy above otherwise drags in from py_modules/. Both
+    # caches are created by simply running the CI gate block before a build,
+    # so a release build is exactly when they are most likely to be present.
     rm -f "$dest"/bin/*.url "$dest"/bin/*.new
-    rm -rf "$dest/py_modules/.mypy_cache"
+    rm -rf "$dest/py_modules/.mypy_cache" "$dest/py_modules/.import_linter_cache"
+}
+
+# ── Skip the Decky CLI's redundant binary re-download ─────────
+# The CLI downloads every ``remote_binary`` entry from package.json into the
+# container on EVERY build - the same ~28 MB of store CLIs that
+# ``prebuild_binaries`` already fetched, verified and cached in bin/, and that
+# ``_stage_plugin_files`` already copied into the staging dir. It then
+# overwrites our copies with byte-identical ones.
+#
+# That download WAS the single largest cost of a full build. Measured A/B on
+# this Deck, same tree, warm caches, minutes apart:
+#
+#     with the CLI download    320 s total (312 s in the container)
+#     without it                47 s total ( 40 s in the container)
+#
+# 28 MB in 272 s is ~103 KB/s. The same asset fetched from the HOST with curl,
+# the same afternoon, came down at 8.7 MB/s - roughly 85x faster. So this is not
+# "GitHub is slow to a Deck", as it long appeared to be: it is the container's
+# network path. Which is why it never looked like a variable-network problem -
+# it was reliably, boringly slow on every single build.
+#
+# The CLI also has no cache, so it paid that cost whether or not a version had
+# been bumped. A bump merely made it visible, because that is the one build
+# where prebuild_binaries re-downloads too and you pay twice.
+#
+# So: strip ``remote_binary`` from the STAGED package.json - a throwaway copy in
+# a temp dir - and let the CLI zip the binaries we staged. The repo's own
+# package.json is never touched, so the manifest the Decky Store builds from,
+# and the CI check that keeps it in sync with this script, are unaffected.
+#
+# The CLI's download step is also what verified those binaries' checksums, so we
+# do it here instead, against the same ``sha256hash`` values from the same
+# manifest. If ANY binary is missing or mismatched we leave ``remote_binary``
+# alone and let the CLI fetch it the slow way - correctness first, speed second.
+_stage_skip_cli_binary_download() {
+    local staged="$1"
+    local pkg="$staged/package.json"
+    [ -f "$pkg" ] || return 0
+
+    local verified
+    if ! verified=$(STAGED_BIN_DIR="$staged/bin" python3 - "$pkg" <<'PY'
+import hashlib, json, os, sys
+
+pkg_path = sys.argv[1]
+bin_dir = os.environ["STAGED_BIN_DIR"]
+with open(pkg_path) as fh:
+    pkg = json.load(fh)
+
+entries = pkg.get("remote_binary") or []
+if not entries:
+    raise SystemExit(1)  # nothing to strip; let the CLI do whatever it does
+
+for entry in entries:
+    path = os.path.join(bin_dir, entry["name"])
+    if not os.path.isfile(path) or not os.access(path, os.X_OK):
+        print("missing or non-executable: " + entry["name"], file=sys.stderr)
+        raise SystemExit(1)
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    expected = (entry.get("sha256hash") or "").lower()
+    if not expected:
+        print("no sha256hash in manifest: " + entry["name"], file=sys.stderr)
+        raise SystemExit(1)
+    if digest.hexdigest() != expected:
+        print("checksum mismatch: " + entry["name"], file=sys.stderr)
+        raise SystemExit(1)
+
+pkg.pop("remote_binary")
+with open(pkg_path, "w") as fh:
+    json.dump(pkg, fh, indent=2)
+    fh.write("\n")
+print(len(entries))
+PY
+    ); then
+        log_warn "Staged binaries failed verification - letting the Decky CLI"
+        log_warn "  re-download them (slower, but guaranteed correct)."
+        return 0
+    fi
+    log_success "Verified $verified bundled binaries (sha256); skipping the CLI re-download"
 }
 
 # ── Build with Decky CLI (Docker/Podman) ─────────────────────
@@ -638,22 +813,34 @@ build_with_cli() {
             "$engine" run --rm -v "$SCRIPT_DIR":/v -w /v alpine rm -rf dist
     fi
 
-    # Stage files into a clean temporary directory.
+    # Stage files into a clean temporary directory. A trap removes it on any
+    # exit path, because a CLI failure trips `set -e` and would otherwise leak
+    # a full source copy into /tmp. The path is baked into the trap now since
+    # function-locals are not visible to the EXIT trap.
     local staging; staging=$(mktemp -d)
+    trap "rm -rf '$staging'" EXIT
     local staging_plugin="$staging/unifideck-staging"
     _stage_plugin_files "$staging_plugin"
+    _stage_skip_cli_binary_download "$staging_plugin"
     chmod -R a+rX "$staging_plugin" 2>/dev/null || true
 
-    # Fire up the Decky CLI builder
+    # Fire up the Decky CLI builder. By default the CLI stages its own temp
+    # copy under /tmp/decky. A previous root-context build can leave that
+    # directory root-owned, and a deck build then cannot write into it, which
+    # fails with "Temporary build directory already exists / Permission
+    # denied". Point it at a fresh directory inside our own deck-owned staging
+    # tree so a stray root-owned /tmp/decky can never block a sudo-less build.
     mkdir -p "$OUTPUT_DIR"
     "$CLI_LOCATION/decky" plugin build "$staging_plugin" \
         --output-path "$OUTPUT_DIR" \
+        --tmp-output-path "$staging/decky-tmp" \
         --engine "$engine" \
         --follow-symlinks \
         --build-as-root
 
-    # Clean up staging dir
+    # Clean up staging dir (and disarm the trap set above)
     rm -rf "$staging"
+    trap - EXIT
 
     # The CLI hardcodes the output name to "Unifideck.zip". We rename it to our versioned format.
     local expected="$OUTPUT_DIR/Unifideck.zip"
@@ -687,6 +874,7 @@ build_local() {
 
     mkdir -p "$OUTPUT_DIR"
     local build_dir; build_dir=$(mktemp -d)
+    trap "rm -rf '$build_dir'" EXIT
     local plugin_dir="$build_dir/Unifideck"
     _stage_plugin_files "$plugin_dir"
 
@@ -777,6 +965,10 @@ build_local() {
         "py_modules/unifideck/stores/amazon/amazon_store.py"
         "py_modules/unifideck/stores/ubisoft/__init__.py"
         "py_modules/unifideck/stores/ubisoft/store.py"
+    "py_modules/unifideck/stores/battlenet/__init__.py"
+    "py_modules/unifideck/stores/battlenet/store.py"
+    "py_modules/unifideck/launcher/proton/handlers/battlenet.py"
+    "py_modules/unifideck/launcher/proton/wrapper_stores.py"
         "py_modules/unifideck/stores/microsoft/__init__.py"
         "py_modules/unifideck/stores/microsoft/microsoft_store.py"
 
@@ -887,6 +1079,7 @@ build_local() {
 
     cd "$SCRIPT_DIR"
     rm -rf "$build_dir"
+    trap - EXIT
 
     # Stamped for both dev and prod builds - see _write_dev_build_json.
     if [ -f "$OUTPUT_FILE" ]; then
@@ -1039,15 +1232,29 @@ install_plugin() {
     sudo systemctl stop plugin_loader 2>/dev/null || true
     sleep 1
 
+    # Extract to a staging dir FIRST, swap only once it succeeded. This used to
+    # rm -rf the live install and *then* unzip, so any extraction failure left
+    # the Deck with no plugin at all - which is exactly what happened: the unzip
+    # ran without sudo while $plugins_dir is root-owned (Decky Loader owns it),
+    # so it could not create the directory it had just deleted. quick_install
+    # sudo's every write, which is why only this path was affected.
+    local staging_install="$plugins_dir/.Unifideck.incoming"
+    log_info "Extracting to $plugins_dir..."
+    sudo rm -rf "$staging_install"
+    if ! sudo unzip -qo "$OUTPUT_FILE" -d "$staging_install" \
+            || [ ! -d "$staging_install/Unifideck" ]; then
+        log_error "Extraction failed - existing installation left untouched"
+        sudo rm -rf "$staging_install"
+        sudo systemctl start plugin_loader
+        return 1
+    fi
+
     if [ -d "$install_dir" ]; then
         log_info "Removing existing installation..."
         sudo rm -rf "$install_dir"
     fi
-
-    log_info "Extracting to $plugins_dir..."
-    cd "$plugins_dir" && unzip -qo "$OUTPUT_FILE" && cd "$SCRIPT_DIR"
-
-    [ -d "$install_dir" ] || { log_error "Extraction failed"; sudo systemctl start plugin_loader; return 1; }
+    sudo mv "$staging_install/Unifideck" "$install_dir"
+    sudo rm -rf "$staging_install"
 
     # Ensure permissions are correct; decky-loader runs as root, but plugin directories
     # are usually owned by deck:deck.
@@ -1062,7 +1269,12 @@ install_plugin() {
 }
 
 # ── Publish the dev build to a NEW GitHub release ─────────────
-# Every dev build gets its OWN prerelease, tagged
+# OPT-IN: this runs only when the ``push`` argument is passed. A plain
+# ``./build-plugin.sh dev`` (or ``dev install``) never contacts GitHub. It used
+# to publish on every run, which meant a throwaway iteration build silently
+# created a remote tag and deleted whatever dev release testers were on.
+#
+# A pushed dev build gets its OWN prerelease, tagged
 # ``Dev-<UTCdate>-<UTCtime>-<shortsha>`` (e.g. ``Dev-20260808-171205-47e6d28``).
 # That is how testers get an unreleased build: the in-plugin updater lists
 # prereleases in its version picker and installs the ``.zip`` asset.
@@ -1091,17 +1303,28 @@ install_plugin() {
 #   1. ``$GH_TOKEN`` / ``$GITHUB_TOKEN`` from the environment;
 #   2. the token the git credential helper already keeps in
 #      ``~/.git-credentials`` (``credential.helper=store``).
-# The value is only ever held in a local, never echoed. If neither source
-# yields a token the upload is skipped with a warning. It must never be
-# possible for a missing credential to fail somebody's build.
+# The value is only ever held in a local, never echoed.
 #
-# Skipped entirely for: prod builds (those go to a real versioned release via
-# the draft flow), CI (a runner must not publish tester builds), and
-# whenever ``UNIFIDECK_SKIP_DEV_UPLOAD`` is set to anything non-empty.
+# Skipped entirely for: any build without the ``push`` argument (the default),
+# prod builds (those go to a real versioned release via the draft flow), CI (a
+# runner must not publish tester builds), and whenever
+# ``UNIFIDECK_SKIP_DEV_UPLOAD`` is set to anything non-empty - that env var is
+# now redundant with the default-off behaviour, but is kept as a hard override
+# that still wins over an explicit ``push``.
+#
+# A missing credential can no longer be shrugged off the way it was when
+# publishing was implicit: once ``push`` is typed, failing to publish IS a
+# failure. Every hard failure below sets ``DEV_PUBLISH_FAILED``, which makes
+# ``main`` exit non-zero AFTER any requested install still runs. The build
+# artifact itself is never affected - the zip is already on disk by then.
 DEV_TAG_PREFIX="Dev-"
 LEGACY_DEV_TAG="Dev"
 RETIRED_DEV_NAME="Dev (retired: use the newest Dev build)"
 GH_REPO_SLUG="mubaraknumann/unifideck"
+# Set by publish_dev_release when an explicitly requested push did not land.
+# Read by main() only after install_plugin, so a failed upload never costs you
+# the install you also asked for.
+DEV_PUBLISH_FAILED=0
 
 _gh_token() {
     # Echoes the token on stdout for capture into a local. Never log this.
@@ -1127,8 +1350,14 @@ publish_dev_release() {
     if [[ "$ENV_MODE" == "prod" ]]; then
         return 0
     fi
+    if [ "$PUSH_DEV_RELEASE" != "1" ]; then
+        log_info "Not published to GitHub (local build)."
+        log_info "  Re-run with 'push' to publish this build for testers."
+        return 0
+    fi
     if [ -n "${UNIFIDECK_SKIP_DEV_UPLOAD:-}" ]; then
-        log_info "Dev release upload skipped (UNIFIDECK_SKIP_DEV_UPLOAD set)"
+        log_warn "Dev release upload skipped (UNIFIDECK_SKIP_DEV_UPLOAD set)."
+        log_warn "  Unset it to let 'push' publish."
         return 0
     fi
     if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ]; then
@@ -1136,15 +1365,17 @@ publish_dev_release() {
         return 0
     fi
     if [ ! -f "$OUTPUT_FILE" ]; then
-        log_warn "Dev release upload skipped ($ZIP_NAME not found)"
+        log_error "Cannot publish: $ZIP_NAME not found in out/."
+        DEV_PUBLISH_FAILED=1
         return 0
     fi
 
     local token; token=$(_gh_token 2>/dev/null || true)
     if [ -z "$token" ]; then
-        log_warn "Dev release upload skipped (no GitHub token found)."
-        log_warn "  Set GH_TOKEN, or run 'git push' once so the credential"
-        log_warn "  helper stores one. Build itself is unaffected."
+        log_error "Cannot publish: no GitHub token found."
+        log_error "  Set GH_TOKEN, or run 'git push' once so the credential"
+        log_error "  helper stores one. The built zip is still in out/."
+        DEV_PUBLISH_FAILED=1
         return 0
     fi
 
@@ -1186,8 +1417,9 @@ if not resolved:
 print(resolved)
 ' 2>/dev/null) || target=""
     if [ -z "$target" ]; then
-        log_warn "Dev release upload skipped. Could not reach the GitHub API,"
-        log_warn "  or the token lacks repo scope. Nothing was changed."
+        log_error "Publish failed. Could not reach the GitHub API, or the"
+        log_error "  token lacks repo scope. Nothing was changed."
+        DEV_PUBLISH_FAILED=1
         return 0
     fi
     # $GIT_SHA is abbreviated but the API echoes the full sha back, so this has
@@ -1235,8 +1467,9 @@ except (urllib.error.URLError, OSError, ValueError, KeyError):
     raise SystemExit(1)
 ' 2>/dev/null) || release_id=""
     if [ -z "$release_id" ]; then
-        log_warn "Dev release upload skipped. Could not create the '$tag'"
-        log_warn "  release. Nothing was changed."
+        log_error "Publish failed. Could not create the '$tag' release."
+        log_error "  Nothing was changed."
+        DEV_PUBLISH_FAILED=1
         return 0
     fi
 
@@ -1250,9 +1483,10 @@ except (urllib.error.URLError, OSError, ValueError, KeyError):
             --data-binary "@$OUTPUT_FILE" \
             "https://uploads.github.com/repos/$GH_REPO_SLUG/releases/$release_id/assets?name=$ZIP_NAME" \
             >/dev/null 2>&1; then
-        log_warn "Dev release upload failed. Rolling back the empty '$tag'"
-        log_warn "  release. The previous dev release is untouched."
+        log_error "Publish failed on asset upload. Rolling back the empty"
+        log_error "  '$tag' release. The previous dev release is untouched."
         _dev_release_delete "$api" "$token" "$release_id" "$tag"
+        DEV_PUBLISH_FAILED=1
         return 0
     fi
     log_success "Published $ZIP_NAME as the '$tag' release"
@@ -1320,6 +1554,29 @@ for rel in releases:
     echo ""
 }
 
+# ── Phase timing ──────────────────────────────────────────────
+# Build time on a Deck is dominated by network and I/O, both of which vary
+# wildly hour to hour. Without per-phase numbers every slowdown gets blamed on
+# whatever changed most recently, which is how the ~28 MB binary re-download
+# went unnoticed for so long. Printed as a summary at the end of every build.
+BUILD_PHASE_LOG=""
+_phase() {
+    local label="$1"; shift
+    local start; start=$SECONDS
+    "$@"
+    local rc=$?
+    BUILD_PHASE_LOG+=$(printf '\n  %-26s %4ss' "$label" "$((SECONDS - start))")
+    return $rc
+}
+
+_print_phase_summary() {
+    [ -n "$BUILD_PHASE_LOG" ] || return 0
+    echo ""
+    log_info "Build phases:${BUILD_PHASE_LOG}"
+    printf '  %-26s %4ss\n' "TOTAL" "$SECONDS"
+    echo ""
+}
+
 # ── Main Execution Flow ───────────────────────────────────────
 main() {
     # quick-install short-circuits the full build pipeline. Use it
@@ -1331,11 +1588,11 @@ main() {
     fi
 
     # Run pre-flight checks
-    prebuild_binaries
+    _phase "binaries" prebuild_binaries
     check_requirements
-    vendor_deps
-    vendor_launcher_cffi
-    gen_locales
+    _phase "vendor python deps" vendor_deps
+    _phase "vendor launcher cffi" vendor_launcher_cffi
+    _phase "locales" gen_locales
     sync_version
 
     # Attempt Decky CLI containerized build first
@@ -1343,22 +1600,31 @@ main() {
         ENGINE=$(check_container_engine || true)
         if [ -n "$ENGINE" ]; then
             chmod -R a+rwX "$SCRIPT_DIR" || true
-            build_with_cli "$ENGINE"
+            _phase "containerized build" build_with_cli "$ENGINE"
         else
             log_warn "No container engine available - falling back to local build"
-            build_local
+            _phase "local build" build_local
         fi
     else
         # Fallback if Decky CLI is totally broken
-        build_local
+        _phase "local build" build_local
     fi
 
     # Publish this build as a fresh dev prerelease so testers get it.
-    publish_dev_release
+    # Opt-in: a no-op unless the 'push' argument was passed.
+    _phase "github publish" publish_dev_release
+    _print_phase_summary
 
     # Auto-install if requested
     if [[ "$INSTALL_AFTER" == "install" ]]; then
         install_plugin
+    fi
+
+    # Report a requested-but-failed push in the exit code, last, so the install
+    # above still happened. The zip in out/ is valid either way.
+    if [ "$DEV_PUBLISH_FAILED" = "1" ]; then
+        log_error "Build succeeded but the GitHub publish did not."
+        return 1
     fi
 }
 

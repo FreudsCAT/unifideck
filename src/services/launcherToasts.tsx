@@ -68,7 +68,15 @@ export function startLauncherToastPoll(): () => void {
 }
 
 function showLauncherToast(ev: LauncherToast): void {
-  const params = (ev.i18n_params ?? {}) as Record<string, string>;
+  // `game_title` is a top-level payload field, but the strings interpolate
+  // it as `{{gameTitle}}` — so without merging it in here every launcher
+  // toast rendered with the placeholder unfilled ("Starting  through
+  // Battle.net…"). An explicit i18n_params entry still wins, since a caller
+  // that named the variable meant it.
+  const params = {
+    ...(ev.game_title ? { gameTitle: ev.game_title } : {}),
+    ...((ev.i18n_params ?? {}) as Record<string, string>),
+  } as Record<string, string>;
 
   // Cloud-save conflict → modal so the user can pick keep-local/remote.
   if (ev.action?.verb === "retry-sync") {

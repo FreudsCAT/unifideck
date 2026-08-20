@@ -26,13 +26,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from unifideck.stores.shared.wine_path import wine_path_to_linux
+
 from .detection_helpers import (
     load_json_file_safe,
     looks_like_game_install,
     walk_install_candidates,
     write_marker_sync,
 )
-from .wine_path import wine_path_to_linux
 
 if TYPE_CHECKING:
     from .detection import _InstallDetector

@@ -32,6 +32,7 @@ from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
 from unifideck.launcher.proton.infrastructure.prefix_layout import (
     normalize_prefix_root,
 )
+from unifideck.launcher.wrapper_stores import skips_generic_compat
 
 from .vcruntime import apply_vcruntime_fix, vcruntime_fix_pending
 from .winetricks import apply_winetricks, winetricks_pending
@@ -55,7 +56,7 @@ def compat_work_pending(plan: ProtonLaunchPlan) -> bool:
     Mirrors the steps' own guards rather than re-deriving them, so this can
     never disagree with what they'd decide.
     """
-    if plan.context.store == "ubisoft":
+    if skips_generic_compat(plan.context.store):
         return False
     prefix_root = normalize_prefix_root(plan.prefix_path)
     if not (prefix_root / "system.reg").is_file():
@@ -91,14 +92,15 @@ async def apply_prefix_compat(
     can't catch). The install-time warmup uses this to retry once with
     the managed GE-Proton; the launch path ignores it.
     """
-    # Ubisoft games launch through UPC, which installs its own
+    # Wrapper stores launch through a vendor client that installs its own
     # redistributables — our generic winetricks/vcredist step is redundant
-    # and only adds a first-launch delay. The cloned per-game prefix +
-    # UPC are all that's needed, so skip generic compat entirely.
-    if plan.context.store == "ubisoft":
+    # and only adds a first-launch delay. The cloned per-game prefix plus
+    # the vendor client are all that's needed, so skip generic compat.
+    if skips_generic_compat(plan.context.store):
         logger.info(
-            "[compat] skipping generic redistributables for ubisoft "
-            "(UPC installs its own)",
+            "[compat] skipping generic redistributables for %s "
+            "(its client installs its own)",
+            plan.context.store,
         )
         return False
     # No initialised prefix (``createprefix`` hasn't produced ``system.reg``)

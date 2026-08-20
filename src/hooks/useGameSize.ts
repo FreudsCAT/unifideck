@@ -15,16 +15,29 @@
  * The cache is keyed by `"<appId>:<installed>"`, NOT `appId` alone:
  * the backend returns the *download* size while not-installed and
  * the *on-disk* size once installed, so a game that finishes
- * installing must refetch instead of showing the stale pre-install
- * number. Keying on the install state turns that transition into a
- * natural cache miss (no explicit invalidation needed). The
- * module-level cache also de-dupes the fetch so the play-section
- * `MetaInline` and the info-panel size cell share one round-trip.
+ * installing shows the right number rather than the stale pre-install
+ * one. The module-level cache also de-dupes the fetch so the
+ * play-section `MetaInline` and the info-panel size cell share one
+ * round-trip.
+ *
+ * That key used to be the ONLY invalidation, on the reasoning that the
+ * install-state transition is a natural cache miss. It is not enough.
+ * A wrapper store (Ubisoft, Battle.net) once reported "installed" the
+ * moment its Wine prefix was created, so the prefix-only measurement
+ * landed under the same `<appId>:1` key the finished install would
+ * read — and with no other invalidation, that wrong number was served
+ * for the rest of the Steam session. Sizes are now forgotten
+ * explicitly via `lib/game-size-cache`, which also covers the cases the
+ * key never could: a game growing on update or shrinking when DLC goes.
  */
 import { useEffect, useState } from "react";
 import { call } from "@decky/api";
 import { unwrapRpcEnvelope } from "../api/useRPC";
 import { rpcRoutes } from "../api/rpc-routes";
+import {
+  onGameSizeInvalidated,
+  registerGameSizeCache,
+} from "../lib/game-size-cache";
 
 const cache = new Map<string, number>();
 const inflight = new Map<string, Promise<number>>();
@@ -32,6 +45,19 @@ const inflight = new Map<string, Promise<number>>();
 function cacheKey(appId: number, installed: boolean): string {
   return `${appId}:${installed ? 1 : 0}`;
 }
+
+// Drop both install states for the app, and any fetch already in the air —
+// an in-flight promise resolves into `cache`, so leaving it would write the
+// stale value straight back after the invalidation.
+registerGameSizeCache((appId) => {
+  const prefix = `${appId}:`;
+  for (const key of [...cache.keys()]) {
+    if (key.startsWith(prefix)) cache.delete(key);
+  }
+  for (const key of [...inflight.keys()]) {
+    if (key.startsWith(prefix)) inflight.delete(key);
+  }
+});
 
 async function fetchSize(appId: number, key: string): Promise<number> {
   const cached = cache.get(key);
@@ -76,6 +102,16 @@ export function useGameSize(
   const [size, setSize] = useState<number | undefined>(
     key != null ? cache.get(key) : undefined,
   );
+  // Bumped on invalidation to re-run the effect below. The cache entry is
+  // already gone by then, so the re-run is a miss and refetches.
+  const [generation, setGeneration] = useState(0);
+
+  useEffect(() => {
+    if (appId == null) return;
+    return onGameSizeInvalidated((invalidated) => {
+      if (invalidated === appId) setGeneration((n) => n + 1);
+    });
+  }, [appId]);
 
   useEffect(() => {
     if (appId == null || key == null) {
@@ -98,7 +134,7 @@ export function useGameSize(
     return () => {
       cancelled = true;
     };
-  }, [appId, key]);
+  }, [appId, key, generation]);
 
   return size;
 }
