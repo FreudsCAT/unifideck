@@ -47,7 +47,7 @@ from unifideck.launcher.proton.handlers import battlenet_bootstrap as bootstrap
 from unifideck.launcher.proton.handlers import battlenet_login_state as login_state
 from unifideck.launcher.proton.handlers import battlenet_session as session
 from unifideck.launcher.proton.handlers import battlenet_watch as watch
-from unifideck.launcher.proton.handlers import wrapper_clients
+from unifideck.launcher.proton.handlers import battlenet_wsi, wrapper_clients
 from unifideck.launcher.proton.handlers.battlenet_client import (
     find_client_exe,
     find_launcher_exe,
@@ -58,10 +58,10 @@ from unifideck.launcher.proton.infrastructure.container_escape import (
     escape_argv,
 )
 from unifideck.launcher.proton.infrastructure.core import ProtonLaunchPlan
-from unifideck.launcher.proton.infrastructure.umu_runtime import (
+from unifideck.launcher.proton.infrastructure.game_log import (
     open_game_log,
-    run_umu_with_retry,
 )
+from unifideck.launcher.proton.infrastructure.umu_runtime import run_umu_with_retry
 from unifideck.launcher.types.errors import GameFailedError
 
 logger = logging.getLogger(__name__)
@@ -286,14 +286,11 @@ async def _start_client_here(plan: ProtonLaunchPlan, launcher_exe: Path) -> None
     # writing the tweaks first would make this prefix's file the newer one and
     # the settings would stay behind in the prefix they were changed in.
     await bootstrap.ensure_tweaks(plan)
-    proc = await _start_client_detached(plan, launcher_exe)
-    launcher_toast(
-        "toasts.launcher.battlenetStartingClientMessage",
-        i18n_title_key="toasts.launcher.battlenetStartingClient",
-        game_title=resolve_title(plan.context.game_key),
-    )
-    if not await watch.wait_for_client_ready(
-        plan.prefix_path, CLIENT_READY_TIMEOUT, proc=proc,
+    if await _try_start(plan, launcher_exe):
+        return
+    # One retry, and only for a crash we can name. See battlenet_wsi.
+    if not await battlenet_wsi.adopt_workaround(
+        plan, resolve_title(plan.context.game_key),
     ):
         raise _fail(
             plan,
@@ -301,6 +298,28 @@ async def _start_client_here(plan: ProtonLaunchPlan, launcher_exe: Path) -> None
             "Battle.net client did not become ready",
             timeout=CLIENT_READY_TIMEOUT,
         )
+    await _clear_stale_session(plan)
+    if not await _try_start(plan, launcher_exe):
+        raise _fail(
+            plan,
+            "battlenetClientNotReady",
+            "Battle.net client did not become ready, with and without the "
+            "gamescope WSI layer",
+            timeout=CLIENT_READY_TIMEOUT,
+        )
+
+
+async def _try_start(plan: ProtonLaunchPlan, launcher_exe: Path) -> bool:
+    """Start the client and wait for it to be able to accept commands."""
+    proc = await _start_client_detached(plan, launcher_exe)
+    launcher_toast(
+        "toasts.launcher.battlenetStartingClientMessage",
+        i18n_title_key="toasts.launcher.battlenetStartingClient",
+        game_title=resolve_title(plan.context.game_key),
+    )
+    return await watch.wait_for_client_ready(
+        plan.prefix_path, CLIENT_READY_TIMEOUT, proc=proc,
+    )
 
 
 async def _require_signed_in(plan: ProtonLaunchPlan) -> None:

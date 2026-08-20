@@ -43,11 +43,21 @@ logger = logging.getLogger(__name__)
 # and ``Agent`` separately because it survives the client window closing
 # and owns every download.
 VENDOR_LOG_GLOBS: dict[str, tuple[str, ...]] = {
+    # Measured against a real failing prefix on 2026-08-19: of the globs
+    # first guessed here, only ``Agent/Logs/*.log`` matched anything. The
+    # client's own logs are under ``ProgramData/Battle.net/Logs`` (not
+    # Roaming, and not beside the executable), and the bootstrapper writes
+    # ``Setup`` logs one level deeper than assumed. Keep the misses: they
+    # cost one failed glob each and vendors move these between builds.
     "battlenet": (
-        "ProgramData/Battle.net/Setup/*.log",
-        "ProgramData/Battle.net/Agent/Agent.log",
+        "ProgramData/Battle.net/Logs/*.log",
         "ProgramData/Battle.net/Agent/Logs/*.log",
+        "ProgramData/Battle.net/Agent/Agent.log",
+        "ProgramData/Battle.net/Setup/*.log",
+        "ProgramData/Battle.net/Setup/*/*.log",
+        "ProgramData/Battle.net/*.log",
         "users/steamuser/AppData/Roaming/Battle.net/Logs/*.log",
+        "users/steamuser/AppData/Local/Battle.net/Logs/*.log",
         "Program Files (x86)/Battle.net/Logs/*.log",
         "Program Files (x86)/Battle.net/Battle.net Launcher.log",
     ),

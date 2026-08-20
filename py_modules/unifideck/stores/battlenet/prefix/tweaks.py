@@ -82,6 +82,38 @@ def write_client_config(drive_c: Path) -> bool:
     except OSError as exc:
         logger.warning("[Battlenet] cannot write %s: %s", path, exc)
         return False
+    return _confirm_written(path)
+
+
+def _confirm_written(path: Path) -> bool:
+    """Read the file back and report what the client will actually see.
+
+    Not ceremony. ``HardwareAcceleration=false`` is the documented cure for
+    the client's GPU renderer, it was applied to a failing prefix in the
+    same millisecond the client started, and the renderer initialised ANGLE
+    and aborted anyway. Distinguishing "we wrote it and the client ignored
+    it" from "we never wrote what we think we wrote" took a whole round
+    trip with a tester; reading it back costs one stat and settles it in
+    the log.
+    """
+    settings = _load_config(path).get("Client")
+    if not isinstance(settings, dict):
+        logger.warning(
+            "[Battlenet] wrote %s but it reads back with no Client section", path,
+        )
+        return False
+    missing = {
+        key for key, value in _CLIENT_SETTINGS.items() if settings.get(key) != value
+    }
+    if missing:
+        logger.warning(
+            "[Battlenet] %s did not keep %s", path, sorted(missing),
+        )
+        return False
+    logger.info(
+        "[Battlenet] client config in force: %s",
+        {key: settings.get(key) for key in _CLIENT_SETTINGS},
+    )
     return True
 
 

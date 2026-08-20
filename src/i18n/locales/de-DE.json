@@ -361,6 +361,8 @@
       "battlenetInstallingClientMessage": "Der Battle.net-Client wird eingerichtet — das kann einige Minuten dauern.",
       "battlenetRepairingClient": "Battle.net wird repariert",
       "battlenetRepairingClientMessage": "Der Battle.net-Client ist unvollständig und wird neu installiert. Das kann einige Minuten dauern.",
+      "battlenetRetryingWithoutWsi": "Battle.net wird erneut versucht",
+      "battlenetRetryingWithoutWsiMessage": "Der Battle.net-Client ist auf diesem Gerät in einer Grafikschicht abgestürzt. Neuer Versuch ohne sie.",
       "battlenetClientNotReady": "Battle.net Didn't Start",
       "battlenetClientNotReadyMessage": "The Battle.net client did not finish starting. It may be applying an update — try again in a moment.",
       "battlenetClientBusyElsewhere": "Battle.net Is Busy",

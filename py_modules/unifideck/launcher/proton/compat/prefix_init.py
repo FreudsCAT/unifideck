@@ -46,13 +46,13 @@ from unifideck.launcher.proton.compat.save_migration import (
 from unifideck.launcher.proton.infrastructure.container_escape import (
     escape_argv,
 )
+from unifideck.launcher.proton.infrastructure.game_log import open_game_log
 from unifideck.launcher.proton.infrastructure.prefix_layout import (
     normalize_prefix_root,
     resolve_registry_prefix,
 )
 from unifideck.launcher.proton.infrastructure.umu_runtime import (
     ensure_umu_runtime_ready,
-    open_game_log,
     repair_incomplete_umu_runtime,
 )
 from unifideck.launcher.wrapper_stores import (

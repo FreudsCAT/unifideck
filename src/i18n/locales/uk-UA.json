@@ -361,6 +361,8 @@
       "battlenetInstallingClientMessage": "Налаштування клієнта Battle.net — це може зайняти кілька хвилин.",
       "battlenetRepairingClient": "Відновлення Battle.net",
       "battlenetRepairingClientMessage": "Клієнт Battle.net неповний і буде перевстановлений. Це може зайняти кілька хвилин.",
+      "battlenetRetryingWithoutWsi": "Повторна спроба Battle.net",
+      "battlenetRetryingWithoutWsiMessage": "Клієнт Battle.net аварійно завершився в графічному шарі на цьому пристрої. Повторна спроба без нього.",
       "battlenetClientNotReady": "Battle.net Didn't Start",
       "battlenetClientNotReadyMessage": "The Battle.net client did not finish starting. It may be applying an update — try again in a moment.",
       "battlenetClientBusyElsewhere": "Battle.net Is Busy",

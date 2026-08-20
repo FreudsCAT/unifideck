@@ -26,8 +26,14 @@ import pytest
 from unifideck.launcher.proton.handlers import battlenet as handler
 from unifideck.launcher.proton.handlers import battlenet_client as client
 from unifideck.launcher.proton.handlers import battlenet_watch as watch
+from unifideck.launcher.proton.handlers import battlenet_wsi as wsi
 from unifideck.launcher.proton.handlers import wrapper_clients as wc
 from unifideck.launcher.types.errors import GameFailedError
+
+
+async def _noop(*_a: Any, **_k: Any) -> None:
+    """Stand in for a coroutine whose effect this test does not exercise."""
+    return None
 
 
 class _Ctx:
@@ -373,6 +379,40 @@ def test_gating_env_is_applied_and_overrides_are_merged() -> None:
     assert env["PROTON_USE_XALIA"] == "0"
     assert "locationapi=d" in env["WINEDLLOVERRIDES"]
     assert "existing=n" in env["WINEDLLOVERRIDES"]
+
+
+def test_the_gating_env_does_not_disable_the_wsi_layer_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The layer stays on unless THIS host has been measured to need it off.
+
+    Disabling it costs the XWayland-bypass path (direct scanout, HDR), and
+    the game inherits the client's environment, so a blanket setting would
+    charge every healthy host for a bug a minority have. Measured on two
+    machines with identical SteamOS 3.8.25, kernel and gamescope: the
+    client works on a Steam Deck (Van Gogh) and aborts on a ROG Ally X
+    (Phoenix). See ``battlenet_wsi``.
+    """
+    from unifideck.launcher.proton.infrastructure.core import _apply_battlenet_env
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
+    env: dict[str, str] = {}
+    _apply_battlenet_env(env)
+    assert wsi.DISABLE_VAR not in env
+
+
+def test_a_recorded_host_gets_the_layer_disabled_up_front(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After one measured abort, later launches skip the doomed attempt."""
+    from unifideck.launcher.proton.infrastructure.core import _apply_battlenet_env
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
+    wsi.record_workaround("measured in a previous launch")
+
+    env: dict[str, str] = {}
+    _apply_battlenet_env(env)
+    assert env[wsi.DISABLE_VAR] == "1"
 
 
 def test_gating_env_does_not_duplicate_locationapi() -> None:
@@ -1023,3 +1063,127 @@ def test_an_install_that_leaves_the_shim_still_fails(
         asyncio.run(
             boot.ensure_client(plan, "battlenetPrefixNotReady", fail=handler._fail),
         )
+
+
+# --------------------------------------------------------------------------
+# the WSI retry: measured, and only once
+# --------------------------------------------------------------------------
+
+
+def _arm_start(monkeypatch: pytest.MonkeyPatch, results: list[bool]) -> list[dict]:
+    """Make _try_start return each of ``results`` in turn, recording the env."""
+    seen: list[dict] = []
+    pending = list(results)
+
+    async def _fake_try_start(plan_: Any, exe: Path) -> bool:
+        seen.append(dict(plan_.env))
+        return pending.pop(0)
+
+    monkeypatch.setattr(handler, "_try_start", _fake_try_start)
+    monkeypatch.setattr(handler, "launcher_toast", lambda *a, **k: None)
+    return seen
+
+
+def test_a_healthy_client_never_touches_the_wsi_layer(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The whole point of measuring: a working host pays nothing.
+
+    Disabling the layer costs the XWayland-bypass path, and the game
+    inherits it from the client — so a host whose client starts must never
+    see the variable at all.
+    """
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
+    seen = _arm_start(monkeypatch, [True])
+    monkeypatch.setattr(handler, "_release_other_clients", _noop)
+    monkeypatch.setattr(handler, "_clear_stale_session", _noop)
+    monkeypatch.setattr(handler.session, "inject_into", _noop)
+    monkeypatch.setattr(handler.bootstrap, "ensure_tweaks", _noop)
+
+    asyncio.run(handler._start_client_here(plan, Path("/c/Launcher.exe")))
+
+    assert len(seen) == 1, "a healthy client must not be retried"
+    assert wsi.DISABLE_VAR not in seen[0]
+    assert wsi.workaround_recorded() is False
+
+
+def test_the_angle_abort_is_retried_with_the_layer_off(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """First attempt dies, the log names why, the second attempt succeeds."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
+    log = tmp_path / "launch.game.log"
+    log.write_text(
+        "[Gamescope WSI] pEngineName: ANGLE\n"
+        "vkroots.h:129: insert(Object, DispatchPtr) "
+        "[with Object = VkQueue_T*]: Assertion `obj' failed.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "unifideck.launcher.proton.infrastructure.game_log.game_log_path",
+        lambda: log,
+    )
+    seen = _arm_start(monkeypatch, [False, True])
+    monkeypatch.setattr(handler, "_clear_stale_session", _noop)
+    monkeypatch.setattr(handler, "_release_other_clients", _noop)
+    monkeypatch.setattr(handler.session, "inject_into", _noop)
+    monkeypatch.setattr(handler.bootstrap, "ensure_tweaks", _noop)
+
+    asyncio.run(handler._start_client_here(plan, Path("/c/Launcher.exe")))
+
+    assert len(seen) == 2
+    assert wsi.DISABLE_VAR not in seen[0], "the first attempt is the honest one"
+    assert seen[1][wsi.DISABLE_VAR] == "1"
+    # Recorded, so the next launch skips the doomed first attempt entirely.
+    assert wsi.workaround_recorded() is True
+
+
+def test_a_client_that_died_for_another_reason_is_not_retried(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The workaround is for one named crash, not for "it did not start"."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
+    log = tmp_path / "launch.game.log"
+    log.write_text("wine: could not load ntdll.so\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "unifideck.launcher.proton.infrastructure.game_log.game_log_path",
+        lambda: log,
+    )
+    seen = _arm_start(monkeypatch, [False])
+    monkeypatch.setattr(handler, "_clear_stale_session", _noop)
+    monkeypatch.setattr(handler, "_release_other_clients", _noop)
+    monkeypatch.setattr(handler.session, "inject_into", _noop)
+    monkeypatch.setattr(handler.bootstrap, "ensure_tweaks", _noop)
+
+    with pytest.raises(GameFailedError):
+        asyncio.run(handler._start_client_here(plan, Path("/c/Launcher.exe")))
+
+    assert len(seen) == 1
+    assert wsi.workaround_recorded() is False
+
+
+def test_the_layer_is_not_disabled_twice(
+    plan: _Plan, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Already off and still dying means the layer was never the problem."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
+    log = tmp_path / "launch.game.log"
+    log.write_text(
+        "[Gamescope WSI] x\nvkroots.h:129: Assertion `obj' failed.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "unifideck.launcher.proton.infrastructure.game_log.game_log_path",
+        lambda: log,
+    )
+    plan.env[wsi.DISABLE_VAR] = "1"
+    seen = _arm_start(monkeypatch, [False])
+    monkeypatch.setattr(handler, "_clear_stale_session", _noop)
+    monkeypatch.setattr(handler, "_release_other_clients", _noop)
+    monkeypatch.setattr(handler.session, "inject_into", _noop)
+    monkeypatch.setattr(handler.bootstrap, "ensure_tweaks", _noop)
+
+    with pytest.raises(GameFailedError):
+        asyncio.run(handler._start_client_here(plan, Path("/c/Launcher.exe")))
+
+    assert len(seen) == 1, "no second attempt when the layer is already off"

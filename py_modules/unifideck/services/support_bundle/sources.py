@@ -56,7 +56,7 @@ _LOGS: tuple[SourceSpec, ...] = (
         root="launches", pattern="*.game.log", arch_dir="launches",
         policy="tail", max_bytes=CAP_GAME_LOG, scrub="text",
         priority=30, newest_n=MAX_GAME_LOGS, expect="launch",
-        writer="launcher/proton/infrastructure/umu_runtime.py::open_game_log",
+        writer="launcher/proton/infrastructure/game_log.py::open_game_log",
         note="Install-time prefix warmup runs outside a launch id, so a "
              "'-.game.log' orphan is normal and often the largest file.",
     ),

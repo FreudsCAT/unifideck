@@ -361,6 +361,8 @@
       "battlenetInstallingClientMessage": "Battle.net istemcisi kuruluyor — bu birkaç dakika sürebilir.",
       "battlenetRepairingClient": "Battle.net onarılıyor",
       "battlenetRepairingClientMessage": "Battle.net istemcisi eksik ve yeniden kuruluyor. Bu birkaç dakika sürebilir.",
+      "battlenetRetryingWithoutWsi": "Battle.net yeniden deneniyor",
+      "battlenetRetryingWithoutWsiMessage": "Battle.net istemcisi bu cihazda bir grafik katmanında çöktü. Bu katman olmadan yeniden deneniyor.",
       "battlenetClientNotReady": "Battle.net Didn't Start",
       "battlenetClientNotReadyMessage": "The Battle.net client did not finish starting. It may be applying an update — try again in a moment.",
       "battlenetClientBusyElsewhere": "Battle.net Is Busy",

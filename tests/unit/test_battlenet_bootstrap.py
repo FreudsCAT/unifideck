@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -764,3 +765,56 @@ def test_the_launcher_owns_the_client_install() -> None:
     from unifideck.launcher.proton.handlers import battlenet as h
 
     assert callable(h.bootstrap.install_client)
+
+
+# --------------------------------------------------------------------------
+# the tweak is read back, not merely written
+# --------------------------------------------------------------------------
+
+
+def test_the_written_config_is_confirmed_by_reading_it_back(tmp_path: Path) -> None:
+    """Distinguishing "written and ignored" from "never written" took a
+    whole round trip with a tester. One stat settles it in the log."""
+    from unifideck.stores.battlenet.prefix import tweaks
+
+    drive_c = tmp_path / "drive_c"
+    assert tweaks.write_client_config(drive_c) is True
+
+    written = json.loads(
+        (drive_c / tweaks.CONFIG_RELATIVE).read_text(encoding="utf-8"),
+    )
+    assert written["Client"]["HardwareAcceleration"] == "false"
+
+
+def test_a_config_that_does_not_keep_our_settings_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A silent write that does not stick is the failure mode being closed."""
+    from unifideck.stores.battlenet.prefix import tweaks
+
+    drive_c = tmp_path / "drive_c"
+    # Something else rewrites the file between our write and our read.
+    monkeypatch.setattr(
+        tweaks, "_load_config", lambda _p: {"Client": {"HardwareAcceleration": "true"}},
+    )
+    assert tweaks.write_client_config(drive_c) is False
+
+
+def test_the_user_login_state_is_preserved_by_the_merge(tmp_path: Path) -> None:
+    """Clobbering the file would sign the user out of a prefix they had
+    already authenticated."""
+    from unifideck.stores.battlenet.prefix import tweaks
+
+    drive_c = tmp_path / "drive_c"
+    path = drive_c / tweaks.CONFIG_RELATIVE
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"Client": {"SavedAccountNames": "someone@example.invalid"}}),
+        encoding="utf-8",
+    )
+
+    assert tweaks.write_client_config(drive_c) is True
+
+    kept = json.loads(path.read_text(encoding="utf-8"))["Client"]
+    assert kept["SavedAccountNames"] == "someone@example.invalid"
+    assert kept["HardwareAcceleration"] == "false"

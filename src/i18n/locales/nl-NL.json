@@ -361,6 +361,8 @@
       "battlenetInstallingClientMessage": "De Battle.net-client wordt ingesteld — dit kan enkele minuten duren.",
       "battlenetRepairingClient": "Battle.net herstellen",
       "battlenetRepairingClientMessage": "De Battle.net-client is onvolledig en wordt opnieuw geïnstalleerd. Dit kan enkele minuten duren.",
+      "battlenetRetryingWithoutWsi": "Battle.net opnieuw proberen",
+      "battlenetRetryingWithoutWsiMessage": "De Battle.net-client is op dit apparaat vastgelopen in een grafische laag. Opnieuw proberen zonder die laag.",
       "battlenetClientNotReady": "Battle.net Didn't Start",
       "battlenetClientNotReadyMessage": "The Battle.net client did not finish starting. It may be applying an update — try again in a moment.",
       "battlenetClientBusyElsewhere": "Battle.net Is Busy",

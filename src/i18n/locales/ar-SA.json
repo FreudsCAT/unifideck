@@ -361,6 +361,8 @@
       "battlenetInstallingClientMessage": "جارٍ إعداد عميل Battle.net — قد يستغرق ذلك بضع دقائق.",
       "battlenetRepairingClient": "جارٍ إصلاح Battle.net",
       "battlenetRepairingClientMessage": "عميل Battle.net غير مكتمل وتجري إعادة تثبيته. قد يستغرق ذلك بضع دقائق.",
+      "battlenetRetryingWithoutWsi": "إعادة محاولة Battle.net",
+      "battlenetRetryingWithoutWsiMessage": "واجه عميل Battle.net عطلاً في طبقة الرسوميات على هذا الجهاز. تجري إعادة المحاولة بدونها.",
       "battlenetClientNotReady": "Battle.net Didn't Start",
       "battlenetClientNotReadyMessage": "The Battle.net client did not finish starting. It may be applying an update — try again in a moment.",
       "battlenetClientBusyElsewhere": "Battle.net Is Busy",

@@ -214,11 +214,24 @@ def _apply_battlenet_env(env: dict[str, str]) -> None:
     later on-device session and the client was healthy, so this is belt and
     braces rather than the gating fix it was believed to be.
 
+    ``DISABLE_GAMESCOPE_WSI=1`` — **only on a host that has already been
+    measured to need it**, which is why it comes from a recorded marker
+    rather than being set unconditionally. See
+    :mod:`~unifideck.launcher.proton.handlers.battlenet_wsi`: the client's
+    ANGLE renderer aborts inside gamescope's Vulkan WSI layer on some GPUs
+    and not others, and turning the layer off costs the XWayland-bypass
+    path (direct scanout, HDR) for the game too, since the game inherits
+    the client's environment. Applying it everywhere would charge that to
+    every working host to fix a minority of them.
+
     ``locationapi=d`` is **merged** into any existing WINEDLLOVERRIDES
     rather than replacing it — Proton appends its own long default list.
     """
+    from unifideck.launcher.proton.handlers import battlenet_wsi
+
     env["WINE_SIMULATE_WRITECOPY"] = "1"
     env["PROTON_USE_XALIA"] = "0"
+    battlenet_wsi.apply_if_recorded(env)
     existing = env.get("WINEDLLOVERRIDES", "")
     if "locationapi" not in existing:
         env["WINEDLLOVERRIDES"] = (
