@@ -387,7 +387,7 @@ class BattlenetInstaller:
             return (
                 (
                     "Battle.net's client files are incomplete. Sign in to "
-                    "Battle.net again and let the window finish opening — that "
+                    "Battle.net again and let the window finish opening. That "
                     "reinstalls the client."
                 ),
                 "client_incomplete",
