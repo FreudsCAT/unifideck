@@ -535,6 +535,8 @@
   },
   "deckTabs": {
     "greatOnDeck": "Für das Steam Deck optimierte Spiele",
+    "greatOnMachine": "Für Steam Machine optimierte Spiele",
+    "steamOSCompatible": "Mit SteamOS kompatibel",
     "allGames": "Alle Spiele",
     "installed": "Installiert",
     "nonSteam": "Steam-Fremd",
