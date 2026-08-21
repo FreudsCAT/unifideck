@@ -56,12 +56,75 @@ y **falla si hay tests saltados**, así que nada puede quedarse en `skip`.
 `src/**` verá 4 checks en vez de 7: los otros no fallaron, no llegaron a
 ejecutarse.
 
-## Pendiente — estado a 2026-08-08
+## Estado a 2026-08-21
 
-Diagnosticado y verificado en dispositivo, pero **sin implementar**. `staging`
-está en `01ea75a`, con los PR #1–#4 mergeados.
+`staging` está en `085a344`: upstream 0.7.3 más los PR #1–#8, más el arreglo
+del idioma traído con cherry-pick.
 
-### 1. Idioma de los juegos de Epic que ignoran `-epiclocale`
+Release de pruebas publicada en el fork: `0.7.3.hotfix` (prerelease, con el
+zip adjunto), que junta idioma + Proton forzado + la línea del panel.
+
+### Enviado a upstream
+
+- **PR #422 — resolución del idioma. MERGEADO** el 2026-08-20 (`3f9c191`).
+  Entró sin que el autor tocara una línea. Verificado en dispositivo con los
+  tres handlers (Epic, Amazon, Ubisoft) y los dos niveles.
+
+### Listo para enviar, sin enviar
+
+- **PR #9 del fork** (`fix/force-compat-capture`) — la captura del Proton
+  forzado. Rama sobre el espejo `upstream-staging-mirror`, que quedó anclado a
+  `897f8ce`; upstream ya va por `23fba8a`, así que **hay que rebasar** antes de
+  abrirlo. Verificado en dispositivo **en aislamiento**: build con solo esos
+  siete ficheros sobre 0.7.3 limpio, con `proton_9` y `GE-Proton11-1`, más el
+  caso sin elección. Ningún lanzamiento entró en el pressure-vessel.
+- **PR #8 del fork** (`feat/proton-in-use-badge`) — la línea del panel.
+  Depende funcionalmente del anterior: sin la captura, el origen `pin` nunca
+  contiene una elección del usuario. Enviar **después** del #9.
+
+## Pendiente
+
+### 1. Esperar la 0.7.4 oficial y comprobar el Proton forzado
+
+Acordado el 2026-08-21: no adelantar trabajo hasta que salga. Comprobado en
+`upstream/staging` (`23fba8a`) que **saldrá con el problema intacto**, salvo
+que el autor meta algo antes:
+
+- `saveProtonSetting` sigue declarada en `rpc-routes.ts:31` y **sin ningún
+  llamante**. Los usos de `SpecifyCompatTool` que hay son de autenticación y
+  de los lanzadores envoltorio; ninguno saca la elección de las manos de Steam
+  antes de `RunGame`, que es la única palanca posible.
+- `_proton_family` sigue con la tabla numérica parada en `proton10`, así que
+  `proton_11`, `proton_8`, `proton_7` y `proton_hotfix` caen todos en
+  `"other"` y saltar entre ellos no resetea el prefijo.
+
+La comprobación al salir es de un minuto: forzar una versión en Propiedades ›
+Compatibilidad y pulsar Jugar. Si no se crea ningún fichero en
+`~/.local/share/unifideck/launches/`, es el mismo fallo y toca enviar el #9.
+
+### 2. Tres arreglos que perdimos en el merge de 0.7.3
+
+Estaban en el PR #2, se cayeron al resolver conflictos y **no lo detectamos
+entonces**. Verificado el 2026-08-21 que siguen ausentes en nuestro `staging`,
+y los tres siguen abiertos también en upstream:
+
+- `_proton_family` — sustituir la tabla numérica por una regex sobre la
+  versión mayor (`proton[ _-]?(\d+)`), después de las comprobaciones de
+  experimental/ge/umu/cachyos para no romperlas, más una cláusula `hotfix`.
+- `_handle_proton_change` escribe el marcador de versión **antes** de
+  `_ensure_created`, así que un prefijo que no llega a construirse queda
+  marcado y nunca se reintenta. Debe sellarse después.
+- `_reset_prefix` hace `rmtree(.save_backup)` y solo después comprueba si hay
+  `drive_c/users` que copiar: si un reseteo anterior dejó el prefijo a medias,
+  el siguiente destruye el backup superviviente. Copiar a un temporal y
+  sustituir solo si la copia sale bien.
+
+Buen candidato a un PR pequeño a upstream. Ojo: el autor reescribió
+`_proton_family` el 2026-08-13 (`f60e865`) para arreglar el choque entre
+nombres de directorio y nombres de pantalla y añadir CachyOS. Hay que
+construir encima de **su** versión, no reponer la nuestra.
+
+### 3. Idioma de los juegos de Epic que ignoran `-epiclocale`
 
 Síntoma: Overcooked 2 (`epic:Potoo`) arranca en inglés con `ui.locale = es-ES`.
 **No es el bug del PR #1** — ese arreglo funciona y está verificado: el log dice
@@ -97,38 +160,27 @@ juegos de Unity suelen usar ahí un fichero de preferencias o una clave de
 registro bajo `HKCU\Software\Team17`. Mirar qué cambia al elegir idioma dentro
 del propio juego es la vía barata.
 
-De paso, comprobar `handlers/generic.py::_amazon_launch`: construye
-`ConfigManager` sin `user_path`, que es el mismo patrón que causaba el bug del
-PR #1. Puede que Amazon tampoco lea la elección del usuario.
+Lo de `handlers/generic.py::_amazon_launch` ya está: tenía el mismo patrón y
+se arregló en el PR #422, con test propio en `test_store_launch_language.py` y
+verificado en dispositivo (`[language_setup.amazon] wrote locale=es-ES`).
 
-### 1b. `ui.locale = "auto"` no sirve en una Steam Deck
-
-Con `auto`, `utils/locale.py::_detect_system_locale` usa `locale.getlocale()`,
-o sea `LANG`. SteamOS se queda en `en_US.UTF-8` de fábrica y el idioma real lo
-elige el usuario dentro de Steam, que no lo exporta al entorno. Verificado: con
-`auto`, Dying Light arranca en inglés en una máquina cuyo usuario tiene Steam
-en español.
-
-Arreglo propuesto: un nivel intermedio que lea el idioma de Steam en
-`~/.steam/registry.vdf` (`HKCU/Software/Valve/Steam`, valores tipo `spanish`,
-`koreana`, `schinese`) entre la elección explícita y el locale POSIX.
-`steam/current_user.py:60-62` ya lee ese fichero y resuelve sus tres rutas
-posibles. Haría falta una tabla nombre-de-Steam → BCP-47.
-
-### 2. Selector de Proton propio en Unifideck
+### 4. Selector de Proton propio en Unifideck
 
 Motivo: el pin de `proton_settings.json` **no se puede cambiar ni quitar desde
 la interfaz**. Una vez fijado, el juego queda anclado a esa versión; para
 soltarlo hay que editar el JSON a mano. Elegir «Steam Linux Runtime» no sirve:
 la captura lo ignora a propósito.
 
-- Paso 1 — mostrar la versión fijada en la fila de metadatos
-  (`components/play/PlayMeta.tsx`, junto a «Espacio requerido · Última vez
-  jugado»). Código propio, sin parchear Steam.
-- Paso 2 — convertirlo en desplegable con «Predeterminado» + los Protones
-  instalados, escribiendo el mismo `proton_settings.json` vía la RPC
+- Paso 1 — **hecho** en el PR #8, aunque no donde decía esta nota: la versión
+  se muestra en la línea de géneros de la ficha
+  (`components/info/GameInfoCompatRow.tsx`), no en `PlayMeta.tsx`. La lee la
+  RPC nueva `get_effective_proton_tool`, que es de solo lectura.
+- Paso 2 — **pendiente**: convertirlo en desplegable con «Predeterminado» + los
+  Protones instalados, escribiendo el mismo `proton_settings.json` vía la RPC
   `save_proton_setting` (un `tool_name` vacío borra la entrada). Hace falta una
-  RPC nueva que enumere los Protones instalados.
+  RPC nueva que enumere los Protones instalados;
+  `ProtonToolsManager.list_known_tools()` (`compatibility/proton_helpers.py`)
+  ya hace ese barrido y sirve de base.
 
 Descartado tras valorarlo: inyectar el aviso **bajo la casilla de
 Steam**. El diálogo de propiedades no es una ruta, así que `routerHook.addPatch`
