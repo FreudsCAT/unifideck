@@ -134,6 +134,27 @@ class _Watch:
             return
         await self._progress_cb({"phase": "manual", "phase_message": message})
 
+    def _explained_wait(self) -> str | None:
+        """The store's own account of why nothing is moving, if it has one.
+
+        Optional per store — see the note in :mod:`.probe` on why this is read
+        with ``getattr`` rather than declared on the protocol. Any failure is
+        swallowed: a progress *message* must never be able to end an install.
+        """
+        describe: Callable[[], str | None] | None = getattr(
+            self._probe, "status_message", None,
+        )
+        if describe is None:
+            return None
+        try:
+            message = describe()
+            return message if isinstance(message, str) and message else None
+        except Exception:
+            logger.debug(
+                "[%s] status_message failed", self._probe.store, exc_info=True,
+            )
+            return None
+
     def _abandoned(self) -> bool:
         """Run both give-up watchdogs for one poll.
 
@@ -222,7 +243,9 @@ class _Watch:
                 return None
             if iteration % TICK_EVERY_POLLS == 0:
                 await self._emit(
-                    f"Waiting for the game to install in {self._probe.client_label}…",
+                    self._explained_wait()
+                    or f"Waiting for the game to install in "
+                       f"{self._probe.client_label}…",
                 )
         logger.warning(
             "[%s] manual install timed out after %.1fh",
@@ -263,7 +286,17 @@ class _Watch:
                 if stable >= STABILITY_THRESHOLD:
                     return True
             prev_size = size
-            if size > 0:
+            # The explained wait wins over the byte count here, not just in
+            # the appear loop. A vendor client creates the install directory
+            # when it *accepts* the job, not when it starts writing, so a game
+            # queued behind the client's own self-update sits at a few KB for
+            # as long as that takes — and "Installing… (0.0 GB)" is a worse
+            # answer than silence, let alone than naming what is in front of
+            # it. Measured: 28 minutes of exactly this.
+            explained = self._explained_wait()
+            if explained:
+                await self._emit(explained)
+            elif size > 0:
                 await self._emit(f"Installing… ({size / (1024**3):.1f} GB)")
         logger.warning(
             "[%s] %s never reported this install complete after %d polls "

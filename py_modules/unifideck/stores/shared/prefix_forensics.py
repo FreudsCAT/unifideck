@@ -49,7 +49,17 @@ VENDOR_LOG_GLOBS: dict[str, tuple[str, ...]] = {
     # Roaming, and not beside the executable), and the bootstrapper writes
     # ``Setup`` logs one level deeper than assumed. Keep the misses: they
     # cost one failed glob each and vendors move these between builds.
+    #
+    # 2026-08-22: ``Agent/Logs/*.log`` matched, but only a one-line
+    # ``Switcher`` log — the Agent's real logs are a directory deeper, under
+    # a build-versioned ``Agent.<build>``. A whole investigation into installs
+    # stuck at "Queued" ran on files this salvage had not collected: the
+    # answer was in ``Operations-*`` (the game's operation sitting behind the
+    # Agent's own self-update), with the rate in ``AgentUpdate-*`` and the
+    # cause — a region-tag change — in ``AgentNGDP-*``. The Agent owns every
+    # download, so its logs go FIRST.
     "battlenet": (
+        "ProgramData/Battle.net/Agent/Agent.*/Logs/*.log",
         "ProgramData/Battle.net/Logs/*.log",
         "ProgramData/Battle.net/Agent/Logs/*.log",
         "ProgramData/Battle.net/Agent/Agent.log",

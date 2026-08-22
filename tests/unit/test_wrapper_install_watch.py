@@ -291,3 +291,105 @@ def test_cancel_propagates_and_the_loop_closes_nothing(
         asyncio.run(_cancel_soon())
 
     assert killed == []
+
+
+# ── an explained wait ───────────────────────────────────────────
+
+
+class _ExplainingProbe(_Probe):
+    """A probe that can say why nothing is moving. Optional on the protocol."""
+
+    def __init__(self, message: str | None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.message = message
+        self.explained = 0
+
+    def status_message(self) -> str | None:
+        self.explained += 1
+        return self.message
+
+
+def _messages(probe: Any) -> list[str]:
+    seen: list[str] = []
+
+    async def _progress(payload: dict[str, Any]) -> None:
+        seen.append(payload["phase_message"])
+
+    _run(probe, progress=_progress)
+    return seen
+
+
+def test_a_store_that_can_explain_the_wait_replaces_the_generic_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """"Waiting for the game to install" and a real hang look identical.
+
+    Battle.net can tell them apart — its Agent runs one exclusive operation at
+    a time and logs which one holds the slot — so a 28-minute wait behind the
+    Agent's own self-update gets named instead of mimed.
+    """
+    _alive(monkeypatch, True)
+    note = "Battle.net is updating its downloader (75%) — Don't cancel."
+
+    seen = _messages(_ExplainingProbe(note, detect_after=10, complete_after=1))
+
+    assert note in seen
+    assert not any("Waiting for the game to install" in m for m in seen)
+
+
+def test_the_explanation_also_beats_a_stalled_byte_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A vendor client makes the install directory when it *accepts* the job.
+
+    So a game queued behind the client's own update sits at a few KB for as
+    long as that takes, and "Installing… (0.0 GB)" is a worse answer than
+    naming what is in front of it.
+    """
+    _alive(monkeypatch, True)
+    note = "Battle.net is updating its downloader (12%) — Don't cancel."
+
+    seen = _messages(
+        _ExplainingProbe(note, detect_after=1, complete_after=4, sizes=[24_576]),
+    )
+
+    assert note in seen
+    assert not any("Installing…" in m for m in seen)
+
+
+def test_a_probe_with_nothing_to_say_keeps_the_generic_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _alive(monkeypatch, True)
+
+    seen = _messages(_ExplainingProbe(None, detect_after=10, complete_after=1))
+
+    assert any("Waiting for the game to install" in m for m in seen)
+
+
+def test_a_probe_without_the_method_at_all_is_unaffected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ubisoft's probe does not implement it, and must not have to."""
+    _alive(monkeypatch, True)
+    probe = _Probe(detect_after=10, complete_after=1)
+    assert not hasattr(probe, "status_message")
+
+    assert any(
+        "Waiting for the game to install" in m for m in _messages(probe)
+    )
+
+
+def test_a_raising_status_message_never_ends_an_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A progress *message* must not be able to fail the thing it describes."""
+    _alive(monkeypatch, True)
+
+    class _Exploding(_Probe):
+        def status_message(self) -> str | None:
+            raise RuntimeError("log unreadable")
+
+    probe = _Exploding(detect_after=2, complete_after=2)
+
+    assert _run(probe) == "/install/dir"
