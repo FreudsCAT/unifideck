@@ -78,6 +78,11 @@ zip adjunto), que junta idioma + Proton forzado + la línea del panel.
   abrirlo. Verificado en dispositivo **en aislamiento**: build con solo esos
   siete ficheros sobre 0.7.3 limpio, con `proton_9` y `GE-Proton11-1`, más el
   caso sin elección. Ningún lanzamiento entró en el pressure-vessel.
+- **PR #10 del fork** (`fix/update-btn-gamepad-focus`) — el botón Update de la
+  pestaña Downloads no tenía estado de foco, así que con el mando parecía
+  inactivo aunque el foco sí pasaba por él. Bug de upstream, independiente de
+  todo lo demás. Rama sobre el espejo (0.7.3), verificado en dispositivo.
+  Esperando a la 0.7.4 para rebasar y enviarlo.
 - **PR #8 del fork** (`feat/proton-in-use-badge`) — la línea del panel.
   Depende funcionalmente del anterior: sin la captura, el origen `pin` nunca
   contiene una elección del usuario. Enviar **después** del #9.
