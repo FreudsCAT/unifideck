@@ -52,7 +52,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from unifideck.launcher.wrapper_prefs import bootstrapper_locale
+from unifideck.launcher.wrapper_locale import bootstrapper_locale
 from unifideck.stores.battlenet import paths
 from unifideck.stores.shared.wine_env import WineEnvResolver
 from unifideck.utils.vulkan import Vulkan32, detect_32bit_vulkan

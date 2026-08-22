@@ -1,9 +1,9 @@
-"""Amazon and Ubisoft must launch in the user's language too.
+"""Amazon, Ubisoft and Battle.net must launch in the user's language too.
 
 The Epic path has its own suite (``test_epic_launch_language.py``). These
-cover the other two stores whose handlers build a ``ConfigManager`` of
+cover the other stores whose handlers build a ``ConfigManager`` of
 their own inside the launcher process, because the same two defects hit
-all three:
+all of them:
 
 * the bundled ``config.json`` was looked up at ``<plugin>/defaults/`` only,
   which does not exist on a Decky CLI install (the CLI flattens
@@ -161,3 +161,95 @@ async def test_amazon_falls_back_to_the_machine_when_nothing_was_picked(
     await generic._amazon_launch(_plan(plugin_dir, tmp_path, "amazon"))
 
     assert get_unifideck_locale(seen[0]) == "en-US"
+
+
+# ── Battle.net ─────────────────────────────────────────────────────────
+#
+# The store that was never wired into ``language_setup`` at all. Measured on
+# this Deck 2026-08-23 with the plugin set to German: every Battle.net prefix
+# still reported ``LocaleName="en-US"`` and ``sCountry="United States"``.
+# Distinct from the client's own UI language, which ``wrapper_locale`` seeds
+# into ``Battle.net.config``; this is what a Blizzard *game* reads from
+# Windows when it picks its own default.
+async def test_battlenet_honours_the_language_picked_in_the_unifideck_ui(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap
+
+    plugin_dir = _installed_plugin(tmp_path, monkeypatch, "de-DE")
+    seen = _capture_config(monkeypatch, "apply_battlenet_language")
+
+    assert await battlenet_bootstrap.ensure_language(
+        _plan(plugin_dir, tmp_path, "battlenet"),
+    )
+
+    assert len(seen) == 1
+    assert get_unifideck_locale(seen[0]) == "de-DE"
+
+
+async def test_battlenet_falls_back_to_the_machine_when_nothing_was_picked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap
+
+    plugin_dir = _installed_plugin(tmp_path, monkeypatch, None)
+    seen = _capture_config(monkeypatch, "apply_battlenet_language")
+
+    await battlenet_bootstrap.ensure_language(
+        _plan(plugin_dir, tmp_path, "battlenet"),
+    )
+
+    assert get_unifideck_locale(seen[0]) == "en-US"
+
+
+async def test_battlenet_language_setup_never_fails_a_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A game in the wrong language beats a game that will not start."""
+    import unifideck.launcher.proton.language_setup as ls
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap
+
+    plugin_dir = _installed_plugin(tmp_path, monkeypatch, "de-DE")
+
+    def _boom(*_args: Any, **_kw: Any) -> bool:
+        raise OSError("user.reg is not writable")
+
+    monkeypatch.setattr(ls, "apply_battlenet_language", _boom)
+
+    assert await battlenet_bootstrap.ensure_language(
+        _plan(plugin_dir, tmp_path, "battlenet"),
+    ) is False
+
+
+async def test_battlenet_writes_the_locale_into_user_reg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end through the real registry writer, not a captured call.
+
+    The four keys below are the ones the Battle.net prefixes on this Deck were
+    measured holding at ``en-US`` / ``ENU`` / ``United States``.
+    """
+    from unifideck.launcher.proton.handlers import battlenet_bootstrap
+
+    plugin_dir = _installed_plugin(tmp_path, monkeypatch, "de-DE")
+    prefix = tmp_path / "prefix"
+    prefix.mkdir()
+    (prefix / "user.reg").write_text(
+        'WINE REGISTRY Version 2\n\n'
+        '[Control Panel\\\\International] 1785947765\n'
+        '"Locale"="00000409"\n'
+        '"LocaleName"="en-US"\n'
+        '"sLanguage"="ENU"\n'
+        '"sCountry"="United States"\n',
+        encoding="utf-8",
+    )
+
+    assert await battlenet_bootstrap.ensure_language(
+        _plan(plugin_dir, tmp_path, "battlenet"),
+    )
+
+    written = (prefix / "user.reg").read_text(encoding="utf-8")
+    assert '"Locale"="00000407"' in written
+    assert '"LocaleName"="de-DE"' in written
+    assert '"sLanguage"="DEU"' in written
+    assert '"sCountry"="Germany"' in written

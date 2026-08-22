@@ -678,19 +678,24 @@ def test_installer_args_preanswer_the_blocking_screens() -> None:
         ("de-DE", "--lang=deDE"),
         ("ko-KR", "--lang=koKR"),
         ("pt-BR", "--lang=ptBR"),
-        # Not shipped. Passing these through risks the wizard stalling on its
-        # language screen, invisibly, for the full 30-minute timeout.
-        ("tr-TR", "--lang=enUS"),
+        # Also shipped, and previously missing from the map for no reason —
+        # ``strings battle.net.dll`` (2026-08-23) lists both among the 22 the
+        # client loads from ``languages.xml``. Turkish and Arabic users were
+        # getting an English wizard and a US content warm-up.
+        ("tr-TR", "--lang=trTR"),
+        ("ar-SA", "--lang=arSA"),
+        # Genuinely not shipped: the client has no Ukrainian. Passing a locale
+        # it does not know risks the wizard stalling on its language screen,
+        # invisibly, for the full 30-minute timeout.
         ("uk-UA", "--lang=enUS"),
-        ("ar-SA", "--lang=enUS"),
+        ("nl-NL", "--lang=enUS"),
         # No preference expressed.
         ("auto", "--lang=enUS"),
         ("", "--lang=enUS"),
     ],
 )
 def test_the_installer_language_follows_the_plugin_locale(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    ui_locale: str, expected: str,
+    monkeypatch: pytest.MonkeyPatch, ui_locale: str, expected: str,
 ) -> None:
     """The language is the user's; the install path is still pinned.
 
@@ -699,17 +704,14 @@ def test_the_installer_language_follows_the_plugin_locale(
     content store for it before login, so every non-US account threw that
     warm-up away and paid a 45-minute re-download on first install.
     """
-    from unifideck.launcher import wrapper_prefs
+    from unifideck.launcher import wrapper_locale
     from unifideck.stores.battlenet.prefix.client_install import installer_args
 
-    # State the resolved locale rather than seeding the prefix index: the
-    # index is only a fallback now, so driving it here would let the test
-    # machine's own language decide the result.
-    monkeypatch.setattr(wrapper_prefs, "_RESOLVE_ATTEMPTED", True)
-    monkeypatch.setattr(wrapper_prefs, "_RESOLVED_LOCALE", ui_locale or None)
-    monkeypatch.setattr(
-        wrapper_prefs, "_index_path", lambda: tmp_path / "absent.json",
-    )
+    # State the resolved locale rather than letting the resolver run: without
+    # this the test machine's own language decides the result, which is how
+    # two of these used to pass for the wrong reason.
+    monkeypatch.setattr(wrapper_locale, "_RESOLVE_ATTEMPTED", True)
+    monkeypatch.setattr(wrapper_locale, "_RESOLVED_LOCALE", ui_locale or None)
 
     args = installer_args()
 

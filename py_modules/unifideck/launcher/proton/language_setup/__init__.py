@@ -2,7 +2,13 @@
 
 Per-store helpers that write the user's chosen UI language into the
 right files inside the Proton prefix before the game launches (Amazon
-Wine registry, Ubisoft UPC config).
+and Battle.net Wine registry, Ubisoft UPC config).
+
+Battle.net also has a *second*, higher layer that this package does not
+own: the vendor client's own UI language, seeded into
+``Battle.net.config`` by ``launcher/wrapper_locale``. That one decides
+what the client and a new install speak; this one decides what the
+Windows locale says to a game that asks. Both are needed.
 
 GOG is intentionally absent: gogdl already writes the correct
 per-language ``goggame-*.info`` at install time (per the ``--lang``
@@ -13,11 +19,13 @@ do at launch, and rewriting that file only corrupts GOG's own value.
 from __future__ import annotations
 
 from .amazon import apply_amazon_language
+from .battlenet import apply_battlenet_language
 from .resolver import get_unifideck_language
 from .ubisoft import apply_ubisoft_language
 
 __all__ = [
     "apply_amazon_language",
+    "apply_battlenet_language",
     "apply_ubisoft_language",
     "get_unifideck_language",
 ]

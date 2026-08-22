@@ -252,3 +252,44 @@ async def ensure_tweaks(plan: ProtonLaunchPlan) -> bool:
     if applied:
         logger.info("[battlenet] applied client tweaks to %s", plan.prefix_path)
     return applied
+
+
+async def ensure_language(plan: ProtonLaunchPlan) -> bool:
+    """Write the plugin's UI language into this prefix's Windows locale.
+
+    The layer *below* the client's own language setting, which
+    ``wrapper_locale`` seeds into ``Battle.net.config``: a Blizzard game that
+    asks Windows what locale it is running under got ``en-US`` /
+    ``United States`` from every Battle.net prefix, because Battle.net was the
+    one wrapper store never wired into ``proton/language_setup`` (Amazon and
+    Ubisoft both were).
+
+    Lives here rather than inline in the handler so ``_start_client_here``
+    gains one call instead of three imports — that function is close to the
+    fan-out cap.
+
+    Not marker-gated. Unlike the tweaks this is a small rewrite of four keys
+    in ``user.reg`` with no download or process behind it, and running it every
+    launch is what makes a language change take effect without a fresh prefix.
+
+    Never fails a launch. A game in the wrong language is a bad day; a game
+    that will not start is a worse one.
+    """
+    try:
+        from unifideck.config.config_manager import ConfigManager
+        from unifideck.config.defaults_path import resolve_defaults_config_path
+        from unifideck.config.user_config_path import resolve_user_config_path
+        from unifideck.launcher.proton.language_setup import (
+            apply_battlenet_language,
+        )
+
+        config = ConfigManager(
+            resolve_defaults_config_path(plan.context.plugin_dir),
+            user_path=resolve_user_config_path(),
+        )
+        return await asyncio.to_thread(
+            apply_battlenet_language, str(plan.prefix_path), config=config,
+        )
+    except Exception:
+        logger.exception("[battlenet] could not apply the prefix language")
+        return False

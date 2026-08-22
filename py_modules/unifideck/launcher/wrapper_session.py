@@ -46,7 +46,7 @@ import os
 import shutil
 from pathlib import Path
 
-from unifideck.launcher import wine_registry, wrapper_prefs
+from unifideck.launcher import wine_registry, wrapper_locale, wrapper_prefs
 from unifideck.launcher.wrapper_session_specs import (
     GAMES_DIR_NAME,
     SPECS,
@@ -111,7 +111,7 @@ def write_prefix_index(store: str, *, auth: Path, template: Path) -> None:
     answers correctly inside the launcher process (see PR #422). The copy
     could go stale between backend starts, and on 2026-08-22 the file was
     found absent on a working install, which silently reverted every
-    locale-dependent behaviour to English. ``wrapper_prefs.plugin_locale``
+    locale-dependent behaviour to English. ``wrapper_locale.plugin_locale``
     asks the resolver instead.
     """
     path = prefix_index_path()
@@ -370,11 +370,11 @@ def inject(
         return False
     if not _identities_agree(spec, Path(source), Path(target)):
         return False
-    # Seed the launcher's language from the plugin locale at most once, so
-    # the first launch picks up the locale the language-selector modal
-    # already defaults to. Runs before the prefs merge, which then carries
-    # the seed into the target.
-    wrapper_prefs.ensure_locale_seeded(spec, source)
+    # Seed the launcher's language from the plugin locale whenever that locale
+    # has changed, so the client follows the language selector rather than
+    # staying at whatever was resolving on the very first launch. Runs before
+    # the prefs merge, which is what carries the seed on to the target.
+    wrapper_locale.ensure_locale_seeded(spec, source)
     wrapper_prefs.merge(spec, source, target, target_busy=target_busy)
     if not has_session(spec, source):
         logger.info(

@@ -25,12 +25,27 @@ from typing import Any
 
 import pytest
 
+from unifideck.launcher import wrapper_locale as wl
 from unifideck.launcher import wrapper_prefs as wp
 from unifideck.launcher import wrapper_session as ws
 
 from _wine_session import CONFIG, make_session, write_file
 
 SPEC = ws.SPECS["battlenet"]
+
+
+@pytest.fixture(autouse=True)
+def _no_seed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Silence the language seed for every test in this file.
+
+    ``inject`` seeds the client's UI language before it merges, so a test that
+    left the resolver alone would take the *test machine's* language and write
+    it over the fixture — which is how ``test_inject_carries_settings_even_
+    when_the_session_is_skipped`` started failing on a German Deck and passing
+    everywhere else. The seed has its own file; here it must not participate.
+    """
+    monkeypatch.setattr(wl, "_RESOLVE_ATTEMPTED", True)
+    monkeypatch.setattr(wl, "_RESOLVED_LOCALE", None)
 
 # The client keys its per-installation settings by a hash of the install path.
 # Identical in every one of our prefixes because ``INSTALLER_ARGS`` pins that
@@ -449,204 +464,3 @@ def test_exclusion_covers_a_subtree_but_not_a_parent(
     prefs = SPEC.prefs
     assert prefs is not None
     assert wp._excluded(trail, prefs.exclude) is expected
-
-
-# --------------------------------------------------------------------------
-# locale seeding — the plugin's UI locale as the launcher's first language
-# --------------------------------------------------------------------------
-
-
-def _seeded(prefix: Path) -> bool:
-    return (prefix / ".unifideck_battlenet_locale_seeded.v1").exists()
-
-
-def _resolved_locale(monkeypatch: pytest.MonkeyPatch, tag: str | None) -> None:
-    """Pin what the global resolver answers for this test.
-
-    The seed takes its locale from ``utils.locale.get_unifideck_locale`` now,
-    not from the prefix index, so these tests must state the resolved value
-    rather than the cached one. Stating it also stops them passing by
-    accident: two of them used to depend on the test machine itself being
-    en-US.
-    """
-    monkeypatch.setattr(wp, "_RESOLVE_ATTEMPTED", True)
-    monkeypatch.setattr(wp, "_RESOLVED_LOCALE", tag)
-
-
-def test_locale_seed_writes_the_language_into_auth(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A German plugin locale seeds the client's language on first launch."""
-    _resolved_locale(monkeypatch, "de-DE")
-    auth = _prefix(tmp_path, "auth", _config(), mtime=1000.0)
-
-    assert wp.ensure_locale_seeded(SPEC, auth) is True
-    assert _read(auth)[HASH]["Client"]["Language"] == "deDE"
-    assert _seeded(auth)
-
-
-def test_locale_seed_is_marker_gated(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """One stat on every subsequent launch."""
-    _resolved_locale(monkeypatch, "de-DE")
-    auth = _prefix(tmp_path, "auth", _config(), mtime=1000.0)
-
-    assert wp.ensure_locale_seeded(SPEC, auth) is True
-    assert wp.ensure_locale_seeded(SPEC, auth) is False
-    assert _read(auth)[HASH]["Client"]["Language"] == "deDE"
-
-
-def test_locale_seed_skips_enUS_because_it_is_the_client_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Nothing to do, but the marker is stamped so the next stat is free."""
-    _resolved_locale(monkeypatch, "en-US")
-    auth = _prefix(tmp_path, "auth", _config(), mtime=1000.0)
-
-    assert wp.ensure_locale_seeded(SPEC, auth) is False
-    assert _read(auth)[HASH]["Client"]["Language"] == "enUS"
-    assert _seeded(auth)  # marker exists, stat is cheap from here on
-
-
-def test_locale_seed_skips_an_unrecognised_plugin_locale(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A locale Battle.net does not support: safer to leave it at enUS."""
-    _resolved_locale(monkeypatch, "th-TH")
-    auth = _prefix(tmp_path, "auth", _config(), mtime=1000.0)
-
-    assert wp.ensure_locale_seeded(SPEC, auth) is False
-    assert _seeded(auth)
-
-
-def test_locale_seed_is_noop_when_nothing_can_resolve_a_locale(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Neither the resolver nor the index can answer: not an error."""
-    _resolved_locale(monkeypatch, None)
-    monkeypatch.setattr(wp, "_index_path", lambda: tmp_path / "absent.json")
-    auth = _prefix(tmp_path, "auth", _config(), mtime=1000.0)
-
-    assert wp.ensure_locale_seeded(SPEC, auth) is False
-    assert not _seeded(auth)
-
-
-def test_locale_seed_is_noop_when_auth_has_no_config(tmp_path: Path) -> None:
-    """A prefix Wine has never initialized — the next launch will."""
-    ws.write_prefix_index(
-        "battlenet", auth=tmp_path / "a", template=tmp_path / "t",
-    )
-    auth = tmp_path / "fresh"
-
-    assert wp.ensure_locale_seeded(SPEC, auth) is False
-    assert not _seeded(auth)
-
-
-def test_locale_seed_preserves_an_existing_language(tmp_path: Path) -> None:
-    """A user who set their own language in auth is not overwritten."""
-    ws.write_prefix_index(
-        "battlenet", auth=tmp_path / "a", template=tmp_path / "t",
-    )
-    config = _config()
-    config[HASH]["Client"]["Language"] = "frFR"
-    auth = _prefix(tmp_path, "auth", config, mtime=1000.0)
-
-    wp.ensure_locale_seeded(SPEC, auth)
-    # The marker exists now, but the language is untouched.
-    assert _read(auth)[HASH]["Client"]["Language"] == "frFR"
-    assert _seeded(auth)
-
-
-def test_locale_seed_is_noop_for_a_store_without_prefs(
-    tmp_path: Path,
-) -> None:
-    ws.write_prefix_index(
-        "bore", auth=tmp_path / "a", template=tmp_path / "t",
-    )
-    bore = ws.SessionSpec(store="bore", files=())
-    assert wp.ensure_locale_seeded(bore, tmp_path) is False
-
-
-def test_the_seed_runs_during_inject(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The load-bearing part: the seed happens on inject, before the merge.
-
-    Without this, a first launch on a German Deck would still open the client
-    at enUS, and the user would have to find the dropdown themselves.
-    """
-    _resolved_locale(monkeypatch, "de-DE")
-    auth = make_session(tmp_path / "auth", mtime=1000.0)
-    game = make_session(tmp_path / "game", mtime=500.0)
-    write_file(auth, CONFIG, json.dumps(_config()).encode(), mtime=1000.0)
-    write_file(game, CONFIG, json.dumps(_config()).encode(), mtime=500.0)
-    # inject: auth -> game. The seed runs on auth first, then the merge
-    # carries it into the game prefix.
-    assert ws.inject(SPEC, auth, game) is True
-    assert _read(auth)[HASH]["Client"]["Language"] == "deDE"
-    assert _read(game)[HASH]["Client"]["Language"] == "deDE"
-    assert _seeded(auth)
-
-
-# ── the locale comes from the global resolver ───────────────────────────
-
-
-def _launcher_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **ui: str) -> None:
-    """Point the launcher's standalone config loader at a throwaway file."""
-    import json as _json
-
-    from unifideck.launcher import wrapper_prefs as wp
-
-    path = tmp_path / "config.json"
-    path.write_text(_json.dumps({"ui": ui}), encoding="utf-8")
-
-    from unifideck.config.config_manager import ConfigManager
-
-    monkeypatch.setattr(
-        "unifideck.launcher.bootstrap._load_standalone_config",
-        lambda: ConfigManager(defaults_path=str(path), user_path=str(path)),
-    )
-    monkeypatch.setattr(wp, "_RESOLVE_ATTEMPTED", False)
-    monkeypatch.setattr(wp, "_RESOLVED_LOCALE", None)
-
-
-def test_the_locale_comes_from_the_global_resolver(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """One source of truth, and no file for it to go missing from.
-
-    The locale used to be copied into ``wrapper_prefixes.json`` and read back
-    from there. On 2026-08-22 that file was simply absent on a working
-    install, so every caller got ``None``: the client-language seed never ran
-    and the bootstrapper fell back to English. ``get_unifideck_locale`` was
-    already correct inside the launcher process (PR #422 fixed exactly that),
-    so the copy was a duplicate that could also go stale between backend
-    starts.
-    """
-    from unifideck.launcher import wrapper_prefs as wp
-
-    _launcher_config(tmp_path, monkeypatch, locale="de-DE")
-
-    assert wp.plugin_locale() == "de-DE"
-    assert wp.bootstrapper_locale("battlenet") == "deDE"
-
-
-
-def test_nothing_anywhere_still_yields_a_usable_installer_locale(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A bad value here stalls the installer on its language screen."""
-    from unifideck.launcher import wrapper_prefs as wp
-
-    def _boom() -> None:
-        raise OSError("config unreadable")
-
-    monkeypatch.setattr(
-        "unifideck.launcher.bootstrap._load_standalone_config", _boom,
-    )
-    monkeypatch.setattr(wp, "_RESOLVE_ATTEMPTED", False)
-    monkeypatch.setattr(wp, "_RESOLVED_LOCALE", None)
-
-    assert wp.plugin_locale() is None
-    assert wp.bootstrapper_locale("battlenet") == "enUS"
