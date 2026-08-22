@@ -699,15 +699,17 @@ def test_the_installer_language_follows_the_plugin_locale(
     content store for it before login, so every non-US account threw that
     warm-up away and paid a 45-minute re-download on first install.
     """
-    import json
-
     from unifideck.launcher import wrapper_prefs
     from unifideck.stores.battlenet.prefix.client_install import installer_args
 
-    index = tmp_path / "unifideck" / "wrapper_prefixes.json"
-    index.parent.mkdir(parents=True)
-    index.write_text(json.dumps({"battlenet": {"locale": ui_locale}}))
-    monkeypatch.setattr(wrapper_prefs, "_index_path", lambda: index)
+    # State the resolved locale rather than seeding the prefix index: the
+    # index is only a fallback now, so driving it here would let the test
+    # machine's own language decide the result.
+    monkeypatch.setattr(wrapper_prefs, "_RESOLVE_ATTEMPTED", True)
+    monkeypatch.setattr(wrapper_prefs, "_RESOLVED_LOCALE", ui_locale or None)
+    monkeypatch.setattr(
+        wrapper_prefs, "_index_path", lambda: tmp_path / "absent.json",
+    )
 
     args = installer_args()
 

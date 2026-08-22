@@ -439,7 +439,23 @@ class BattlenetInstaller:
         )
 
     async def _capture_client_cache(self, prefix: Path, since: float) -> None:
-        """Carry the Agent's content store back to the template. Never raises.
+        """Carry the Agent's content store back up the prefix chain.
+
+        Never raises.
+
+        **Into the auth prefix, not only the template.** Capturing only into
+        ``.template`` looked right and does not survive: the template is by
+        definition an rsync clone of ``.bnet-auth``, and ``ensure_template``
+        rebuilds it from there whenever it is not a usable auth-derived
+        snapshot, which a sign-out makes true. Measured end to end on
+        2026-08-22: a capture landed at 21:14, the user signed out at 22:22,
+        the template was re-derived at 22:45, and the next install paid the
+        agent update over again with the store back at its 6.9 MB bootstrap
+        size. Writing to auth as well means a rebuild inherits the cache
+        instead of discarding it.
+
+        The template still gets its own copy, because it is what the *next*
+        install clones and a rebuild is not guaranteed to happen in between.
 
         What makes one copy of that store interchangeable with another is the
         Agent's TACT tag query, not its size. A completed update *shrinks*
@@ -470,14 +486,23 @@ class BattlenetInstaller:
             return
         if not await self._store_is_quiescent(prefix, drive_c, since):
             return
-        await asyncio.to_thread(
-            capture_client_cache,
-            spec,
-            Path(prefix),
-            self._prefixes.template_prefix,
-            generation,
-            complete=agent_status.self_update_finished(drive_c, since),
-        )
+        complete = agent_status.self_update_finished(drive_c, since)
+        destinations = [self._prefixes.template_prefix]
+        # The auth prefix is the durable one, but it is also the prefix the
+        # sign-in client runs in, so it only accepts a copy while that client
+        # is down. Skipping it costs the next template rebuild, not the
+        # capture: the template copy below still happens either way.
+        if not self._prefixes.auth_is_busy():
+            destinations.append(self._prefixes.auth_prefix)
+        for destination in destinations:
+            await asyncio.to_thread(
+                capture_client_cache,
+                spec,
+                Path(prefix),
+                destination,
+                generation,
+                complete=complete,
+            )
 
     async def _store_is_quiescent(
         self, prefix: Path, drive_c: Path, since: float,

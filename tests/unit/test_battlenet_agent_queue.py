@@ -23,6 +23,7 @@ because only the first is already in the local content store.
 
 from __future__ import annotations
 
+import shutil
 import time
 from pathlib import Path
 
@@ -336,3 +337,34 @@ def test_a_store_declaring_no_cache_captures_nothing(tmp_path: Path) -> None:
     bare = SessionSpec(store="ubisoft", files=())
 
     assert capture_client_cache(bare, source, template, KR_TAGS, complete=True) == 0
+
+
+def test_a_capture_survives_the_template_being_rebuilt(tmp_path: Path) -> None:
+    """The template is a derived artifact, so a capture must outlive it.
+
+    Measured on 2026-08-22, after the first version of this shipped. A capture
+    landed in ``.template`` at 21:14; the user signed out at 22:22; at 22:45
+    ``ensure_template`` re-derived the template from ``.bnet-auth``, which
+    discards everything the template had learned. The next install found the
+    store back at its 6.9 MB bootstrap size and paid the agent update again,
+    which is exactly the loop the capture exists to break.
+
+    Capturing into the auth prefix as well fixes it, because the rebuild is
+    an rsync clone *of* the auth prefix.
+    """
+    game, template, auth = tmp_path / "g", tmp_path / "tpl", tmp_path / "auth"
+    _casc(game, "kr")
+    _casc(template, "us")
+    _casc(auth, "us")
+
+    for destination in (template, auth):
+        capture_client_cache(_spec(), game, destination, KR_TAGS, complete=True)
+
+    # ``ensure_template`` rebuilds the template as a clone of the auth prefix.
+    shutil.rmtree(template)
+    shutil.copytree(auth, template)
+
+    assert read_generation(template) == KR_TAGS, (
+        "the rebuilt template lost the captured store"
+    )
+    assert (template / CASC / "data" / "0000.data").read_text() == "kr"

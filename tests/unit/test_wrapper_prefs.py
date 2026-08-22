@@ -460,11 +460,24 @@ def _seeded(prefix: Path) -> bool:
     return (prefix / ".unifideck_battlenet_locale_seeded.v1").exists()
 
 
-def test_locale_seed_writes_the_language_into_auth(tmp_path: Path) -> None:
+def _resolved_locale(monkeypatch: pytest.MonkeyPatch, tag: str | None) -> None:
+    """Pin what the global resolver answers for this test.
+
+    The seed takes its locale from ``utils.locale.get_unifideck_locale`` now,
+    not from the prefix index, so these tests must state the resolved value
+    rather than the cached one. Stating it also stops them passing by
+    accident: two of them used to depend on the test machine itself being
+    en-US.
+    """
+    monkeypatch.setattr(wp, "_RESOLVE_ATTEMPTED", True)
+    monkeypatch.setattr(wp, "_RESOLVED_LOCALE", tag)
+
+
+def test_locale_seed_writes_the_language_into_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A German plugin locale seeds the client's language on first launch."""
-    ws.write_prefix_index(
-        "battlenet", auth=tmp_path / "a", template=tmp_path / "t", locale="de-DE",
-    )
+    _resolved_locale(monkeypatch, "de-DE")
     auth = _prefix(tmp_path, "auth", _config(), mtime=1000.0)
 
     assert wp.ensure_locale_seeded(SPEC, auth) is True
@@ -472,11 +485,11 @@ def test_locale_seed_writes_the_language_into_auth(tmp_path: Path) -> None:
     assert _seeded(auth)
 
 
-def test_locale_seed_is_marker_gated(tmp_path: Path) -> None:
+def test_locale_seed_is_marker_gated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """One stat on every subsequent launch."""
-    ws.write_prefix_index(
-        "battlenet", auth=tmp_path / "a", template=tmp_path / "t", locale="de-DE",
-    )
+    _resolved_locale(monkeypatch, "de-DE")
     auth = _prefix(tmp_path, "auth", _config(), mtime=1000.0)
 
     assert wp.ensure_locale_seeded(SPEC, auth) is True
@@ -485,12 +498,10 @@ def test_locale_seed_is_marker_gated(tmp_path: Path) -> None:
 
 
 def test_locale_seed_skips_enUS_because_it_is_the_client_default(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Nothing to do, but the marker is stamped so the next stat is free."""
-    ws.write_prefix_index(
-        "battlenet", auth=tmp_path / "a", template=tmp_path / "t", locale="en-US",
-    )
+    _resolved_locale(monkeypatch, "en-US")
     auth = _prefix(tmp_path, "auth", _config(), mtime=1000.0)
 
     assert wp.ensure_locale_seeded(SPEC, auth) is False
@@ -499,25 +510,22 @@ def test_locale_seed_skips_enUS_because_it_is_the_client_default(
 
 
 def test_locale_seed_skips_an_unrecognised_plugin_locale(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A locale Battle.net does not support: safer to leave it at enUS."""
-    ws.write_prefix_index(
-        "battlenet", auth=tmp_path / "a", template=tmp_path / "t", locale="th-TH",
-    )
+    _resolved_locale(monkeypatch, "th-TH")
     auth = _prefix(tmp_path, "auth", _config(), mtime=1000.0)
 
     assert wp.ensure_locale_seeded(SPEC, auth) is False
     assert _seeded(auth)
 
 
-def test_locale_seed_is_noop_when_the_index_has_no_locale(
-    tmp_path: Path,
+def test_locale_seed_is_noop_when_nothing_can_resolve_a_locale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The backend has not written a locale yet — not an error."""
-    ws.write_prefix_index(
-        "battlenet", auth=tmp_path / "a", template=tmp_path / "t",
-    )
+    """Neither the resolver nor the index can answer: not an error."""
+    _resolved_locale(monkeypatch, None)
+    monkeypatch.setattr(wp, "_index_path", lambda: tmp_path / "absent.json")
     auth = _prefix(tmp_path, "auth", _config(), mtime=1000.0)
 
     assert wp.ensure_locale_seeded(SPEC, auth) is False
@@ -527,7 +535,7 @@ def test_locale_seed_is_noop_when_the_index_has_no_locale(
 def test_locale_seed_is_noop_when_auth_has_no_config(tmp_path: Path) -> None:
     """A prefix Wine has never initialized — the next launch will."""
     ws.write_prefix_index(
-        "battlenet", auth=tmp_path / "a", template=tmp_path / "t", locale="de-DE",
+        "battlenet", auth=tmp_path / "a", template=tmp_path / "t",
     )
     auth = tmp_path / "fresh"
 
@@ -538,7 +546,7 @@ def test_locale_seed_is_noop_when_auth_has_no_config(tmp_path: Path) -> None:
 def test_locale_seed_preserves_an_existing_language(tmp_path: Path) -> None:
     """A user who set their own language in auth is not overwritten."""
     ws.write_prefix_index(
-        "battlenet", auth=tmp_path / "a", template=tmp_path / "t", locale="de-DE",
+        "battlenet", auth=tmp_path / "a", template=tmp_path / "t",
     )
     config = _config()
     config[HASH]["Client"]["Language"] = "frFR"
@@ -554,21 +562,21 @@ def test_locale_seed_is_noop_for_a_store_without_prefs(
     tmp_path: Path,
 ) -> None:
     ws.write_prefix_index(
-        "bore", auth=tmp_path / "a", template=tmp_path / "t", locale="de-DE",
+        "bore", auth=tmp_path / "a", template=tmp_path / "t",
     )
     bore = ws.SessionSpec(store="bore", files=())
     assert wp.ensure_locale_seeded(bore, tmp_path) is False
 
 
-def test_the_seed_runs_during_inject(tmp_path: Path) -> None:
+def test_the_seed_runs_during_inject(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The load-bearing part: the seed happens on inject, before the merge.
 
     Without this, a first launch on a German Deck would still open the client
     at enUS, and the user would have to find the dropdown themselves.
     """
-    ws.write_prefix_index(
-        "battlenet", auth=tmp_path / "a", template=tmp_path / "t", locale="de-DE",
-    )
+    _resolved_locale(monkeypatch, "de-DE")
     auth = make_session(tmp_path / "auth", mtime=1000.0)
     game = make_session(tmp_path / "game", mtime=500.0)
     write_file(auth, CONFIG, json.dumps(_config()).encode(), mtime=1000.0)
@@ -579,3 +587,66 @@ def test_the_seed_runs_during_inject(tmp_path: Path) -> None:
     assert _read(auth)[HASH]["Client"]["Language"] == "deDE"
     assert _read(game)[HASH]["Client"]["Language"] == "deDE"
     assert _seeded(auth)
+
+
+# ── the locale comes from the global resolver ───────────────────────────
+
+
+def _launcher_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **ui: str) -> None:
+    """Point the launcher's standalone config loader at a throwaway file."""
+    import json as _json
+
+    from unifideck.launcher import wrapper_prefs as wp
+
+    path = tmp_path / "config.json"
+    path.write_text(_json.dumps({"ui": ui}), encoding="utf-8")
+
+    from unifideck.config.config_manager import ConfigManager
+
+    monkeypatch.setattr(
+        "unifideck.launcher.bootstrap._load_standalone_config",
+        lambda: ConfigManager(defaults_path=str(path), user_path=str(path)),
+    )
+    monkeypatch.setattr(wp, "_RESOLVE_ATTEMPTED", False)
+    monkeypatch.setattr(wp, "_RESOLVED_LOCALE", None)
+
+
+def test_the_locale_comes_from_the_global_resolver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One source of truth, and no file for it to go missing from.
+
+    The locale used to be copied into ``wrapper_prefixes.json`` and read back
+    from there. On 2026-08-22 that file was simply absent on a working
+    install, so every caller got ``None``: the client-language seed never ran
+    and the bootstrapper fell back to English. ``get_unifideck_locale`` was
+    already correct inside the launcher process (PR #422 fixed exactly that),
+    so the copy was a duplicate that could also go stale between backend
+    starts.
+    """
+    from unifideck.launcher import wrapper_prefs as wp
+
+    _launcher_config(tmp_path, monkeypatch, locale="de-DE")
+
+    assert wp.plugin_locale() == "de-DE"
+    assert wp.bootstrapper_locale("battlenet") == "deDE"
+
+
+
+def test_nothing_anywhere_still_yields_a_usable_installer_locale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bad value here stalls the installer on its language screen."""
+    from unifideck.launcher import wrapper_prefs as wp
+
+    def _boom() -> None:
+        raise OSError("config unreadable")
+
+    monkeypatch.setattr(
+        "unifideck.launcher.bootstrap._load_standalone_config", _boom,
+    )
+    monkeypatch.setattr(wp, "_RESOLVE_ATTEMPTED", False)
+    monkeypatch.setattr(wp, "_RESOLVED_LOCALE", None)
+
+    assert wp.plugin_locale() is None
+    assert wp.bootstrapper_locale("battlenet") == "enUS"

@@ -59,6 +59,7 @@ __all__ = [
     "config_path",
     "ensure_locale_seeded",
     "merge",
+    "plugin_locale",
     "read_prefs",
 ]
 
@@ -106,15 +107,62 @@ def _index_path() -> Path:
     return Path(base) / "unifideck" / "wrapper_prefixes.json"
 
 
-def _read_index_locale(store: str) -> str | None:
-    """The plugin's locale, as written by the backend into the prefix index."""
+#: Resolved once per launcher process. The launcher is short-lived (one game
+#: launch) so a single config load is the whole cost, but ``plugin_locale`` is
+#: called from more than one place in a run.
+_RESOLVED_LOCALE: str | None = None
+_RESOLVE_ATTEMPTED = False
+
+
+def _detect_locale() -> str | None:
+    """Ask the plugin's own locale resolver, the way everything else does.
+
+    ``utils.locale.get_unifideck_locale`` is the single source of truth: it
+    walks the explicit ``ui.locale`` preference, then Steam's UI language,
+    then the POSIX locale, then the configured source tag. The launcher can
+    reach it because it builds a standalone ``ConfigManager`` from disk for
+    exactly this kind of question.
+
+    Never raises. The launcher runs under the system python during a game
+    launch, and a language preference is not worth failing a launch over.
+    """
     try:
-        raw = json.loads(_index_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        from unifideck.launcher.bootstrap import _load_standalone_config
+        from unifideck.utils.locale import get_unifideck_locale
+
+        return get_unifideck_locale(_load_standalone_config())
+    except Exception:
+        logger.debug("[wrapper_prefs] locale resolver unavailable", exc_info=True)
         return None
-    row = raw.get(store) if isinstance(raw, dict) else None
-    value = row.get("locale") if isinstance(row, dict) else None
-    return value if isinstance(value, str) and value else None
+
+
+def plugin_locale() -> str | None:
+    """The plugin's BCP-47 UI locale, from the one resolver everything uses.
+
+    There is deliberately no second source. ``get_unifideck_locale`` already
+    walks the explicit ``ui.locale`` preference, then Steam's UI language,
+    then POSIX, then the configured default, and PR #422 fixed it to work
+    *inside the launcher process* specifically (its ConfigManager was built
+    with a defaults path that does not exist on a Decky CLI install, so it
+    had been answering ``en-US`` for everyone). Copying the answer into
+    ``wrapper_prefixes.json`` and reading it back was added afterwards and
+    duplicated a question that was already answered.
+
+    That copy earned its removal twice over: on 2026-08-22 the file was
+    simply *absent* on a working install, for reasons that were never
+    established, so every caller silently got ``None`` and every
+    locale-dependent behaviour fell back to English. It is also written once
+    per backend start, so a language changed afterwards could not reach the
+    launcher until something restarted.
+
+    This wrapper exists only to hold the cache and the never-raises contract
+    for the two callers below; the resolution itself is not ours.
+    """
+    global _RESOLVED_LOCALE, _RESOLVE_ATTEMPTED
+    if not _RESOLVE_ATTEMPTED:
+        _RESOLVE_ATTEMPTED = True
+        _RESOLVED_LOCALE = _detect_locale()
+    return _RESOLVED_LOCALE
 
 
 def bootstrapper_locale(store: str) -> str:
@@ -139,7 +187,7 @@ def bootstrapper_locale(store: str) -> str:
     ``launcher/wrapper_client_cache`` exists to stop being re-paid. Matching
     the locale to the user gets the region right more often at no cost.
     """
-    tag = _read_index_locale(store)
+    tag = plugin_locale()
     return _BNET_UI_LOCALES.get(tag or "", _DEFAULT_BNET_LOCALE)
 
 
@@ -186,7 +234,7 @@ def ensure_locale_seeded(spec: SessionSpec, auth_prefix: Path) -> bool:
     auth = Path(auth_prefix)
     if _seed_marker_path(auth).exists():
         return False
-    locale = _read_index_locale(spec.store)
+    locale = plugin_locale()
     if locale is None:
         return False
     bnet_locale = _BNET_UI_LOCALES.get(locale)
