@@ -127,8 +127,11 @@ def _fail_on_live_data_writes():
     before = _snapshot(live)
     yield
     after = _snapshot(live)
-    added = sorted(after.keys() - before.keys())
-    changed = sorted(k for k in after.keys() & before.keys() if after[k] != before[k])
+    added = sorted(k for k in after.keys() - before.keys() if not _foreign_writer(k))
+    changed = sorted(
+        k for k in after.keys() & before.keys()
+        if after[k] != before[k] and not _foreign_writer(k)
+    )
     if not added and not changed:
         return
     pytest.fail(
@@ -140,6 +143,21 @@ def _fail_on_live_data_writes():
         f"  modified: {changed}",
         pytrace=False,
     )
+
+
+#: SQLite sidecars. The running plugin keeps ``playtime.db`` open, and SQLite
+#: touches its ``-wal``/``-shm`` companions on a timer whether or not anything
+#: of ours runs — measured advancing every 60s on an idle dev Deck with no
+#: tests in flight. Attributing that to the suite makes this guard fire on
+#: every run during normal on-device development, which is precisely when the
+#: plugin is live, and a guard that cries wolf gets disabled. The database
+#: file itself is still watched; only the sidecars are exempt.
+_FOREIGN_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
+def _foreign_writer(rel_path: str) -> bool:
+    """Whether ``rel_path`` is written by something other than the suite."""
+    return rel_path.endswith(_FOREIGN_SUFFIXES)
 
 
 def _snapshot(root):

@@ -155,7 +155,9 @@ class _Watch:
             return False
         logger.info(
             "[%s] %s gone for ~%.0fs — treating the install as abandoned",
-            self._probe.store, self._probe.client_label, self._gone_for,
+            self._probe.store,
+            self._probe.client_label,
+            self._gone_for,
         )
         return True
 
@@ -169,12 +171,15 @@ class _Watch:
             "was waiting for a window that will never appear — check the "
             "launcher log for this game; a failed RunGame (e.g. the title "
             "missing from games.map) leaves exactly this state.",
-            self._probe.store, self._probe.client_label, int(self._absent_for),
+            self._probe.store,
+            self._probe.client_label,
+            int(self._absent_for),
         )
         return True
 
     async def start(
-        self, on_ready: Callable[[], Awaitable[None]] | None,
+        self,
+        on_ready: Callable[[], Awaitable[None]] | None,
     ) -> str | None:
         """Snapshot, ask the frontend to open the client, then watch.
 
@@ -184,12 +189,12 @@ class _Watch:
         """
         baseline = self._probe.snapshot()
         await self._emit(
-            f"{self._probe.client_label} is opening — install the game "
-            f"from its window.",
+            f"{self._probe.client_label} is opening — install the game from its window.",
         )
         logger.info(
             "[%s] awaiting %s launch via frontend RunGame",
-            self._probe.store, self._probe.client_label,
+            self._probe.store,
+            self._probe.client_label,
         )
         if on_ready is not None:
             await on_ready()
@@ -203,33 +208,42 @@ class _Watch:
             install_dir = self._probe.detect(baseline)
             if install_dir:
                 logger.info(
-                    "[%s] detected install at %s", self._probe.store, install_dir,
+                    "[%s] detected install at %s",
+                    self._probe.store,
+                    install_dir,
                 )
                 await self._emit(
-                    f"Installing {Path(install_dir).name} via "
-                    f"{self._probe.client_label}…",
+                    f"Installing {Path(install_dir).name} via {self._probe.client_label}…",
                 )
-                await self._await_completion(install_dir)
+                if not await self._await_completion(install_dir):
+                    return None
                 return install_dir
             if self._abandoned():
                 return None
             if iteration % TICK_EVERY_POLLS == 0:
                 await self._emit(
-                    f"Waiting for the game to install in "
-                    f"{self._probe.client_label}…",
+                    f"Waiting for the game to install in {self._probe.client_label}…",
                 )
         logger.warning(
             "[%s] manual install timed out after %.1fh",
-            self._probe.store, self._timeout / 3600,
+            self._probe.store,
+            self._timeout / 3600,
         )
         return None
 
-    async def _await_completion(self, install_dir: str) -> None:
-        """Block until the install finishes.
+    async def _await_completion(self, install_dir: str) -> bool:
+        """Block until the install finishes. True only when it actually did.
 
         The store's own verdict wins whenever it has one — including a
         ``False`` verdict, which keeps the size heuristic from ending a
         download that has merely paused.
+
+        Running out of polls is a **failure**, not a completion. This
+        returned ``None`` unconditionally, so the caller took "the loop
+        ended" as "the game is installed" and recorded a game that had
+        never finished downloading — a Play button on an install the
+        vendor client had left part-written. A store that cannot say yes
+        must not be reported as yes.
         """
         prev_size = 0
         stable = 0
@@ -239,17 +253,28 @@ class _Watch:
             if verdict is True:
                 logger.info(
                     "[%s] %s reports the install complete",
-                    self._probe.store, self._probe.client_label,
+                    self._probe.store,
+                    self._probe.client_label,
                 )
-                return
+                return True
             size = self._probe.measure(install_dir)
             if verdict is None:
                 stable = stable + 1 if size == prev_size and size > 0 else 0
                 if stable >= STABILITY_THRESHOLD:
-                    return
+                    return True
             prev_size = size
             if size > 0:
                 await self._emit(f"Installing… ({size / (1024**3):.1f} GB)")
+        logger.warning(
+            "[%s] %s never reported this install complete after %d polls "
+            "(~%.1fh). The files are on disk but part-written, so this is "
+            "reported as a failure rather than recorded as installed.",
+            self._probe.store,
+            self._probe.client_label,
+            STABILITY_MAX_POLLS,
+            STABILITY_MAX_POLLS * self._poll / 3600,
+        )
+        return False
 
 
 async def watch_manual_install(
