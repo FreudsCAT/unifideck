@@ -9,7 +9,7 @@ a per-game prefix is an rsync clone of ``.template`` and everything the clone
 learns dies with it.
 
 The measured case. Battle.net's Agent runs one exclusive operation at a time,
-and on a fresh prefix it makes its own self-update that operation — so the
+and on a fresh prefix it makes its own self-update that operation, so the
 game's download waits behind it. That costs two seconds when the local content
 store already holds the build's tagged content, and 45 minutes when it does
 not. The user sees a bar reading "Queued" and cancels; cancelling deletes the
@@ -19,20 +19,20 @@ three restarts, no progress ever made.
 Nothing here prevents that first download. What it prevents is paying for it
 more than once.
 
-**Replace, never merge — and the size is not the signal.** The obvious design
+**Replace, never merge, and the size is not the signal.** The obvious design
 was "copy when the source holds more", and measuring it killed that outright:
 after Battle.net's Agent finished updating, its store was 5.4 MB against the
 template's 6.9 MB. The Agent *compacts* on completion (``[casc] Starting
 Compaction``), discarding content the new tag set does not need. So the smaller
-store is the correct one, and the bigger one is stale — size cannot tell them
+store is the correct one, and the bigger one is stale. Size cannot tell them
 apart, and an additive merge would be actively dangerous: these stores are an
 ``indices/`` directory describing archives under ``data/``, so blending two
 generations leaves an index pointing at archives that are not there. The whole
 tree is swapped, or nothing is.
 
 **The generation string is what decides.** The caller passes an opaque token
-identifying what the source store satisfies — for Battle.net the Agent's TACT
-tag query, e.g. ``Volatile Windows KR? acct-IND? geoip-IN?`` — and it is
+identifying what the source store satisfies, for Battle.net the Agent's TACT
+tag query, e.g. ``Volatile Windows KR? acct-IND? geoip-IN?``, and it is
 recorded in the marker. A capture is skipped when the template already carries
 that generation. Opaque on purpose: this module has no business parsing a
 vendor's tags, only comparing them.
@@ -45,8 +45,8 @@ deliberately not the ``Agent/<build>/`` beside it.
 
 **Quiescence is the caller's call, not this module's.** Copying a content store
 while its writer is mid-flight can capture a torn index. Only the store knows
-when its client is done — for Battle.net that is
-``agent_status.self_update_finished`` — so the decision stays there. Same
+when its client is done. For Battle.net that is
+``agent_status.self_update_finished``, so the decision stays there. Same
 reasoning that keeps ``holds_game`` out of ``stores/shared/prefix_placement``.
 
 Stdlib-only; runs under the SYSTEM python (3.10-3.14) like everything in
@@ -67,7 +67,7 @@ logger = logging.getLogger(__name__)
 #: Stamped on the template after a capture, holding the generation string the
 #: captured caches satisfy. Versioned so a capture that turns out to be a bad
 #: idea can be invalidated by bumping the constant rather than by asking users
-#: to rebuild a prefix — the ``.v2`` self-heal idiom
+#: to rebuild a prefix: the ``.v2`` self-heal idiom
 #: ``stores/battlenet/prefix/tweaks`` and the GOG registry fix both use.
 CACHE_MARKER = ".unifideck_client_cache.v1"
 
@@ -75,7 +75,7 @@ CACHE_MARKER = ".unifideck_client_cache.v1"
 #: finished one. **Partial captures are the point, not a concession.** The
 #: cancel path is where this pays: a user cancels precisely because the wait
 #: looked broken, and if only completed downloads were ever kept then the one
-#: case that actually loops — cancel, retry, cancel — would keep nothing and
+#: case that actually loops (cancel, retry, cancel) would keep nothing and
 #: restart from zero every time. A content store interrupted by a dead client
 #: is the ordinary resumable state its own downloader is built to continue
 #: from; what it must never be is *mistaken for a finished one*, hence the
@@ -101,7 +101,7 @@ def read_generation(template_prefix: Path) -> str | None:
 def _swap_in(src: Path, dst: Path) -> bool:
     """Replace ``dst`` with a copy of ``src``. True when ``dst`` now is it.
 
-    Copy to a sibling, then two renames, then delete the old — so a failure
+    Copy to a sibling, then two renames, then delete the old, so a failure
     at any point leaves either the previous tree or the new one in place, and
     never a half-written store the next prefix would clone.
     """
@@ -157,7 +157,7 @@ def capture_client_cache(
     """Replace ``spec``'s client caches in the template with the source's.
 
     ``generation`` identifies what the source's caches satisfy and ``complete``
-    whether they finished downloading it. Returns how many trees were swapped —
+    whether they finished downloading it. Returns how many trees were swapped:
     zero when the store declares none, the template already holds this
     generation finished, or either prefix is unreadable. Never raises: every
     caller runs on a path where the real work is something else.

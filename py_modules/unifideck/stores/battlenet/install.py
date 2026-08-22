@@ -246,7 +246,7 @@ class BattlenetInstaller:
             )
         result = self._record(game_id, prepared, probe, install_dir)
         # This prefix survives, but the template is what the *next* install
-        # clones — so a successful install is the cheapest moment there is to
+        # clones, so a successful install is the cheapest moment there is to
         # top it up. Costs one marker read when there is nothing new.
         await self._capture_client_cache(prepared.prefix, probe.started_at)
         return result
@@ -383,7 +383,7 @@ class BattlenetInstaller:
         next attempt re-downloads it from zero and looks equally stuck.
 
         ``since`` is when this attempt's client started. ``None`` means no
-        client ran under this prefix — the clone itself failed — so there is
+        client ran under this prefix (the clone itself failed), so there is
         nothing of ours in it to keep and the capture is skipped outright.
         """
         await self._salvage_client_logs(game_id, prefix)
@@ -442,7 +442,7 @@ class BattlenetInstaller:
         """Carry the Agent's content store back to the template. Never raises.
 
         What makes one copy of that store interchangeable with another is the
-        Agent's TACT tag query, not its size — a completed update *shrinks*
+        Agent's TACT tag query, not its size. A completed update *shrinks*
         the store, because the Agent compacts away whatever the new tags do
         not select. So the tag string travels with the copy as its generation.
 
@@ -453,7 +453,7 @@ class BattlenetInstaller:
         complete capture still supersedes it.
 
         What is *not* negotiable is that nothing is writing the store as it is
-        copied — a torn content store in the template is inherited by every
+        copied. A torn content store in the template is inherited by every
         prefix made afterwards, which is the one outcome worse than a slow
         install. Note that "the client is closed" is the wrong test for that:
         completion deliberately leaves the window open, so requiring a dead
@@ -487,7 +487,7 @@ class BattlenetInstaller:
         Two ways to be sure, one per exit path:
 
         * **No client.** The cancel path kills it first, so the store is
-          whatever the interrupted download left — the ordinary resumable
+          whatever the interrupted download left: the ordinary resumable
           state, and nothing can change it now.
         * **No active operation.** The success path leaves the window open,
           but the Agent runs one exclusive operation at a time and says when

@@ -55,6 +55,7 @@ from unifideck.launcher.wrapper_session_specs import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "bootstrapper_locale",
     "config_path",
     "ensure_locale_seeded",
     "merge",
@@ -88,6 +89,10 @@ _BNET_UI_LOCALES: dict[str, str] = {
 # an explicit user choice that happens to be enUS is never overwritten.
 _LOCALE_SEED_MARKER = ".unifideck_battlenet_locale_seeded.v1"
 
+# What the bootstrapper falls back to. Its own fallback, per the strings in
+# the installer binary, is "Fallback region not found in config, us".
+_DEFAULT_BNET_LOCALE = "enUS"
+
 # ── prefix index ───────────────────────────────────────────────────────────
 
 # Maintained here rather than in ``wrapper_session`` for the same reason
@@ -110,6 +115,32 @@ def _read_index_locale(store: str) -> str | None:
     row = raw.get(store) if isinstance(raw, dict) else None
     value = row.get("locale") if isinstance(row, dict) else None
     return value if isinstance(value, str) and value else None
+
+
+def bootstrapper_locale(store: str) -> str:
+    """The locale to hand the vendor bootstrapper for ``store``.
+
+    Distinct from the seeding path below in one way that matters: an
+    unrecognised tag falls back to :data:`_DEFAULT_BNET_LOCALE` rather than
+    being left alone. Seeding a preference is optional and a no-op is fine;
+    this value is a **command-line argument the installer blocks on**. Launched
+    without a usable locale the Battle.net bootstrapper stops on
+    ``STATE_SELECT_LANGUAGE``, and in Gaming Mode that wizard has no gamescope
+    session to render into, so it waits behind everything for the full
+    30-minute timeout while the user looks at a Sign In button that did
+    nothing. Passing a locale the client does not ship risks exactly that, so
+    only codes known to :data:`_BNET_UI_LOCALES` are ever passed through.
+
+    Why this is worth doing at all, given it was hardcoded ``enUS`` and worked:
+    the bootstrapper derives its *region* from the locale (``Configuration:
+    locale=enUS region=US``) and warms the Agent's content store for that
+    region before anyone has logged in. A non-US account then invalidates the
+    whole warm-up on first login, which is what
+    ``launcher/wrapper_client_cache`` exists to stop being re-paid. Matching
+    the locale to the user gets the region right more often at no cost.
+    """
+    tag = _read_index_locale(store)
+    return _BNET_UI_LOCALES.get(tag or "", _DEFAULT_BNET_LOCALE)
 
 
 # ── locale seeding ─────────────────────────────────────────────────────────

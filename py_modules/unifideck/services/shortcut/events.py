@@ -83,24 +83,35 @@ async def _update_icons_from_grid(svc: Any) -> int:
 
     grid_dir = str(Path(shortcuts_path).parent / "grid")
     try:
-        from unifideck.services.shortcut.persistence import read_vdf, write_vdf
+        from unifideck.services.shortcut.persistence import (
+            read_vdf,
+            vdf_write_lock,
+            write_vdf,
+        )
     except Exception:
         logger.exception("[ShortcutService] failed to import VDF deps")
         return 0
 
-    data = await read_vdf(shortcuts_path)
-    shortcuts = data.get("shortcuts")
-    if not isinstance(shortcuts, dict):
-        return 0
+    # The second read-modify-write of shortcuts.vdf in the package, and the
+    # reason the lock is module-level rather than owned by the service: this
+    # runs off the artwork phase, concurrently with a reconcile doing its own
+    # read-edit-write, and unsynchronised they both start from the same
+    # snapshot so one silently discards the other's entries. See
+    # ``ShortcutService._save_all``.
+    async with vdf_write_lock():
+        data = await read_vdf(shortcuts_path)
+        shortcuts = data.get("shortcuts")
+        if not isinstance(shortcuts, dict):
+            return 0
 
-    launcher = getattr(svc, "_launcher_path", "") or ""
-    updated = _apply_icon_updates(shortcuts, grid_dir, launcher)
-    if updated > 0:
-        await write_vdf(shortcuts_path, data, _data_dir_of(svc))
-        logger.info(
-            "[ShortcutService] updated icons for %d shortcuts in shortcuts.vdf",
-            updated,
-        )
+        launcher = getattr(svc, "_launcher_path", "") or ""
+        updated = _apply_icon_updates(shortcuts, grid_dir, launcher)
+        if updated > 0:
+            await write_vdf(shortcuts_path, data, _data_dir_of(svc))
+            logger.info(
+                "[ShortcutService] updated icons for %d shortcuts in shortcuts.vdf",
+                updated,
+            )
     return updated
 
 if TYPE_CHECKING:

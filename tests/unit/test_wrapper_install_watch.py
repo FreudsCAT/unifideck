@@ -186,7 +186,11 @@ def test_a_zero_size_never_counts_as_stable(
 
     _run(probe)
 
-    assert probe.complete_calls == mod.STABILITY_MAX_POLLS
+    # The full download budget, not three polls: zero never satisfies the
+    # stability rule, so the wait runs to its ceiling. That ceiling now comes
+    # from the probe's own timeout rather than a fixed count, so it is asked
+    # for here the same way the watcher derives it.
+    assert probe.complete_calls == mod._Watch(probe, "/pfx", None)._completion_polls
 
 
 # ── the give-up watchdogs ───────────────────────────────────────
@@ -324,12 +328,12 @@ def test_a_store_that_can_explain_the_wait_replaces_the_generic_tick(
 ) -> None:
     """"Waiting for the game to install" and a real hang look identical.
 
-    Battle.net can tell them apart — its Agent runs one exclusive operation at
-    a time and logs which one holds the slot — so a 28-minute wait behind the
+    Battle.net can tell them apart: its Agent runs one exclusive operation at
+    a time and logs which one holds the slot, so a 28-minute wait behind the
     Agent's own self-update gets named instead of mimed.
     """
     _alive(monkeypatch, True)
-    note = "Battle.net is updating its downloader (75%) — Don't cancel."
+    note = "Battle.net is updating its downloader (75%). Don't cancel."
 
     seen = _messages(_ExplainingProbe(note, detect_after=10, complete_after=1))
 
@@ -347,7 +351,7 @@ def test_the_explanation_also_beats_a_stalled_byte_count(
     naming what is in front of it.
     """
     _alive(monkeypatch, True)
-    note = "Battle.net is updating its downloader (12%) — Don't cancel."
+    note = "Battle.net is updating its downloader (12%). Don't cancel."
 
     seen = _messages(
         _ExplainingProbe(note, detect_after=1, complete_after=4, sizes=[24_576]),
@@ -393,3 +397,48 @@ def test_a_raising_status_message_never_ends_an_install(
     probe = _Exploding(detect_after=2, complete_after=2)
 
     assert _run(probe) == "/install/dir"
+
+
+# ── the download budget ─────────────────────────────────────────
+
+
+def test_the_download_wait_follows_the_probes_own_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A store cannot declare four hours and silently be given ninety minutes.
+
+    The budget was a fixed 360 polls. At Battle.net's 15 second interval that
+    is 90 minutes, against the 4 hours its probe declares. The clock starts
+    when ``detect()`` first sees the install directory, and a vendor client
+    creates that when it *accepts* the job, so a long queue wait plus a large
+    download ran past the fixed budget and a healthy install was reported as
+    failed.
+    """
+    _alive(monkeypatch, True)
+    probe = _Probe()
+    probe.poll_interval_s = 15.0
+    probe.timeout_s = 4 * 60 * 60
+
+    watch = mod._Watch(probe, "/pfx", None)
+
+    assert watch._completion_polls == 960
+
+
+def test_a_short_timeout_never_shrinks_the_download_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deriving the budget must not take headroom away from anyone.
+
+    Ubisoft's probe declares no timeout, so it inherits the two-hour default
+    at a 10 second poll. That is 720 polls, already above the old floor; a
+    store with a genuinely short timeout keeps the floor rather than losing
+    download time it had before.
+    """
+    _alive(monkeypatch, True)
+    probe = _Probe()
+    probe.poll_interval_s = 10.0
+    probe.timeout_s = 60.0
+
+    watch = mod._Watch(probe, "/pfx", None)
+
+    assert watch._completion_polls == mod.STABILITY_MAX_POLLS

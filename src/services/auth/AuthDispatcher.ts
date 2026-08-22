@@ -41,6 +41,7 @@ import {
 } from "../../utils/authShortcutLaunch";
 import { launchUbisoftAuthViaShortcut } from "../../utils/ubisoftShortcutLaunch";
 import { launchBattlenetAuthViaShortcut } from "../../utils/battlenetShortcutLaunch";
+import { prepareForSync } from "../../lib/steam-bridge/prepare-sync";
 import type { StoreId, AuthResult } from "../../types/api";
 
 const AUTH_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes ceiling
@@ -209,14 +210,23 @@ class AuthDispatcherImpl {
           // restart. Queues behind an in-flight sync on the backend
           // (SyncService._enqueue) rather than blocking this Promise —
           // callers resolve as soon as auth completes, same as before.
-          void call<[StoreId], unknown>(rpcRoutes.requestAuthSync, store).catch(
-            (e) => {
+          //
+          // ``prepareForSync`` first, and awaited inside the chain rather
+          // than skipped: this path used to fire the RPC bare while the
+          // user-triggered syncs in ``SyncContext`` did three preparatory
+          // steps. That gap was the whole difference between a manual sync,
+          // which worked, and the automatic one at login, which did not. See
+          // ``lib/steam-bridge/prepare-sync`` for what each step is for.
+          void prepareForSync()
+            .then(() =>
+              call<[StoreId], unknown>(rpcRoutes.requestAuthSync, store),
+            )
+            .catch((e) => {
               console.error(
                 `[AuthDispatcher:${store}] requestAuthSync failed:`,
                 e,
               );
-            },
-          );
+            });
         }
         resolve(result);
       };

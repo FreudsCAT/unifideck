@@ -63,6 +63,16 @@ POLL_INTERVAL_S = 10.0
 
 # Completion-by-stability, for stores with no authoritative signal: three
 # consecutive unchanged non-zero size reads.
+#
+# ``STABILITY_MAX_POLLS`` is only the *fallback* budget for the download wait.
+# It used to be the whole budget, and it silently contradicted the per-store
+# timeout: 360 polls at Battle.net's 15 second interval is 90 minutes, against
+# the 4 hours its probe declares. The clock starts when ``detect()`` first sees
+# the install directory, and a vendor client creates that when it *accepts* the
+# job rather than when bytes start landing, so a long queue wait plus a large
+# download ran past 90 minutes and a healthy install was reported as failed.
+# The budget now derives from the probe's own timeout; this constant applies
+# only to a probe that declares neither.
 STABILITY_MAX_POLLS = 360
 STABILITY_THRESHOLD = 3
 
@@ -124,6 +134,14 @@ class _Watch:
         self._never_grace = float(
             getattr(probe, "never_started_grace_s", NEVER_STARTED_GRACE_S),
         )
+        # How many polls the download wait may take. Derived from the same
+        # timeout the appear loop uses, so a store cannot declare 4 hours and
+        # silently get 90 minutes. Never shorter than the old fixed budget: a
+        # store with a short timeout should not lose download headroom it
+        # already had.
+        self._completion_polls = max(
+            int(self._timeout / self._poll), STABILITY_MAX_POLLS,
+        )
         self._seen = False
         self._gone_for = 0.0
         self._absent_for = 0.0
@@ -137,7 +155,7 @@ class _Watch:
     def _explained_wait(self) -> str | None:
         """The store's own account of why nothing is moving, if it has one.
 
-        Optional per store — see the note in :mod:`.probe` on why this is read
+        Optional per store. See the note in :mod:`.probe` on why this is read
         with ``getattr`` rather than declared on the protocol. Any failure is
         swallowed: a progress *message* must never be able to end an install.
         """
@@ -270,7 +288,7 @@ class _Watch:
         """
         prev_size = 0
         stable = 0
-        for _ in range(STABILITY_MAX_POLLS):
+        for _ in range(self._completion_polls):
             await asyncio.sleep(self._poll)
             verdict = self._probe.is_complete(install_dir)
             if verdict is True:
@@ -290,7 +308,7 @@ class _Watch:
             # the appear loop. A vendor client creates the install directory
             # when it *accepts* the job, not when it starts writing, so a game
             # queued behind the client's own self-update sits at a few KB for
-            # as long as that takes — and "Installing… (0.0 GB)" is a worse
+            # as long as that takes, and "Installing… (0.0 GB)" is a worse
             # answer than silence, let alone than naming what is in front of
             # it. Measured: 28 minutes of exactly this.
             explained = self._explained_wait()
@@ -304,8 +322,8 @@ class _Watch:
             "reported as a failure rather than recorded as installed.",
             self._probe.store,
             self._probe.client_label,
-            STABILITY_MAX_POLLS,
-            STABILITY_MAX_POLLS * self._poll / 3600,
+            self._completion_polls,
+            self._completion_polls * self._poll / 3600,
         )
         return False
 

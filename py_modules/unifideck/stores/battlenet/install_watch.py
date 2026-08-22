@@ -134,7 +134,7 @@ class BattlenetInstallProbe:
     def status_message(self) -> str | None:
         """Why this game is not downloading yet, in the Agent's own words.
 
-        Optional on the shared probe — see the note in
+        Optional on the shared probe. See the note in
         ``shared/wrapper_install/probe.py``. Battle.net can answer it because
         its Agent runs one exclusive operation at a time and logs which one
         holds the slot, so "queued behind the updater" is a fact here rather

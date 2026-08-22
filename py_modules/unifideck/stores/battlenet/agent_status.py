@@ -17,12 +17,12 @@ operation and the game was behind it in the queue::
 
 Twenty-eight minutes of "stuck", then the game itself downloaded in under two.
 Every second of the wait was correct and none of it was legible, so the user
-cancelled — which deletes the prefix and throws the agent update away, making
+cancelled. Cancelling deletes the prefix and throws the agent update away, making
 the next attempt identically "stuck". Naming the wait is what breaks that loop.
 
 Why the logs and not the Agent's REST API. The Agent does serve one, on
 ``127.0.0.1`` at the port in ``ProgramData/Battle.net/Agent/Agent.dat``, and it
-is reachable from the host — but every endpoint answers 401 and the
+is reachable from the host, but every endpoint answers 401 and the
 ``--session=`` value it is launched with is not the basic-auth credential. The
 logs cost nothing, need no handshake, and survive the client exiting.
 
@@ -62,7 +62,7 @@ _MAX_TAIL_BYTES = 128 * 1024
 
 # ``Active operation nullptr replaced by OP_UPDATE for 'agent'``
 _ACTIVE_RE = re.compile(r"Active operation .* replaced by (.+?)\s*$")
-# ``OP_UPDATE for 'agent'`` — the tail of the line above, and of a completion.
+# ``OP_UPDATE for 'agent'``: the tail of the line above, and of a completion.
 _OP_RE = re.compile(r"OP_UPDATE for '([^']+)'")
 # ``OP_UPDATE for 'agent' completed`` (with or without a ``Concurrent`` prefix)
 _DONE_RE = re.compile(r"OP_UPDATE for '([^']+)' completed")
@@ -122,7 +122,7 @@ def _tail(path: Path) -> list[str]:
 def _newest_since(logs_dir: Path, pattern: str, since: float) -> Path | None:
     """Newest ``pattern`` log in ``logs_dir`` written after ``since``.
 
-    The ``since`` filter is the whole point — see the module docstring on
+    The ``since`` filter is the whole point. See the module docstring on
     inherited logs. A clone's logs predate the run asking about them, and
     trusting one reports a stale completion as a live one.
     """
@@ -221,8 +221,8 @@ def read_state(drive_c: Path, since: float) -> AgentState | None:
 def describe_wait(drive_c: Path, since: float, uid: str) -> str | None:
     """A sentence explaining why ``uid`` is not downloading yet, or ``None``.
 
-    ``None`` means "nothing worth saying" — the game holds the slot, or the
-    Agent has not written anything yet — and the caller keeps its generic
+    ``None`` means "nothing worth saying": the game holds the slot, or the
+    Agent has not written anything yet. The caller keeps its generic
     tick. Only a genuinely explicable wait produces a sentence.
 
     The "Don't cancel" clause is not padding. Cancelling deletes the prefix,
@@ -237,7 +237,7 @@ def describe_wait(drive_c: Path, since: float, uid: str) -> str | None:
     )
     if not state.blocked_by_self_update:
         return (
-            f"Queued in Battle.net behind '{state.active}'{percent} — your "
+            f"Queued in Battle.net behind '{state.active}'{percent}. Your "
             "download starts when that finishes. Don't cancel."
         )
     # 'agent' is the downloader component, 'bna'/'battle.net' the client
@@ -250,7 +250,7 @@ def describe_wait(drive_c: Path, since: float, uid: str) -> str | None:
         else "Battle.net is updating itself"
     )
     return (
-        f"{what}{percent} — your download starts when it finishes. "
+        f"{what}{percent}. Your download starts when it finishes. "
         "Don't cancel."
     )
 
@@ -259,7 +259,7 @@ def update_generation(drive_c: Path, since: float) -> str | None:
     """The TACT tag query the Agent last updated *itself* for, or ``None``.
 
     This is what makes one copy of the Agent's content store interchangeable
-    with another, and it is not derivable from anything on disk — the store's
+    with another, and it is not derivable from anything on disk. The store's
     size actively misleads (a completed update *shrinks* it, because the Agent
     compacts away content the new tags do not select). The Agent states it
     outright, once per update::
@@ -288,7 +288,7 @@ def self_update_finished(drive_c: Path, since: float) -> bool:
 
     False while it is still running and false when we cannot tell, so a caller
     waiting on this always has to carry its own timeout. That is deliberate:
-    the alternative — treating "no logs yet" as done — would return instantly
+    the alternative, treating "no logs yet" as done, would return instantly
     on a client that has not started.
     """
     state = read_state(Path(drive_c), since)

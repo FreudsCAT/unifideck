@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import logging
 import os
 from pathlib import Path
@@ -21,6 +22,27 @@ from .orphan_scan import _is_launcher_exe
 from .vdf_read import count_entries_in_bytes
 
 logger = logging.getLogger(__name__)
+
+#: Distinguishes concurrent temp files within one process; the pid covers
+#: separate ones. See :func:`_unique_tmp`.
+_TMP_SEQ = itertools.count()
+
+#: Serialises the whole read-modify-write of ``shortcuts.vdf``, not just the
+#: write. Atomic writes alone do not help here: two callers that each read,
+#: edit and write concurrently both start from the same snapshot, and the
+#: second one silently discards the first one's entries. There are two
+#: independent call sites (``service.write_shortcuts`` and the icon pass in
+#: ``events``) and before this there was no lock anywhere in the package.
+#:
+#: Module-level rather than per-service so it still holds when more than one
+#: service instance exists, which is what a re-bind after an account switch
+#: produces.
+_VDF_WRITE_LOCK = asyncio.Lock()
+
+
+def vdf_write_lock() -> asyncio.Lock:
+    """The lock guarding read-modify-write cycles over ``shortcuts.vdf``."""
+    return _VDF_WRITE_LOCK
 
 # Games.map read retries — 3 x 100ms worst-case. Cheap enough to
 # avoid spurious GameNotFoundError when the launcher reads
@@ -143,11 +165,29 @@ async def write_vdf(
     await asyncio.to_thread(_write_sync)
 
 
+def _unique_tmp(target: str) -> Path:
+    """A temp path no other writer can be using.
+
+    The suffix used to be a bare ``.tmp``, shared by every writer of this
+    file. Two concurrent writes then destroyed each other: A renamed the temp
+    file into place, consuming it, and B's own ``replace`` failed with
+    ``FileNotFoundError`` on a source that had just been taken. Measured
+    during a logout: 260 failures in twelve seconds, several of them leaving
+    ``wrote 398 entries but the file holds 0``.
+
+    Uniqueness is not the real fix, :func:`vdf_write_lock` is. It is the
+    backstop for writers that never share a lock, such as a second plugin
+    process, where the worst case should be a lost write rather than a
+    destroyed file.
+    """
+    return Path(f"{target}.{os.getpid()}.{next(_TMP_SEQ)}.tmp")
+
+
 def _atomic_write(shortcuts_path: str, data: dict[str, Any]) -> bool:
     """tmp-file + ``os.replace`` so Steam never reads a partial file."""
     target = Path(shortcuts_path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = Path(shortcuts_path + ".tmp")
+    tmp = _unique_tmp(shortcuts_path)
     try:
         with tmp.open("wb") as f:
             f.write(vdf.binary_dumps(data))  # type: ignore[no-untyped-call]
@@ -339,7 +379,7 @@ async def write_games_map(games_map_path: str, games_map: dict[str, GameMapEntry
             Path(parent).mkdir(parents=True, exist_ok=True)
 
         content = format_games_map(games_map)
-        tmp_path = games_map_path + ".tmp"
+        tmp_path = str(_unique_tmp(games_map_path))
 
         try:
             with Path(tmp_path).open("w", encoding="utf-8") as f:

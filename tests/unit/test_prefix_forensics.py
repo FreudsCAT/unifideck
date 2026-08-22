@@ -62,7 +62,7 @@ def test_the_agents_own_logs_are_salvaged_from_their_versioned_directory(
 ) -> None:
     """The Agent's real logs are a directory deeper than first assumed.
 
-    ``Agent/Logs/*.log`` matched — but only a one-line ``Switcher`` log. The
+    ``Agent/Logs/*.log`` matched, but only a one-line ``Switcher`` log. The
     Agent writes everything that matters under a build-versioned
     ``Agent.<build>/Logs``, and a whole investigation into installs stuck at
     "Queued" ran on files this salvage had not collected: the answer was in

@@ -32,12 +32,12 @@ Four questions, deliberately no more:
     one that answers ``None`` falls back to the heuristic.
 
 And one optional fifth, ``status_message``, which is not about recognising
-anything — it is about the wait being legible. A correct 28-minute wait and a
+anything. It is about the wait being legible. A correct 28-minute wait and a
 hang look identical from outside, and the store is the only layer that can tell
 them apart: Battle.net's Agent runs one exclusive operation at a time and says
 so in its own logs, so "Queued behind Battle.net updating itself (88%)" is
 knowable while the generic tick can only say "waiting". Optional because a
-store with nothing to add should not have to say so — the watcher reads it with
+store with nothing to add should not have to say so: the watcher reads it with
 ``getattr``, exactly as it reads the optional timing attributes.
 """
 

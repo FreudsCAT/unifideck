@@ -52,6 +52,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from unifideck.launcher.wrapper_prefs import bootstrapper_locale
 from unifideck.stores.battlenet import paths
 from unifideck.stores.shared.wine_env import WineEnvResolver
 from unifideck.utils.vulkan import Vulkan32, detect_32bit_vulkan
@@ -80,6 +81,29 @@ INSTALLER_ARGS = (
     "--lang=enUS",
     "--installpath=C:\\Program Files (x86)\\Battle.net",
 )
+
+
+def installer_args() -> tuple[str, ...]:
+    """:data:`INSTALLER_ARGS` with the language taken from the plugin locale.
+
+    The install path stays pinned: ``wrapper_session_specs`` hashes it to find
+    the client's section in ``Battle.net.config``, so it must be the same
+    string in every prefix.
+
+    The language does not have to be, and pinning it had a cost beyond an
+    English wizard. The bootstrapper derives its **region** from the locale
+    (``Configuration: locale=enUS region=US`` in its own log) and warms the
+    Agent's content store for that region *before* login. The account's real
+    region then arrives at login and invalidates the warm-up, which is a
+    45-minute re-download the first time. Guaranteed for every non-US user
+    while this said ``enUS`` unconditionally.
+
+    ``bootstrapper_locale`` falls back to ``enUS`` for any tag Battle.net does
+    not ship, because the failure mode of a bad value here is the wizard
+    stalling on its language screen with no visible window; see its docstring.
+    """
+    locale = bootstrapper_locale("battlenet")
+    return (f"--lang={locale}", *INSTALLER_ARGS[1:])
 
 GAMEID = "umu-battlenet"
 
@@ -317,7 +341,7 @@ async def run_silent_install(
         proc = await asyncio.create_subprocess_exec(
             umu_run,
             str(installer),
-            *INSTALLER_ARGS,
+            *installer_args(),
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

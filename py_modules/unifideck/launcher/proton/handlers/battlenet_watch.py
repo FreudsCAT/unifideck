@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import AsyncGenerator
 from pathlib import Path
 
 from .wrapper_clients import CLIENT_IMAGES, kill_client, terminate
@@ -201,6 +202,48 @@ async def wait_for_client_ready(
         waited += poll
     logger.error("[battlenet] client not ready after %.0fs", timeout)
     return False
+
+
+class ReadinessLatch:
+    """Remembers whether this prefix's client was ever seen up.
+
+    :func:`client_ready` can only answer about *now*, and the question that
+    matters after a run ends is whether the window ever appeared. Sign-in asks
+    it to tell two identical-looking exits apart: a client that aborted during
+    renderer init (the ANGLE/gamescope crash a retry exists for) never becomes
+    ready, while a client the user opened and then closed did. Retrying the
+    second reopens a window they just dismissed.
+
+    Latching, never clearing. The client drops its renderer briefly during a
+    self-update, so a live reading taken at exit time would report a
+    user-closed client as one that never started.
+    """
+
+    def __init__(self) -> None:
+        self.seen = False
+
+    async def poll(self, prefix: str | Path, interval: float = 2.0) -> None:
+        """Watch until readiness is observed. Cancelled by the caller."""
+        while not self.seen:
+            if client_ready(prefix):
+                self.seen = True
+                return
+            await asyncio.sleep(interval)
+
+
+@contextlib.asynccontextmanager
+async def watch_readiness(
+    prefix: str | Path, interval: float = 2.0,
+) -> AsyncGenerator[ReadinessLatch]:
+    """Run a :class:`ReadinessLatch` for the duration of the block."""
+    latch = ReadinessLatch()
+    task = asyncio.create_task(latch.poll(prefix, interval))
+    try:
+        yield latch
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
 
 
 async def wait_for_game(

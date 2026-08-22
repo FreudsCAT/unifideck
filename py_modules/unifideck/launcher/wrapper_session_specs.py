@@ -266,7 +266,7 @@ _BNET_PREFS = PrefsSpec(
 # Measured 2026-08-22: on a fresh prefix the Agent makes its own self-update
 # the single exclusive operation, so the game's download sits behind it. That
 # costs 2 seconds when the local store already holds the build's tagged
-# content and 45 minutes when it does not — and the prefix is deleted on
+# content and 45 minutes when it does not. The prefix is deleted on
 # cancel, so the next attempt re-downloads the same ~9 MB from zero. Same
 # build hash both times (``d049a9f9…``, Agent 2.40.3.9700); only the TACT tag
 # query differed (``Volatile Windows US?`` vs ``KR? acct-IND? geoip-IN?``),
@@ -275,7 +275,7 @@ _BNET_PREFS = PrefsSpec(
 #
 # Sibling ``Agent.<build>/`` is deliberately absent: that is the extracted,
 # running Agent, and a half-applied copy inherited by every future prefix is a
-# far worse failure than a slow one. ``Logs/`` under it is likewise skipped —
+# far worse failure than a slow one. ``Logs/`` under it is likewise skipped:
 # carrying old logs forward is what made the salvage in
 # ``stores/shared/prefix_forensics`` ambiguous about which run it was reading.
 _BNET_CLIENT_CACHE = ("ProgramData/Battle.net/Agent/data",)

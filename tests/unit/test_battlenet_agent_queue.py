@@ -61,7 +61,7 @@ ALL_DONE = AGENT_DONE_GAME_RUNNING + """\
 """
 
 # Note the ``[I <date> <time>]`` stamp: its space-separated fields are ``[I``,
-# the date, then the time — which is why a field-offset regex silently read no
+# the date, then the time. That is why a field-offset regex silently read no
 # progress at all off a real log.
 AGENT_PROGRESS = """\
 [I 2026-08-22 12:39:19.0916] agent Update Progress - 0.0069 (0.0069)
@@ -127,7 +127,7 @@ def test_a_game_queued_behind_the_agent_says_so_with_a_percentage(
 
     assert message is not None
     assert "updating its downloader" in message
-    # 0.7543 off the real progress log — a field-offset regex read None here.
+    # 0.7543 off the real progress log. A field-offset regex read None here.
     assert "(75%)" in message
     assert "Don't cancel" in message
 
@@ -155,7 +155,7 @@ def test_state_is_unknown_rather_than_empty_when_no_log_is_fresh(
     """A clone's inherited logs must never be read as this run's.
 
     ``None`` (cannot tell) and an empty state (nothing running) are different
-    answers, and the capture path depends on the difference — trusting a
+    answers, and the capture path depends on the difference. Trusting a
     day-old inherited log would report a completion from another prefix,
     under another region tag, as if it had just happened here.
     """
@@ -259,7 +259,7 @@ def test_a_cancelled_download_is_kept_so_the_retry_resumes(tmp_path: Path) -> No
 
     Users cancel exactly when the wait looks broken, which is mid-update. If
     only finished downloads were kept, the one path that actually repeats
-    would keep nothing and restart from zero — which is what made three
+    would keep nothing and restart from zero, which is what made three
     consecutive attempts look identically stuck.
     """
     source, template = tmp_path / "game", tmp_path / "template"
