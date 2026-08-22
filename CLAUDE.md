@@ -164,7 +164,60 @@ Lo de `handlers/generic.py::_amazon_launch` ya está: tenía el mismo patrón y
 se arregló en el PR #422, con test propio en `test_store_launch_language.py` y
 verificado en dispositivo (`[language_setup.amazon] wrote locale=es-ES`).
 
-### 4. Selector de Proton propio en Unifideck
+### 4. Conectar el parser de opciones de lanzamiento
+
+Motivo: los plugins que envuelven el lanzamiento —decky-framegen, LSFG y
+similares— **no funcionan con juegos de Unifideck**, y arreglarlo es un cambio
+acotado.
+
+`docs/launch-options.md` lo dice ya: Unifideck tenía un parser de opciones
+ricas (programas envoltorio, `~/lsfg`, `PROTON=`) y tras la reescritura de la
+0.7 quedó **presente pero sin conectar al lanzador**. Hoy solo llegan las
+variables de entorno, y a través del `%command%` de Steam, no de Unifideck.
+
+**Verificado en dispositivo el 2026-08-22, y desmiente lo que sugiere el
+documento:** con un acceso directo NO-Steam, `VAR=valor %command% epic:<id>`
+**no exporta la variable**. Steam se la pasa al lanzador como primer argumento
+y revienta al instante:
+
+```
+GameNotFoundError: malformed game key 'WINEDLLOVERRIDES=dxgi=n,b',
+                   expected 'store:game_id'
+```
+
+Efecto visible para el usuario: el spinner de Steam se queda girando, porque el
+proceso muere en menos de un segundo. Tres lanzamientos así en
+`launches/5de5dc61`, `7890bb1c` y `4a5348cf`. El aviso del documento
+(«Behavior depends on Steam's `%command%` handling for non-Steam shortcuts»)
+resuelve en NO para este caso.
+
+Caso real que lo motivó: decky-framegen con Control (`epic:Calluna`). Copia
+`dxgi.dll` y OptiScaler en `~/Games/Control/`, pero **no escribe las opciones
+de lanzamiento** — con un juego de Steam sí lo hace
+(`patch_game success: appid=750920 launch_options=WINEDLLOVERRIDES=dxgi=n,b
+SteamDeck=0 %command%`). Sin `WINEDLLOVERRIDES` Wine carga su dxgi propio y el
+DLL copiado queda inerte.
+
+Apaño manual mientras tanto, verificado como formato por
+`language_setup/registry_io.py`: añadir al `user.reg` del prefijo
+
+```
+[Software\\Wine\\DllOverrides]
+"dxgi"="native,builtin"
+```
+
+No cubre las variables de entorno puras (`SteamDeck=0`), que no tienen
+equivalente en el registro.
+
+El arreglo de verdad: que `_parse_argv` del dispatcher **busque** el token
+`store:game_id` en todo el argv en vez de exigirlo en la posición 0, y que lo
+que venga delante se trate como envoltorio o asignaciones de entorno. El
+backend ya hace justo eso en `_resolve_shortcut_entry`, que usa `get_full_id`
+con regex anclada a límites de palabra precisamente porque un prefijo
+envoltorio empuja el token más allá del primer sitio. Aquí hay una asimetría
+entre las dos mitades que conviene cerrar.
+
+### 5. Selector de Proton propio en Unifideck
 
 Motivo: el pin de `proton_settings.json` **no se puede cambiar ni quitar desde
 la interfaz**. Una vez fijado, el juego queda anclado a esa versión; para
