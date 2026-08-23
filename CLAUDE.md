@@ -91,9 +91,10 @@ zip adjunto), que junta idioma + Proton forzado + la línea del panel.
 
 ### 1. Esperar la 0.7.4 oficial y comprobar el Proton forzado
 
-Acordado el 2026-08-21: no adelantar trabajo hasta que salga. Comprobado en
-`upstream/staging` (`23fba8a`) que **saldrá con el problema intacto**, salvo
-que el autor meta algo antes:
+Acordado el 2026-08-21 y reafirmado el 2026-08-23: no adelantar trabajo, ni
+rebasar los PR, hasta que la versión salga oficialmente. Revalidado en
+`upstream/staging` (`cb2eeaa`, ya con la 0.7.4 mergeada dentro) que **saldrá
+con el problema intacto**, salvo que el autor meta algo antes:
 
 - `saveProtonSetting` sigue declarada en `rpc-routes.ts:31` y **sin ningún
   llamante**. Los usos de `SpecifyCompatTool` que hay son de autenticación y
