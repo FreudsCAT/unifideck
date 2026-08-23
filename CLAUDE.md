@@ -117,6 +117,25 @@ lookup: appid=… -> 'proton_9'` antes de dar la prueba por válida.
 `upstream/staging` ya va por `cb2eeaa`, así que la base para rebasar los PR
 está lista.
 
+**CONFIRMADO el 2026-08-23 sobre la 0.7.4 oficial: el bug sigue.** Prueba
+válida, con `games.map` repoblado (Absolute Drift reinstalado) y control
+limpio:
+
+```
+14:05:26  sin Proton forzado
+          steam force-compat lookup: appid=3521017763 -> None
+          selected cached latest GE-Proton: GE-Proton11-5
+14:06:00  attempt 1 exit code: 0 (ran 20.3s)        ← arrancó
+
+          se fuerza Proton 9 y se lanza …
+
+14:07:14  bundle generado. NINGÚN fichero nuevo en launches/.
+```
+
+Cero logs entre ambos momentos: el lanzador no llegó a ejecutarse, que es la
+firma exacta del fallo. El nivel 1 sí se consultó, así que la medición es
+válida esta vez. **El PR #9 queda justificado sobre la versión publicada.**
+
 ### 2. Tres arreglos que perdimos en el merge de 0.7.3
 
 Estaban en el PR #2, se cayeron al resolver conflictos y **no lo detectamos
