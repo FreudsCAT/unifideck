@@ -180,10 +180,12 @@ ricas (programas envoltorio, `~/lsfg`, `PROTON=`) y tras la reescritura de la
 0.7 quedó **presente pero sin conectar al lanzador**. Hoy solo llegan las
 variables de entorno, y a través del `%command%` de Steam, no de Unifideck.
 
-**Verificado en dispositivo el 2026-08-22, y desmiente lo que sugiere el
-documento:** con un acceso directo NO-Steam, `VAR=valor %command% epic:<id>`
-**no exporta la variable**. Steam se la pasa al lanzador como primer argumento
-y revienta al instante:
+**Ojo — esto se investigó el 22 y se corrigió el 23. Leer entero antes de
+actuar.**
+
+El 22 se observó que con un acceso directo NO-Steam, `VAR=valor %command%
+epic:<id>` **no exportaba la variable**: Steam se la pasaba al lanzador como
+primer argumento y reventaba al instante:
 
 ```
 GameNotFoundError: malformed game key 'WINEDLLOVERRIDES=dxgi=n,b',
@@ -195,6 +197,33 @@ proceso muere en menos de un segundo. Tres lanzamientos así en
 `launches/5de5dc61`, `7890bb1c` y `4a5348cf`. El aviso del documento
 («Behavior depends on Steam's `%command%` handling for non-Steam shortcuts»)
 resuelve en NO para este caso.
+
+**El 23 no se pudo reproducir, con la misma cadena y las comillas incluidas.**
+Steam expandió el `%command%` correctamente: el lanzador recibió solo
+`epic:<id>` y el juego arrancó. Y con un envoltorio real
+(`~/.local/bin/mako-run %command% epic:<id>`) el inyector entró en el juego —
+19 líneas de `MAKO Renderer` en el `game.log` — **usando la build del 16 de
+agosto, sin ningún cambio nuestro**.
+
+O sea que el mecanismo documentado **sí funciona**: Steam convierte el
+envoltorio en el proceso padre del lanzador y exporta las variables al
+entorno, que el juego hereda. Nada de eso pasa por nuestro `argv`.
+
+Entre el fallo del 22 y el éxito del 23 cambiaron tres cosas: se desinstaló
+NonSteamLaunchers, se reconstruyeron los accesos directos —el de Dying Light
+estaba con el `appid` cambiado por Steam, ver la sección de convivencia— y se
+instaló la rama del arreglo. Los logs descartan la tercera: la línea
+`[launcher.argv]` que emite ese código no aparece en ninguno de los
+lanzamientos que funcionaron. **La hipótesis viva es la entrada corrupta.**
+
+Queda pendiente reinstalar NSL y repetir, para ver si es él quien rompe el
+manejo del `%command%`.
+
+Rama `feat/launch-options-wiring` (`5800b51`), **no enviada y sin justificación
+demostrada**. Lo único que sostiene por sí solo, si algún día se retoma: que el
+lanzador no muera con un error duro por un token que no entiende — buscar la
+clave en todo el `argv` como ya hace el backend, en vez de exigirla en la
+posición 0.
 
 Caso real que lo motivó: decky-framegen con Control (`epic:Calluna`). Copia
 `dxgi.dll` y OptiScaler en `~/Games/Control/`, pero **no escribe las opciones
