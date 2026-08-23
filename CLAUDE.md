@@ -68,9 +68,27 @@ Decky lo aporta en tiempo de ejecución) y ese es el único test que importa un
 `.tsx`. Por eso `play.css.test.ts` lee la hoja de estilos **como texto** en vez
 de importarla. No investigarlo otra vez.
 
-**El check `build` del fork falla por cuota de DeepL**, no por el código:
-`DeepL API error 456 … Quota exceeded`. Es la clave del fork, no la de
-upstream, así que en un PR enviado aguas arriba no aplica.
+**El check `build` del fork fallaba por cuota de DeepL**, no por el código:
+`DeepL API error 456 … Quota exceeded`. El fix del `Authorization` (nuestro
+`a3bea82`) sigue puesto y funciona — precisamente por eso la petición llega a
+DeepL y DeepL contesta que no queda cuota.
+
+Causa: `src/i18n/.translation-cache.json` viene desactualizado de upstream (716
+claves cacheadas frente a 894 en `en-US.json`), así que el script cree que hay
+**200 claves nuevas** y las traduce a 15 idiomas en *cada* ejecución: 8.948
+caracteres × 15 = 134.220 por run, y el nivel gratuito son 500.000 al mes → se
+agota en menos de cuatro ejecuciones.
+
+**Resuelto el 2026-08-23 borrando el secreto `DEEPL_API_KEY` del fork.** Sin
+clave el paso se salta entero (`if: steps.deepl.outputs.present == 'true'`) y
+el `build` sale verde. En un PR enviado aguas arriba tampoco aplicaba: GitHub
+no pasa los secretos a los `pull_request` que vienen de un fork.
+
+**Aviso para el futuro:** de esas 200 claves, **196 ya están traducidas a mano**
+en `es-ES.json` (y suponemos que en el resto). Si alguien vuelve a poner una
+clave con cuota disponible, el script las **sobrescribirá** con salida
+automática de DeepL en los 15 idiomas. Candidato a PR aguas arriba: regenerar
+el cache, o que el script no toque una clave que ya tiene traducción.
 
 ## Estado a 2026-08-21
 
@@ -104,7 +122,10 @@ zip adjunto), que junta idioma + Proton forzado + la línea del panel.
   `InstalledGameRow.tsx:213` y no tiene ningún selector en `play.css.ts`.
   Comprobado que el test sigue siendo load-bearing sobre esa base: al reponer
   el `play.css.ts` de upstream fallan exactamente las dos aserciones de ese
-  botón y las otras 19 siguen verdes.
+  botón y las otras 19 siguen verdes. **Verificado en dispositivo sobre la
+  0.7.4** (captura del 2026-08-23): el anillo de foco aparece al llegar con el
+  stick. Cuerpo del PR reescrito hablando solo de la 0.7.4, sin mención al
+  rebase. Listo para enviar aguas arriba.
 - **PR #8 del fork** (`feat/proton-in-use-badge`) — la línea del panel.
   Depende funcionalmente del anterior: sin la captura, el origen `pin` nunca
   contiene una elección del usuario. Enviar **después** del #9.
