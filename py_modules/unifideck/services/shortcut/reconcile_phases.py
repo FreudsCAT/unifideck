@@ -149,6 +149,11 @@ class _ReconcilePhasesMixin:
         store that returned nothing this sync — e.g. phantom Ubisoft
         entries and the legacy ``microsoft:ms-auth`` row — so affected
         libraries self-heal on the next sync.
+
+        Both modes finish by repopulating any ``games.map`` row that is
+        missing for an installed game (see :mod:`map_repair`) — the
+        rows nothing else can create, because the store that owns the
+        game resolves its exe at install time and never again.
         """
         await self._load_shortcuts()
         await self._load_games_map()
@@ -161,10 +166,21 @@ class _ReconcilePhasesMixin:
         # regardless of how this service was configured.
         registry_path = self._registry_path
         registry = load_registry(registry_path)
+        # Snapshot so the save below can see games.map changes. The
+        # tally cannot: it counts *shortcuts*, and a games.map write
+        # lands on a game reported as ``kept`` — a row refreshed from a
+        # disk-scanning store, or one the repair pass rebuilt. A stable
+        # library is pure ``kept``, so gating on the tally alone left
+        # those rows in memory until ``stop()`` happened to flush them.
+        map_before = dict(self._games_map)
         counts: dict[str, int] = self._apply_reconcile_phases(
             games, registry, force=force, valid_stores=valid_stores,
         )
-        if counts["added"] or counts["removed"] or counts["reclaimed"]:
+        counts["repaired"] = await self._repair_missing_map_rows(games)
+        if (
+            counts["added"] or counts["removed"] or counts["reclaimed"]
+            or self._games_map != map_before
+        ):
             await self._save_all()
         if counts["added"] or counts["reclaimed"]:
             save_registry(registry, registry_path)
@@ -217,9 +233,10 @@ class _ReconcilePhasesMixin:
         """Log the reconcile tally + a Steam-restart banner when changed."""
         logger.info(
             "[ShortcutService] reconcile: %d games → "
-            "added=%d kept=%d removed=%d reclaimed=%d",
+            "added=%d kept=%d removed=%d reclaimed=%d repaired=%d",
             len(games), counts["added"], counts["kept"],
             counts["removed"], counts["reclaimed"],
+            counts.get("repaired", 0),
         )
         if counts["added"] > 0 or counts["removed"] > 0:
             log_restart_banner(
@@ -236,6 +253,17 @@ class _ReconcilePhasesMixin:
         from .lastplaytime_reset import reset_lastplaytime_once
 
         await reset_lastplaytime_once(self)
+
+    async def _repair_missing_map_rows(self: Any, games: list[Game]) -> int:
+        """Rebuild games.map rows lost for installed games — see :mod:`map_repair`.
+
+        After the phases, not inside them: resolving an executable walks
+        an install dir, and phase 2 is a synchronous loop over the whole
+        library that must not block the event loop.
+        """
+        from .map_repair import repair_missing_rows
+
+        return await repair_missing_rows(self, games)
 
     # ── Phase helpers ──────────────────────────────────────
 
@@ -363,6 +391,11 @@ class _ReconcilePhasesMixin:
         resolved at install time by the worker via ``mark_installed``),
         so an installed game arriving with an empty ``exe`` must NOT
         wipe its existing entry — only a truly-uninstalled game drops it.
+
+        Which leaves the case this cannot serve: installed, no exe, and
+        no entry to preserve either. Rebuilding that row needs a
+        filesystem walk, so it happens after the phases — see
+        :mod:`map_repair`.
         """
         exe = game.exe_path or ""
         if game.installed and exe:
