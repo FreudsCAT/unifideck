@@ -98,11 +98,19 @@ def _resolve_finalize_paths(
     """Validate the chosen exe; return ``(exe, install_dir, exe_rel)``.
 
     Synchronous (run via ``to_thread``). The exe must exist and live
-    inside the game's install dir or its Proton prefix (the user may
-    have installed onto C: after all) — anything else is rejected as a
-    traversal attempt. When the exe landed inside the prefix, the
-    install dir is re-anchored on the exe's own directory so size and
-    save-location resolution stay meaningful.
+    inside one of the game's legitimate locations:
+
+    * the game's install dir (installed onto drive D:, the normal flow);
+    * its Proton prefix (the user installed onto C: after all);
+    * the directory the "installer" itself lives in — which is how an
+      ALREADY-installed game is added: the user picks the game's own
+      exe as the installer, and its folder is the install. Uninstall
+      never deletes such a user-managed folder (see
+      ``ManualStore._delete_game_dir``).
+
+    Anything else is rejected as a traversal attempt. When the exe is
+    outside the game dir, the install dir is re-anchored on the exe's
+    own directory so size and save-location resolution stay meaningful.
     """
     if not exe_path or not isinstance(exe_path, str):
         raise RpcError("invalid_args", field="exe_path")
@@ -110,7 +118,13 @@ def _resolve_finalize_paths(
     if not exe.is_file():
         raise RpcError("invalid_executable", reason="file_not_found")
     install_dir = Path(record.install_path).expanduser()
-    if not (_is_under(exe, install_dir) or _is_under(exe, prefix_dir)):
+    installer_dir = Path(record.installer_path).expanduser().parent
+    confined = (
+        _is_under(exe, install_dir)
+        or _is_under(exe, prefix_dir)
+        or _is_under(exe, installer_dir)
+    )
+    if not confined:
         raise RpcError("invalid_executable", reason="outside_install_dirs")
     if not _is_under(exe, install_dir):
         install_dir = exe.parent

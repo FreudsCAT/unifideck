@@ -175,6 +175,26 @@ def test_uninstall_delete_prefix_and_missing_game(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
+def test_uninstall_never_deletes_user_managed_dirs(tmp_path: Path) -> None:
+    """A game added from its own folder (outside ~/Games/Manual) is the
+    user's — uninstall forgets it but leaves the files in place."""
+    store = _store(tmp_path)
+    game_dir = tmp_path / "Jocs" / "Slay"
+    game_dir.mkdir(parents=True)
+    (game_dir / "game.exe").write_bytes(b"MZ")
+    record = _record(tmp_path, install_path=str(game_dir))
+    store.prefix_path = lambda _gid: tmp_path / "np"  # type: ignore[method-assign]
+
+    async def run() -> None:
+        await store.upsert_record(record)
+        result = await store.uninstall_game(record.game_id)
+        assert result.success
+        assert await asyncio.to_thread(game_dir.exists)
+        assert await store.get_record(record.game_id) is None
+
+    asyncio.run(run())
+
+
 def test_safe_delete_guard_rejects_shallow_paths() -> None:
     assert not _is_safe_to_delete(Path("/"))
     assert not _is_safe_to_delete(Path("~"))
@@ -219,7 +239,12 @@ def test_validated_installer_rejects_bad_paths(tmp_path: Path) -> None:
 
 
 def test_finalize_paths_confined_to_game_dir_or_prefix(tmp_path: Path) -> None:
-    record = _record(tmp_path)
+    # The installer lives in its own folder: its directory is also an
+    # allowed root (the already-installed-game case), so the "outside"
+    # exe below must not share it.
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    record = _record(tmp_path, installer_path=str(downloads / "setup.exe"))
     game_dir = Path(record.install_path)
     (game_dir / "bin").mkdir(parents=True)
     exe = game_dir / "bin" / "game.exe"
@@ -242,6 +267,23 @@ def test_finalize_paths_confined_to_game_dir_or_prefix(tmp_path: Path) -> None:
         _resolve_finalize_paths(record, str(outside), prefix)
     with pytest.raises(RpcError):
         _resolve_finalize_paths(record, str(game_dir / "gone.exe"), prefix)
+
+
+def test_finalize_accepts_already_installed_game(tmp_path: Path) -> None:
+    """Picking the game's own exe as "installer" adds an existing install."""
+    game_dir = tmp_path / "Jocs" / "Slay the Princess"
+    game_dir.mkdir(parents=True)
+    exe = game_dir / "SlaythePrincess.exe"
+    exe.write_bytes(b"MZ")
+    record = _record(
+        tmp_path,
+        installer_path=str(exe),
+        install_path=str(tmp_path / "root" / "slay"),
+    )
+    prefix = tmp_path / "prefix"
+
+    got_exe, got_dir, rel = _resolve_finalize_paths(record, str(exe), prefix)
+    assert (got_exe, got_dir, rel) == (str(exe), str(game_dir), exe.name)
 
 
 # ── shortcut helper ───────────────────────────────────────────────────
@@ -382,6 +424,9 @@ def test_auth_surface_is_a_no_op(tmp_path: Path) -> None:
         assert (await store.complete_auth()).success
         assert (await store.logout()).success
         assert await store.check_for_updates() == []
-        assert not (await store.install_game("x")).success
+        # The DownloadWorker calls with a positional install_path — a
+        # stray Install press must fail cleanly, never TypeError.
+        result = await store.install_game("x", "/some/path", progress_cb=None)
+        assert not result.success
 
     asyncio.run(run())

@@ -207,9 +207,20 @@ class ManualStore(StoreBase):
         return games
 
     async def install_game(
-        self, game_id: str, **kwargs: Any,
+        self,
+        game_id: str,
+        install_path: str | None = None,
+        progress_cb: Any = None,
+        **kwargs: Any,
     ) -> InstallResult:
-        """Installs happen through the Manual Install flow, not the queue."""
+        """Installs happen through the Manual Install flow, not the queue.
+
+        The signature still accepts the DownloadWorker's calling
+        convention (positional ``install_path`` + ``progress_cb``) so a
+        stray Install press fails with a clean result instead of a
+        ``TypeError`` inside the worker.
+        """
+        del install_path, progress_cb
         return InstallResult(
             success=False,
             store=self.store_name,
@@ -235,12 +246,33 @@ class ManualStore(StoreBase):
         return Result(success=True)
 
     async def _delete_game_dir(self, record: ManualGameRecord) -> None:
-        """Best-effort, guarded removal of the record's install dir."""
+        """Best-effort, guarded removal of the record's install dir.
+
+        Only directories under the manual install root are ever
+        deleted. A game added from an already-installed folder the
+        user manages themselves (``install_path`` re-anchored on the
+        chosen exe's directory, e.g. ``~/Jocs/<game>``) is theirs:
+        uninstalling forgets the game but never touches those files.
+        """
         if not record.install_path:
             return
-        await asyncio.to_thread(
-            _guarded_rmtree, record.install_path, "install dir",
-        )
+
+        def _delete_if_managed() -> None:
+            target = Path(record.install_path).expanduser()
+            root = self.install_root()
+            try:
+                managed = target.resolve().is_relative_to(root.resolve())
+            except OSError:
+                managed = False
+            if not managed:
+                logger.info(
+                    "[ManualStore] leaving user-managed dir %s in place",
+                    target,
+                )
+                return
+            _guarded_rmtree(str(target), "install dir")
+
+        await asyncio.to_thread(_delete_if_managed)
 
     async def _delete_prefix(self, game_id: str) -> None:
         """Remove the game's Proton prefix (``delete_prefix`` path)."""

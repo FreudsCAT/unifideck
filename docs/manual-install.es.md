@@ -111,9 +111,22 @@ manual, el manejador de ese evento elimina el shortcut **del todo** — no lo
 deja como "Not Installed", porque el juego ya no existe en ninguna biblioteca
 y su botón Install no podría funcionar — y el manejador de
 `SHORTCUT_REMOVED` limpia el arte de `grid/`. El frontend además lo quita de
-la **sesión viva** de Steam vía `SteamClient.Apps.RemoveShortcut`, así que
-el tile desaparece al momento (biblioteca y Recientes) sin reiniciar; solo si
-esa eliminación en vivo fallara se ofrece el reinicio de Steam.
+la **sesión viva** de Steam vía `SteamClient.Apps.RemoveShortcut`
+(centralizado en `useGameActions.uninstall`, el punto por el que pasan todas
+las superficies: fila de Downloads, botones de la página de detalle,
+GameInfoCompatRow), así que el tile desaparece al momento (biblioteca y
+Recientes) sin reiniciar; si estabas en la página de detalle del juego
+eliminado, se te devuelve a la biblioteca. Solo si esa eliminación en vivo
+fallara se ofrece el reinicio de Steam. Y una guarda importante: la carpeta
+del juego solo se borra si está **dentro de `~/Games/Manual`** — una carpeta
+propia del usuario (juego añadido ya instalado) jamás se toca.
+
+**Añadir un juego ya instalado**: en *Select exe* puedes elegir directamente
+el ejecutable del juego (en vez de un instalador). Play "ejecuta el
+instalador" — que es el propio juego — y en el modal posterior eliges ese
+mismo exe: el directorio del "instalador" es una raíz permitida del finalize
+y pasa a ser el `install_path`. Desinstalar olvida el juego (shortcut,
+registro, prefijo) pero no borra esa carpeta gestionada por el usuario.
 
 ---
 

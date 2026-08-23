@@ -113,9 +113,22 @@ handler removes the shortcut **entirely** — it is not left as
 "Not Installed", because the game no longer exists in any library and its
 Install button could not work — and the `SHORTCUT_REMOVED` handler cleans
 the `grid/` artwork. The frontend also removes it from Steam's **live
-session** via `SteamClient.Apps.RemoveShortcut`, so the tile disappears
-immediately (library and Recents) with no restart; only if that live
-removal fails is the Steam restart prompt offered.
+session** via `SteamClient.Apps.RemoveShortcut` (centralised in
+`useGameActions.uninstall`, the choke point every surface goes through:
+the Downloads row, the detail page's buttons, GameInfoCompatRow), so the
+tile disappears immediately (library and Recents) with no restart; if you
+were on the removed game's detail page, you are returned to the library.
+Only if that live removal fails is the Steam restart prompt offered. One
+important guard: the game folder is only deleted when it lives **inside
+`~/Games/Manual`** — a folder the user manages themselves (a game added
+already installed) is never touched.
+
+**Adding an already-installed game**: in *Select exe* you can pick the
+game's own executable directly (instead of an installer). Play "runs the
+installer" — which is the game itself — and in the follow-up modal you
+pick that same exe: the "installer"'s directory is an allowed finalize
+root and becomes the `install_path`. Uninstalling forgets the game
+(shortcut, record, prefix) but never deletes that user-managed folder.
 
 ---
 
