@@ -102,17 +102,10 @@ export const InstalledButtons: FC<Props> = ({
   // legendary logs in and refreshes its asset manifest first).
   const hasUpdate = useGameUpdate(gameStore, gameId);
 
-  // NOTE: we deliberately do NOT touch Steam's Force-Compatibility here.
-  // This used to capture it into proton_settings.json and clear it so
-  // RunGame wouldn't wrap our launcher in Proton — but clearing it meant
-  // the launcher could never read the user's ACTUAL selection at launch
-  // time (only a copy that went stale whenever the capture/restore dance
-  // was interrupted), so switching Proton in Steam's dialog appeared to do
-  // nothing for some games and work for others purely by timing.
-  // ``config.vdf``'s CompatToolMapping is now the single source of truth,
-  // read by ``selector.select_proton_version``; the double-Proton problem
-  // the clearing existed to avoid is handled properly at the umu spawn
-  // point by ``launcher.proton.infrastructure.container_escape``.
+  // Steam's Force-Compatibility is captured into Unifideck's own per-game
+  // pin and cleared before RunGame — that happens inside actions.launch,
+  // so every launch path shares it. See utils/protonPin.ts for why it is
+  // mandatory rather than cosmetic.
 
   // Running-state poll (2 s).
   useEffect(() => {
@@ -148,8 +141,9 @@ export const InstalledButtons: FC<Props> = ({
   }, [actions, appId, game, gameId, gameStore, t, toast]);
 
   const onResume = useCallback(() => {
-    actions.launch(appId);
-  }, [actions, appId]);
+    if (!game) return;
+    void actions.launch(appId, `${game.store}:${game.store_game_id}`);
+  }, [actions, appId, game]);
 
   // Launching a game with a pending update asks first rather than
   // blocking: most single-player titles run fine a build behind, but an
@@ -163,15 +157,16 @@ export const InstalledButtons: FC<Props> = ({
   // press — without it, that press would silently launch a stale build.
   const onPlay = useCallback(() => {
     if (!game) return;
+    const gameKey = `${game.store}:${game.store_game_id}`;
     if (!hasUpdate) {
-      actions.launch(appId);
+      void actions.launch(appId, gameKey);
       return;
     }
     showModal(
       <UpdateAvailableModal
         gameTitle={game.title}
         onUpdate={onUpdate}
-        onPlayAnyway={() => actions.launch(appId)}
+        onPlayAnyway={() => void actions.launch(appId, gameKey)}
         closeModal={() => {}}
       />,
     );

@@ -791,7 +791,9 @@
       "changed": "Executable changed",
       "changeFailed": "Couldn't change executable",
       "reset": "Reset to default executable"
-    }
+    },
+    "protonPinned": "{{version}} pinned for this game",
+    "protonPinnedBody": "Unifideck now applies it at launch. Steam's Force Compatibility was cleared so it can start the launcher — set it again to change Proton."
   },
   "playMeta": {
     "spaceRequired": "Space required",
