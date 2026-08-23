@@ -289,10 +289,6 @@ async def _start_client_here(plan: ProtonLaunchPlan, launcher_exe: Path) -> None
     # writing the tweaks first would make this prefix's file the newer one and
     # the settings would stay behind in the prefix they were changed in.
     await bootstrap.ensure_tweaks(plan)
-    # After the tweaks, for the same ordering reason: this one writes
-    # ``user.reg``, not the settings file, so it cannot disturb the mtime the
-    # merge above just ranked on.
-    await bootstrap.ensure_language(plan)
     if await _try_start(plan, launcher_exe):
         return
     # One retry, and only for a crash we can name. See battlenet_wsi.

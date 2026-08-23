@@ -125,131 +125,138 @@ def test_ubisoft_falls_back_to_the_machine_when_nothing_was_picked(
     assert get_unifideck_locale(seen[0]) == "en-US"
 
 
-# ── Amazon ─────────────────────────────────────────────────────────────
-async def test_amazon_honours_the_language_picked_in_the_unifideck_ui(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import unifideck.launcher.proton.handlers.generic as generic
-
-    plugin_dir = _installed_plugin(tmp_path, monkeypatch, "es-ES")
-    seen = _capture_config(monkeypatch, "apply_amazon_language")
-
-    async def _no_launch(*_args: Any, **_kw: Any) -> int:
-        return 0
-
-    monkeypatch.setattr(generic, "run_umu_with_retry", _no_launch)
-
-    await generic._amazon_launch(_plan(plugin_dir, tmp_path, "amazon"))
-
-    assert len(seen) == 1
-    assert get_unifideck_locale(seen[0]) == "es-ES"
-
-
-async def test_amazon_falls_back_to_the_machine_when_nothing_was_picked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import unifideck.launcher.proton.handlers.generic as generic
-
-    plugin_dir = _installed_plugin(tmp_path, monkeypatch, None)
-    seen = _capture_config(monkeypatch, "apply_amazon_language")
-
-    async def _no_launch(*_args: Any, **_kw: Any) -> int:
-        return 0
-
-    monkeypatch.setattr(generic, "run_umu_with_retry", _no_launch)
-
-    await generic._amazon_launch(_plan(plugin_dir, tmp_path, "amazon"))
-
-    assert get_unifideck_locale(seen[0]) == "en-US"
-
-
-# ── Battle.net ─────────────────────────────────────────────────────────
+# ── the prefix locale: one path, every store ───────────────────────────
 #
-# The store that was never wired into ``language_setup`` at all. Measured on
-# this Deck 2026-08-23 with the plugin set to German: every Battle.net prefix
-# still reported ``LocaleName="en-US"`` and ``sCountry="United States"``.
-# Distinct from the client's own UI language, which ``wrapper_locale`` seeds
-# into ``Battle.net.config``; this is what a Blizzard *game* reads from
-# Windows when it picks its own default.
-async def test_battlenet_honours_the_language_picked_in_the_unifideck_ui(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from unifideck.launcher.proton.handlers import battlenet_bootstrap
-
-    plugin_dir = _installed_plugin(tmp_path, monkeypatch, "de-DE")
-    seen = _capture_config(monkeypatch, "apply_battlenet_language")
-
-    assert await battlenet_bootstrap.ensure_language(
-        _plan(plugin_dir, tmp_path, "battlenet"),
-    )
-
-    assert len(seen) == 1
-    assert get_unifideck_locale(seen[0]) == "de-DE"
+# This used to be three per-store wrappers and is now a single call in
+# ``proton.dispatch``. The tests below drive that call rather than any
+# handler, and are parametrised over stores precisely because the store is
+# no longer supposed to matter.
 
 
-async def test_battlenet_falls_back_to_the_machine_when_nothing_was_picked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from unifideck.launcher.proton.handlers import battlenet_bootstrap
-
-    plugin_dir = _installed_plugin(tmp_path, monkeypatch, None)
-    seen = _capture_config(monkeypatch, "apply_battlenet_language")
-
-    await battlenet_bootstrap.ensure_language(
-        _plan(plugin_dir, tmp_path, "battlenet"),
-    )
-
-    assert get_unifideck_locale(seen[0]) == "en-US"
+def _dispatch_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store: str,
+    user_locale: str | None,
+) -> ProtonLaunchPlan:
+    plugin_dir = _installed_plugin(tmp_path, monkeypatch, user_locale)
+    return _plan(plugin_dir, tmp_path, store)
 
 
-async def test_battlenet_language_setup_never_fails_a_launch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A game in the wrong language beats a game that will not start."""
-    import unifideck.launcher.proton.language_setup as ls
-    from unifideck.launcher.proton.handlers import battlenet_bootstrap
+def _quiet_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A prefix with a US ``user.reg`` and nothing running in it.
 
-    plugin_dir = _installed_plugin(tmp_path, monkeypatch, "de-DE")
-
-    def _boom(*_args: Any, **_kw: Any) -> bool:
-        raise OSError("user.reg is not writable")
-
-    monkeypatch.setattr(ls, "apply_battlenet_language", _boom)
-
-    assert await battlenet_bootstrap.ensure_language(
-        _plan(plugin_dir, tmp_path, "battlenet"),
-    ) is False
-
-
-async def test_battlenet_writes_the_locale_into_user_reg(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """End to end through the real registry writer, not a captured call.
-
-    The four keys below are the ones the Battle.net prefixes on this Deck were
-    measured holding at ``en-US`` / ``ENU`` / ``United States``.
+    The registry body is the one measured on this Deck's Battle.net prefixes,
+    including the ``pfx -> .`` self-symlink umu creates — the earlier version
+    of this test omitted ``pfx`` entirely and so never exercised the layout
+    that actually failed.
     """
-    from unifideck.launcher.proton.handlers import battlenet_bootstrap
-
-    plugin_dir = _installed_plugin(tmp_path, monkeypatch, "de-DE")
     prefix = tmp_path / "prefix"
-    prefix.mkdir()
+    prefix.mkdir(exist_ok=True)
+    (prefix / "pfx").symlink_to(".")
     (prefix / "user.reg").write_text(
-        'WINE REGISTRY Version 2\n\n'
-        '[Control Panel\\\\International] 1785947765\n'
+        "WINE REGISTRY Version 2\n\n"
+        "[Control Panel\\\\International] 1785947765\n"
         '"Locale"="00000409"\n'
         '"LocaleName"="en-US"\n'
         '"sLanguage"="ENU"\n'
         '"sCountry"="United States"\n',
         encoding="utf-8",
     )
+    _set_wine_pids(monkeypatch, [])
+    return prefix
 
-    assert await battlenet_bootstrap.ensure_language(
-        _plan(plugin_dir, tmp_path, "battlenet"),
-    )
+
+def _set_wine_pids(monkeypatch: pytest.MonkeyPatch, pids: list[int]) -> None:
+    """Pin how many Wine processes the prefix looks like it has.
+
+    Never left to the real scanner: it reads ``/proc``, so an unpinned test
+    would pass or fail according to whatever the developer's Deck happens to
+    be running. That is not hypothetical — three tests in
+    ``test_battlenet_launch`` do exactly that and fail whenever a Battle.net
+    client is up.
+    """
+    import unifideck.launcher.proton.infrastructure.wineserver_reap as reap
+    monkeypatch.setattr(reap, "prefix_wine_pids", lambda _prefix: pids)
+
+
+@pytest.mark.parametrize("store", ["battlenet", "epic", "gog", "amazon"])
+def test_every_store_gets_the_prefix_locale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store: str,
+) -> None:
+    """The point of moving it: Epic and GOG never got one before."""
+    from unifideck.launcher.proton import _apply_prefix_language
+
+    prefix = _quiet_prefix(tmp_path, monkeypatch)
+    plan = _dispatch_plan(tmp_path, monkeypatch, store, "de-DE")
+
+    _apply_prefix_language(plan)
 
     written = (prefix / "user.reg").read_text(encoding="utf-8")
-    assert '"Locale"="00000407"' in written
     assert '"LocaleName"="de-DE"' in written
     assert '"sLanguage"="DEU"' in written
     assert '"sCountry"="Germany"' in written
+    assert '"Locale"="00000407"' in written
+
+
+def test_the_prefix_locale_falls_back_to_the_machine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefix = _quiet_prefix(tmp_path, monkeypatch)
+    from unifideck.launcher.proton import _apply_prefix_language
+
+    _apply_prefix_language(_dispatch_plan(tmp_path, monkeypatch, "gog", None))
+
+    assert '"LocaleName"="en-US"' in (prefix / "user.reg").read_text(encoding="utf-8")
+
+
+def test_a_busy_prefix_is_refused_not_silently_discarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The defect this guard exists for, stated as a test.
+
+    A live wineserver holds the registry in memory and rewrites the file when
+    it exits, so a write underneath one vanishes while every log line claims
+    success. Measured on-device 2026-08-23: the launcher logged ``wrote
+    locale=fr-FR`` for a prefix that still read ``en-US`` half an hour later.
+    """
+    from unifideck.launcher.proton import _apply_prefix_language
+
+    prefix = _quiet_prefix(tmp_path, monkeypatch)
+    _set_wine_pids(monkeypatch, [32802])
+    before = (prefix / "user.reg").read_text(encoding="utf-8")
+
+    _apply_prefix_language(_dispatch_plan(tmp_path, monkeypatch, "battlenet", "de-DE"))
+
+    assert (prefix / "user.reg").read_text(encoding="utf-8") == before
+    assert '"LocaleName"="en-US"' in before
+
+
+def test_a_write_that_does_not_survive_is_reported_as_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The read-back, which is what turns a silent loss into a warning."""
+    import unifideck.launcher.proton.language_setup.registry_io as rio
+
+    prefix = _quiet_prefix(tmp_path, monkeypatch)
+    original = (prefix / "user.reg").read_text(encoding="utf-8")
+
+    def _write_then_lose_it(path: str, _content: str) -> None:
+        Path(path).write_text(original, encoding="utf-8")
+
+    monkeypatch.setattr(rio, "_atomic_write_text", _write_then_lose_it)
+
+    assert rio._apply_windows_locale(str(prefix), "de-DE") is False
+
+
+def test_the_prefix_locale_never_fails_a_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A game in the wrong language beats a game that will not start."""
+    import unifideck.launcher.proton.language_setup as ls
+    from unifideck.launcher.proton import _apply_prefix_language
+
+    def _boom(*_args: Any, **_kw: Any) -> bool:
+        raise OSError("user.reg is not writable")
+
+    monkeypatch.setattr(ls, "apply_prefix_language", _boom)
+
+    _apply_prefix_language(_dispatch_plan(tmp_path, monkeypatch, "epic", "de-DE"))
