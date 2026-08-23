@@ -1,0 +1,261 @@
+# Manual Install — tienda `manual`
+
+> Estado: implementado sobre la base oficial **0.7.4** (`cb2eeaa`), rama
+> `claude/unifideck-manual-install-m0bjod`, commit `21651dd`.
+> English version: [manual-install.md](./manual-install.md).
+>
+> Permite instalar juegos desde un instalador `.exe`/`.msi` que el usuario ya
+> tiene en local: se crea un prefijo de Proton, el instalador se ejecuta dentro
+> de gamescope, los ficheros del juego quedan **fuera del prefijo** (unidad
+> `D:`), y al terminar se crea el acceso directo con arte y metadatos de
+> unifiDB/SteamGridDB. Los juegos aparecen en la pestaña Downloads para poder
+> desinstalarlos.
+
+---
+
+## 1. Idea de diseño
+
+Todo se apoya en la fundación existente de Unifideck; no hay maquinaria nueva
+de lanzamiento, prefijos ni arte:
+
+| Necesidad | Pieza existente reutilizada |
+|---|---|
+| Registrar la tienda | Auto-discovery de `StoreRegistry` (`stores/manual/manual_store.py` basta) |
+| Lanzar un exe arbitrario con umu/Proton | `generic_launch → _raw_exe_launch` (una tienda desconocida cae ahí sola, con `STORE=none` para umu) |
+| Crear el prefijo con el Proton por defecto | `setup_prefix` (la misma ruta canónica del lanzamiento normal) |
+| Abrir una ventana en Gaming Mode | El patrón RunGame de las wrapper stores (`wrapper-shortcut-launch.ts` + shortcut temporal `AddShortcut`) — un subproceso del backend **no tiene sesión gamescope** y su ventana jamás aparece |
+| AppID determinista + shortcut + `games.map` | `generate_app_id(launcher, "manual:<id>")`, patrón de `ensure_auth_shortcut`, `mark_installed` |
+| Metadatos y arte | Fases normales del sync: unifiDB **por título**, SteamGridDB, CDN de Steam |
+| Desinstalar desde Downloads | `uninstall_game(app_id)` → `registry.get_store("manual").uninstall_game()` |
+
+Decisiones clave:
+
+1. **Los ficheros del juego viven fuera del prefijo.** El prefijo
+   (`~/.local/share/unifideck/prefixes/<game_id>`) es desechable: se puede
+   regenerar o forzar otro Proton sin perder el juego. Wine expone la carpeta
+   real del juego como unidad `D:` mediante un symlink en
+   `<prefijo>/dosdevices/d:` → `~/Games/Manual/<game_id>`. El mapeo se
+   re-asegura **en cada lanzamiento** (idempotente), así que sobrevive a una
+   regeneración del prefijo.
+
+2. **"Instalar jugando" sin intervención.** El shortcut se crea primero con
+   `games.map` apuntando al **instalador**; el frontend hace `RunGame`
+   automáticamente al recibir el evento del backend. El asistente corre bajo
+   Steam/gamescope con Steam Input y teclado en pantalla. Al salir el proceso,
+   se pide el exe real y `games.map` se re-apunta.
+
+3. **Una tienda sin autenticación.** `store_info.auth_method = "none"` — ese
+   flag ya existía en `StoreInfo` sin consumidores; ahora `StoreConnections`
+   lo usa para no pintar el botón Authenticate. Todos los métodos de auth de
+   la tienda son no-ops honestos.
+
+---
+
+## 2. Flujo de funcionamiento (end to end)
+
+```
+Ajustes → MANUAL INSTALL → "Select exe"
+  │  openFilePicker (.exe/.msi), arranca en $HOME
+  ▼
+ManualInstallTitleModal  (título prerellenado desde el nombre del fichero)
+  │  RPC manual_install_start(installer_path, title)
+  ▼
+BACKEND (ManualInstallRPCMixin):
+  1. valida instalador y título; deriva game_id = slug(título)-crc32(ruta)
+  2. crea ~/Games/Manual/<game_id>/
+  3. guarda el registro {status: "installing"} en manual_games.json
+  4. escribe el shortcut en shortcuts.vdf (LaunchOptions "manual:<id>")
+     + fila de games.map: exe = INSTALADOR, work_dir = carpeta del juego
+  5. emite MANUAL_INSTALL_LAUNCH_REQUESTED {store_game_id}
+  6. emite ARTWORK_REQUEST (el arte empieza a bajar ya, por título)
+  7. encola un sync en background (Downloads + metadatos unifiDB)
+  ▼
+FRONTEND (manual-install-listener, vive fuera del QAM):
+  8. get_compat_tool_for_game("manual:<id>") → appid, launcher_path…
+  9. RunGame del shortcut (si Steam aún no lo tiene en memoria: shortcut
+     TEMPORAL vía AddShortcut — primer arranque tras escribir el vdf)
+  ▼
+LAUNCHER (proceso bin/unifideck-launcher):
+ 10. setup_prefix crea/valida el prefijo con el Proton por defecto
+ 11. ensure_manual_drive: dosdevices/d: → ~/Games/Manual/<game_id>
+ 12. _raw_exe_launch ejecuta el INSTALADOR bajo umu/Proton
+     → el usuario completa el asistente eligiendo la unidad D:
+  ▼
+FRONTEND:
+ 13. watchAppStopped detecta que la app terminó
+ 14. manual_install_status → sigue "installing" → ManualInstallExeModal
+ 15. el usuario elige el .exe del juego (picker arranca en la carpeta D:)
+     │  RPC manual_install_finalize(game_id, exe_path)
+  ▼
+BACKEND:
+ 16. valida el exe (confinado a la carpeta del juego o a su prefijo)
+ 17. registro → {status: "ready", exe_path}; si instaló en C:, el
+     install_path se re-ancla en la carpeta del exe
+ 18. escribe .unifideck_manifest.json (descubrimiento)
+ 19. mark_installed re-apunta games.map al exe real
+ 20. emite GAME_INSTALLED + sync en background (metadatos/arte restantes)
+  ▼
+FRONTEND:
+ 21. toast "juego listo" + SteamRestartModal (el tile solo aparece
+     cuando Steam relee shortcuts.vdf)
+```
+
+**Play posterior**: Steam → `unifideck-launcher manual:<id>` → `games.map`
+resuelve el exe → prefijo `prefixes/<id>` → `generic_launch` bajo umu/Proton.
+
+**Desinstalar** (pestaña Downloads): `uninstall_game(app_id)` →
+`ManualStore.uninstall_game` borra la carpeta del juego (rmtree con guardas:
+nunca `/`, nunca `$HOME`, profundidad ≥ 3), opcionalmente el prefijo (toggle
+del modal), elimina el registro y emite `GAME_UNINSTALLED`. El siguiente
+reconcile barre el shortcut y el manejador de `SHORTCUT_REMOVED` limpia el
+arte de `grid/`.
+
+---
+
+## 3. La tienda `manual` (backend)
+
+### Estado — `py_modules/unifideck/stores/manual/state.py`
+
+Un único JSON es toda la biblioteca:
+`~/.local/share/unifideck/manual_games.json` (configurable:
+`stores.manual.state_file`). Escritura atómica (tmp + `os.replace`); las filas
+corruptas se descartan con warning sin tumbar la carga.
+
+```json
+{
+  "version": 1,
+  "games": [
+    {
+      "game_id": "dark-forest-1a2b3c4d",
+      "title": "Dark Forest",
+      "installer_path": "/home/deck/Downloads/setup_dark_forest.exe",
+      "install_path": "/home/deck/Games/Manual/dark-forest-1a2b3c4d",
+      "exe_path": "",
+      "status": "installing",   // "installing" | "ready"
+      "added_at": 1755960000.0
+    }
+  ]
+}
+```
+
+* `status: "installing"` → `get_library()` expone el juego con
+  `exe_path = installer_path`: pulsar Play re-ejecuta el instalador (esa ES la
+  acción pendiente) y la fila de `games.map` se mantiene viva entre syncs.
+* `game_id = slug(título)[:32] + "-" + crc32(ruta_instalador)`: estable
+  (re-añadir el mismo instalador reutiliza el registro), único entre títulos
+  iguales de instaladores distintos, y válido para el regex de identificadores
+  y como nombre del directorio del prefijo.
+
+### `ManualStore` — `manual_store.py`
+
+`StoreBase` completo: `is_available() = True` siempre; auth no-op;
+`get_library()` devuelve cada registro como `Game(installed=True, exe_path,
+install_path, metadata.manual_status)`; `install_game/update_game` no aplican
+(la cola de descargas no interviene); `get_game_size` mide el directorio;
+`uninstall_game` como se describe arriba. `logout()` es no-op deliberado:
+"cerrar sesión / borrar cuentas" **no** debe destruir juegos locales.
+
+### Punto crítico de datos
+
+`reconcile` solo escribe fila de `games.map` para juegos `installed` **con**
+`exe_path`. La tienda manual siempre devuelve ambos, así que la fila se
+reescribe en cada sync — estos juegos no dependen del flujo del
+DownloadWorker.
+
+---
+
+## 4. RPC — `py_modules/unifideck/rpc/mixins/manual_install.py`
+
+| RPC | Qué hace |
+|---|---|
+| `manual_install_start(installer_path, title)` | Pasos 1-7 del flujo. Devuelve `{game_id, app_id, install_path}` |
+| `manual_install_finalize(game_id, exe_path)` | Pasos 16-20. Confina el exe a la carpeta del juego o su prefijo (guarda anti-traversal) |
+| `manual_install_status(game_id)` | El registro actual (el frontend decide si pedir el exe tras parar la app) |
+
+El shortcut ad-hoc se escribe con `stores/manual/shortcut.py`
+(`ensure_manual_game_shortcut`): lee el vdf **de disco** (Steam machaca la
+copia en memoria), añade una entrada con el mismo shape que
+`_build_shortcut_entry` del reconcile (mismo appid, mismas LaunchOptions), y
+el reconcile del siguiente sync la **adopta** en lugar de duplicarla.
+
+## 5. Disco D: — `stores/manual/drive.py` + hook del launcher
+
+`ensure_manual_drive(prefix_root, target_dir)` crea/repunta el symlink
+`<prefijo>/dosdevices/d:`. Nunca destruye un directorio real que ocupe la
+letra. Se invoca desde `services/launcher/orchestrator.py`
+(`_ensure_manual_drive_mapping`) justo después de `setup_prefix` y antes de
+ejecutar el juego/instalador — best-effort: si falla, solo se pierde la
+comodidad de la letra D:, nunca el lanzamiento.
+
+## 6. Frontend
+
+| Pieza | Fichero |
+|---|---|
+| Sección de ajustes | `src/components/settings/ManualInstallSection.tsx` |
+| Modal de título | `src/components/modals/ManualInstallTitleModal.tsx` |
+| Modal de exe post-instalación | `src/components/modals/ManualInstallExeModal.tsx` |
+| Listener RunGame (vive fuera del QAM) | `src/services/manual-install-listener.tsx` (arranca en `definePlugin`, se para en `teardown`) |
+
+El evento `manual_install_launch_requested` está en `WATCHED_EVENTS` **y** en
+`IMPERATIVE_EVENTS` (no debe re-dispararse desde el backlog del replay al
+recargar — relanzaría el instalador). El picker usa `openFilePicker` con el
+contrato de `ChangeExecutableModal`: sin `filter` RegExp (no cruza el puente
+JS→Python), `extensions` para el filtro.
+
+`ChangeExecutableModal` ("Change executable…" del menú contextual) también
+funciona para juegos manuales: `"manual"` está en `_DIRECT_LAUNCH_STORES` del
+mixin de ejecutables, así que el override ES la columna exe de `games.map`.
+
+## 7. Listas cerradas de tiendas ampliadas
+
+Añadir una tienda toca ~15 listas cerradas. Las de este cambio:
+
+* **Backend**: `services/shortcut/launch_options.py` (`STORE_ID_PATTERN` — el
+  fallo silencioso nº 1 si se olvida: el reconcile no reconocería los
+  shortcuts como propios), `core/types/events.py` (`StoreEnum` + evento
+  nuevo), `bootstrap/cache_registry.py`, `config/config_manager.py`
+  (fallback), `defaults/config.json`, `config/schema.json`,
+  `config/key_presence.py`, `utils/paths.py` (`DEFAULT_INSTALL_DIRS`),
+  `scripts/validate_event_schemas.py`, `main.py` (mixin).
+* **Frontend**: `src/types/api.ts` (`StoreId`, `StoreInfo.auth_method`),
+  `src/types/store.ts` (`STORE_VISUALS`), `StoreIcon.tsx` (icono `FaHdd`),
+  `src/lib/library-filters/index.ts` (`StoreSlug` + contadores),
+  `src/lib/steam-bridge/tab-container.ts` (pestaña "Manual", visible solo con
+  ≥ 1 juego), `UnifiedLibraryView.tsx` (filtro), `rpc-routes.ts`,
+  `types/events.ts`, `event-bus-client.ts`.
+* **i18n**: bloque `manualInstall.*` + `deckTabs.manual` en los 16 locales;
+  `deckTabs.manual` allowlistado para es-ES/pt-BR ("Manual" coincide con el
+  inglés por casualidad léxica).
+
+## 8. Límites conocidos
+
+1. **El tile aparece tras reiniciar Steam** — Steam solo lee `shortcuts.vdf`
+   al arrancar. El modal final ofrece el reinicio; instalar y elegir el exe
+   funcionan sin reiniciar (shortcut temporal).
+2. **"Later" en el modal del exe** → el registro queda `installing`; Play
+   re-ejecuta el instalador y el modal reaparece al salir.
+3. **Instalar en C: en vez de D:** funciona (el picker permite navegar al
+   prefijo y `install_path` se re-ancla en la carpeta del exe), pero el juego
+   vive dentro del prefijo y borrar el prefijo lo borra.
+4. **Instaladores que se auto-relanzan** (proceso padre sale y sigue un hijo):
+   umu/Proton espera a `wineserver` (`PROTON_VERB=waitforexitandrun`), lo que
+   cubre la mayoría de casos; si el modal saliera antes de tiempo, basta
+   cerrarlo con "Later" y elegir el exe cuando acabe.
+5. Los datos de guardado dentro del prefijo se pierden si se desinstala con
+   "borrar prefijo" activado (comportamiento estándar del modal).
+
+## 9. Verificación
+
+* `ruff`, `mypy`, `tsc`, `eslint`, `prettier`, build de rollup, volumetría
+  (files/functions/locals/nesting/fanout), `validate_event_schemas`,
+  `check_config_keys` y los 4 checks de i18n: **en verde**.
+* `tests/unit/test_manual_store.py` (13 tests): estado, mapeo de biblioteca,
+  guardas de desinstalación, derivación de ids, confinamiento del finalize,
+  creación/reutilización del shortcut, mapeo de la unidad D:, contrato de
+  auth. Suite completa: 2428 pass (los fallos restantes de
+  battlenet-prefix/AuthDispatcher son pre-existentes del entorno de CI local,
+  presentes también en la 0.7.4 limpia).
+
+Pendiente de validar en hardware real: primer lanzamiento (creación de
+prefijo + apertura del asistente), visibilidad de D: en el wizard, y el ciclo
+completo hasta jugar.
