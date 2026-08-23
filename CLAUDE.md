@@ -125,7 +125,14 @@ zip adjunto), que junta idioma + Proton forzado + la línea del panel.
   botón y las otras 19 siguen verdes. **Verificado en dispositivo sobre la
   0.7.4** (captura del 2026-08-23): el anillo de foco aparece al llegar con el
   stick. Cuerpo del PR reescrito hablando solo de la 0.7.4, sin mención al
-  rebase. Listo para enviar aguas arriba.
+  rebase.
+  **Enviado aguas arriba el 2026-08-23 como `mubaraknumann/unifideck#443`.**
+  Verificado que lo que llegó allí es exactamente `d102f26`: mismo SHA, base
+  `cb2eeaa`, 1 commit, 2 ficheros, +87 y 0 borrados. Build adjunto como
+  pre-release `Dev-update-btn-focus-gd102f26` (36,3 MiB — no cabía como
+  adjunto del PR, el tope de GitHub son 25 MB); comprobado que el bundle
+  contiene `.unifideck-download-update-btn.gpfocus` y que `aiohttp`,
+  `cryptography` y `jsonschema` están vendorizadas.
 - **PR #8 del fork** (`feat/proton-in-use-badge`) — la línea del panel.
   Depende funcionalmente del anterior: sin la captura, el origen `pin` nunca
   contiene una elección del usuario. Enviar **después** del #9.
