@@ -108,8 +108,14 @@ umu/Proton.
 **Uninstall** (Downloads tab): `uninstall_game(app_id)` →
 `ManualStore.uninstall_game` deletes the game folder (guarded rmtree: never
 `/`, never `$HOME`, depth ≥ 3), optionally the prefix (modal toggle), drops
-the record and emits `GAME_UNINSTALLED`. The next reconcile sweeps the
-shortcut and the `SHORTCUT_REMOVED` handler cleans the `grid/` artwork.
+the record and emits `GAME_UNINSTALLED`. For the manual store, that event's
+handler removes the shortcut **entirely** — it is not left as
+"Not Installed", because the game no longer exists in any library and its
+Install button could not work — and the `SHORTCUT_REMOVED` handler cleans
+the `grid/` artwork. The frontend also removes it from Steam's **live
+session** via `SteamClient.Apps.RemoveShortcut`, so the tile disappears
+immediately (library and Recents) with no restart; only if that live
+removal fails is the Steam restart prompt offered.
 
 ---
 

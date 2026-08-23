@@ -24,6 +24,8 @@ import { resolveAppIdFromStoreGame } from "../../lib/library-filters";
 import { StoreIcon } from "../shared/StoreIcon";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
 import { UpdateAvailableModal } from "../modals/UpdateAvailableModal";
+import { SteamRestartModal } from "../modals/SteamRestartModal";
+import { removeShortcutFromSession } from "../../lib/steam-bridge/shortcut-types";
 import { formatBytes } from "../../utils";
 import type { Game } from "../../types/api";
 import type { InstalledDiskInfo } from "../../types/downloads";
@@ -145,7 +147,23 @@ export const InstalledGameRow: FC<Props> = ({ game, disk, onUninstalled }) => {
           setBusy(true);
           try {
             const result = await actions.uninstall(appId, deletePrefix);
-            if (result?.success) onUninstalled();
+            if (result?.success) {
+              onUninstalled();
+              // A manual game's shortcut is deleted outright on
+              // uninstall (nothing remains to reinstall from). The
+              // backend already dropped it from shortcuts.vdf, but
+              // Steam keeps its session copy in memory — remove it
+              // live too so the tile (library + Recents) disappears
+              // right away. Only if that live removal FAILS does the
+              // restart prompt appear; "absent" means Steam never had
+              // it this session, so there is no tile to clear.
+              if (
+                game.store === "manual" &&
+                removeShortcutFromSession(appId) === "failed"
+              ) {
+                showModal(<SteamRestartModal />);
+              }
+            }
           } finally {
             setBusy(false);
           }

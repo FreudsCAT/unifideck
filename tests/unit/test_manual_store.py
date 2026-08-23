@@ -144,8 +144,9 @@ def test_uninstall_removes_dir_record_and_emits(tmp_path: Path) -> None:
         await store.upsert_record(record)
         result = await store.uninstall_game(record.game_id)
         assert result.success
-        assert not game_dir.exists()
-        assert prefix.exists()  # delete_prefix not requested
+        assert not await asyncio.to_thread(game_dir.exists)
+        # delete_prefix not requested → prefix survives
+        assert await asyncio.to_thread(prefix.exists)
         assert await store.get_record(record.game_id) is None
 
         events = store._bus.events  # type: ignore[attr-defined]
@@ -167,7 +168,7 @@ def test_uninstall_delete_prefix_and_missing_game(tmp_path: Path) -> None:
         await store.upsert_record(record)
         result = await store.uninstall_game(record.game_id, delete_prefix=True)
         assert result.success
-        assert not prefix.exists()
+        assert not await asyncio.to_thread(prefix.exists)
         missing = await store.uninstall_game("nope")
         assert not missing.success
 
@@ -185,13 +186,15 @@ def test_safe_delete_guard_rejects_shallow_paths() -> None:
 
 
 def test_derived_id_is_valid_and_stable() -> None:
-    game_id = _derive_game_id("Dark Forest: Édition Ultime!", "/tmp/setup.exe")
+    installer = "/data/installers/setup.exe"
+    game_id = _derive_game_id("Dark Forest: Édition Ultime!", installer)
     assert validate_game_id(game_id) == game_id
-    assert game_id == _derive_game_id("Dark Forest: Édition Ultime!", "/tmp/setup.exe")
+    assert game_id == _derive_game_id("Dark Forest: Édition Ultime!", installer)
     # Same title, different installer → different id.
-    assert game_id != _derive_game_id("Dark Forest: Édition Ultime!", "/tmp/b.exe")
+    other = "/data/installers/b.exe"
+    assert game_id != _derive_game_id("Dark Forest: Édition Ultime!", other)
     # Degenerate title still yields a usable slug.
-    assert validate_game_id(_derive_game_id("!!!", "/tmp/setup.exe"))
+    assert validate_game_id(_derive_game_id("!!!", installer))
 
 
 def test_manual_launch_options_are_recognised() -> None:
@@ -319,6 +322,52 @@ def test_ensure_manual_drive_creates_and_repoints(tmp_path: Path) -> None:
 
     # A missing target maps nothing.
     assert not ensure_manual_drive(prefix, tmp_path / "missing")
+
+
+# ── uninstall drops the shortcut outright ─────────────────────────────
+
+
+class _EventsHost:
+    """Just enough ShortcutService surface for the uninstall handler."""
+
+    def __init__(self, mark_result: int | None) -> None:
+        self._mark_result = mark_result
+        self.marked: list[tuple[str, str]] = []
+        self.removed: list[int] = []
+
+    async def mark_uninstalled(self, store: str, game_id: str) -> int | None:
+        self.marked.append((store, game_id))
+        return self._mark_result
+
+    async def remove_game(self, app_id: int) -> bool:
+        self.removed.append(app_id)
+        return True
+
+
+def test_uninstall_handler_removes_manual_shortcut_entirely() -> None:
+    from unifideck.services.shortcut.events import EventsMixin
+
+    handler = EventsMixin._on_game_uninstalled
+
+    async def run() -> None:
+        # Manual game: mark + full removal (no "Not Installed" tile with
+        # an Install button that cannot work).
+        host = _EventsHost(mark_result=-123)
+        await handler(host, store="manual", game_id="dark-forest-abc12345")
+        assert host.marked == [("manual", "dark-forest-abc12345")]
+        assert host.removed == [-123]
+
+        # Other stores keep the shortcut (the user still owns the game).
+        host = _EventsHost(mark_result=-456)
+        await handler(host, store="gog", game_id="123")
+        assert host.removed == []
+
+        # No shortcut found → nothing to remove.
+        host = _EventsHost(mark_result=None)
+        await handler(host, store="manual", game_id="gone")
+        assert host.removed == []
+
+    asyncio.run(run())
 
 
 # ── auth contract ─────────────────────────────────────────────────────

@@ -106,9 +106,14 @@ resuelve el exe → prefijo `prefixes/<id>` → `generic_launch` bajo umu/Proton
 **Desinstalar** (pestaña Downloads): `uninstall_game(app_id)` →
 `ManualStore.uninstall_game` borra la carpeta del juego (rmtree con guardas:
 nunca `/`, nunca `$HOME`, profundidad ≥ 3), opcionalmente el prefijo (toggle
-del modal), elimina el registro y emite `GAME_UNINSTALLED`. El siguiente
-reconcile barre el shortcut y el manejador de `SHORTCUT_REMOVED` limpia el
-arte de `grid/`.
+del modal), elimina el registro y emite `GAME_UNINSTALLED`. Para la tienda
+manual, el manejador de ese evento elimina el shortcut **del todo** — no lo
+deja como "Not Installed", porque el juego ya no existe en ninguna biblioteca
+y su botón Install no podría funcionar — y el manejador de
+`SHORTCUT_REMOVED` limpia el arte de `grid/`. El frontend además lo quita de
+la **sesión viva** de Steam vía `SteamClient.Apps.RemoveShortcut`, así que
+el tile desaparece al momento (biblioteca y Recientes) sin reiniciar; solo si
+esa eliminación en vivo fallara se ofrece el reinicio de Steam.
 
 ---
 
