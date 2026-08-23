@@ -71,7 +71,7 @@ def write_client_config(drive_c: Path) -> bool:
     """
     path = Path(drive_c) / CONFIG_RELATIVE
     config = _load_config(path)
-    client = config.get("Client")
+    client = config.get("Client")  # config-key-ignore: Battle.net.config, not plugin config
     if not isinstance(client, dict):
         client = {}
     client.update(_CLIENT_SETTINGS)
@@ -156,7 +156,7 @@ def clear_client_credentials(drive_c: Path) -> bool:
     config = _load_config(path)
     if not config:
         return True
-    client = config.get("Client")
+    client = config.get("Client")  # config-key-ignore: Battle.net.config, not plugin config
     if isinstance(client, dict):
         for key in ("SavedAccountNames", "AutoLogin"):
             client.pop(key, None)

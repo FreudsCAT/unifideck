@@ -92,6 +92,26 @@ jobs:
         # that wouldn't auto-flip in right-to-left mode.
         run: python3 scripts/lint_rtl.py
 
+      - name: Check translation-key coverage
+        # Orphans (a t("key") no locale declares) and completeness
+        # (an en-US key missing from another locale, which falls
+        # back to English silently).
+        run: python3 scripts/check_orphan_keys.py
+
+      - name: Check translations are actually translated
+        # Presence is not translation: a key copied verbatim into
+        # all 16 locales passes the check above while every
+        # non-English user reads English. Also enforces
+        # {{placeholder}} parity against en-US. Intentional
+        # matches live in scripts/i18n_allowlist.json.
+        run: python3 scripts/check_untranslated.py
+
+      - name: Check for hardcoded user-facing strings
+        # A toast built from a raw literal never becomes a key at
+        # all, so neither check above can see it. Covers the
+        # frontend toast calls and the backend/launcher emitters.
+        run: python3 scripts/check_hardcoded_strings.py
+
       - name: Commit regenerated locale files
         # Only on push (not PR) — PRs can't write to the target
         # repo. Commits any locale JSONs or generated TS that

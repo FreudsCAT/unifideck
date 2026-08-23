@@ -13,6 +13,11 @@
       "checking": "Checking…",
       "error": "Error. Check logs"
     },
+    "toasts": {
+      "signingIn": "Starting {{store}} sign-in…",
+      "connected": "{{store}} connected",
+      "failed": "{{store}} sign-in failed"
+    },
     "errors": {
       "networkTitle": "No internet connection",
       "networkBody": "Connect to Wi-Fi and try again."
