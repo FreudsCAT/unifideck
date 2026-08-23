@@ -56,6 +56,22 @@ y **falla si hay tests saltados**, así que nada puede quedarse en `skip`.
 `src/**` verá 4 checks en vez de 7: los otros no fallaron, no llegaron a
 ejecutarse.
 
+**`vitest` no lo ejecuta ningún workflow.** Ninguno de los seis ficheros de
+`.github/workflows/` lo menciona, así que la suite de frontend es solo local.
+Un test nuevo ahí documenta y protege, pero no bloquea nada en CI.
+
+**`AuthDispatcher.test.ts` (10 tests) falla siempre en local**, también sobre
+un `upstream/staging` intacto: `Failed to resolve import
+"react/jsx-dev-runtime"`. No es una regresión — `react` está deliberadamente
+sin instalar (`pnpm.peerDependencyRules.ignoreMissing` en `package.json`,
+Decky lo aporta en tiempo de ejecución) y ese es el único test que importa un
+`.tsx`. Por eso `play.css.test.ts` lee la hoja de estilos **como texto** en vez
+de importarla. No investigarlo otra vez.
+
+**El check `build` del fork falla por cuota de DeepL**, no por el código:
+`DeepL API error 456 … Quota exceeded`. Es la clave del fork, no la de
+upstream, así que en un PR enviado aguas arriba no aplica.
+
 ## Estado a 2026-08-21
 
 `staging` está en `085a344`: upstream 0.7.3 más los PR #1–#8, más el arreglo
@@ -81,8 +97,14 @@ zip adjunto), que junta idioma + Proton forzado + la línea del panel.
 - **PR #10 del fork** (`fix/update-btn-gamepad-focus`) — el botón Update de la
   pestaña Downloads no tenía estado de foco, así que con el mando parecía
   inactivo aunque el foco sí pasaba por él. Bug de upstream, independiente de
-  todo lo demás. Rama sobre el espejo (0.7.3), verificado en dispositivo.
-  Esperando a la 0.7.4 para rebasar y enviarlo.
+  todo lo demás. Verificado en dispositivo sobre la 0.7.3.
+  **Rebasado el 2026-08-23 sobre la 0.7.4** (`cb2eeaa`): el espejo se adelantó
+  a esa base y la rama rebasó limpia, sin conflictos. El fallo sigue igual en
+  la 0.7.4 — `unifideck-download-update-btn` solo aparece en
+  `InstalledGameRow.tsx:213` y no tiene ningún selector en `play.css.ts`.
+  Comprobado que el test sigue siendo load-bearing sobre esa base: al reponer
+  el `play.css.ts` de upstream fallan exactamente las dos aserciones de ese
+  botón y las otras 19 siguen verdes.
 - **PR #8 del fork** (`feat/proton-in-use-badge`) — la línea del panel.
   Depende funcionalmente del anterior: sin la captura, el origen `pin` nunca
   contiene una elección del usuario. Enviar **después** del #9.
