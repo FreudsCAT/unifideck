@@ -57,6 +57,38 @@ def test_the_client_logs_survive_the_prefix(tmp_path: Path) -> None:
     assert "Agent.log" in text
 
 
+def test_the_agents_own_logs_are_salvaged_from_their_versioned_directory(
+    tmp_path: Path,
+) -> None:
+    """The Agent's real logs are a directory deeper than first assumed.
+
+    ``Agent/Logs/*.log`` matched, but only a one-line ``Switcher`` log. The
+    Agent writes everything that matters under a build-versioned
+    ``Agent.<build>/Logs``, and a whole investigation into installs stuck at
+    "Queued" ran on files this salvage had not collected: the answer was in
+    ``Operations-*`` (the game's operation sitting behind the Agent's own
+    self-update), with the cause in ``AgentNGDP-*`` (a region-tag change).
+    """
+    prefix = _prefix(tmp_path, logs={
+        "ProgramData/Battle.net/Agent/Logs/Switcher-20260822T123736.log":
+            "switcher argument[0]: '--session=1032'",
+        "ProgramData/Battle.net/Agent/Agent.9700/Logs/Operations-20260822.log":
+            "Active operation nullptr replaced by OP_UPDATE for 'agent'",
+        "ProgramData/Battle.net/Agent/Agent.9700/Logs/AgentNGDP-20260822.log":
+            "Start Update of agent w/ tags (Volatile Windows KR? geoip-IN?)",
+        "ProgramData/Battle.net/Agent/Agent.9700/Logs/AgentUpdate-20260822.log":
+            "agent Update Progress - 0.7543 (0.7543)",
+    })
+    out = tmp_path / "launches" / "battlenet-d1.vendor.txt"
+
+    assert _salvage(prefix, out) == 4
+
+    text = out.read_text(encoding="utf-8")
+    assert "OP_UPDATE for 'agent'" in text
+    assert "Volatile Windows KR? geoip-IN?" in text
+    assert "0.7543" in text
+
+
 def test_a_prefix_with_no_logs_writes_nothing(tmp_path: Path) -> None:
     """No file beats an empty file that reads as 'we looked and found none'."""
     out = tmp_path / "launches" / "battlenet-w3.vendor.txt"

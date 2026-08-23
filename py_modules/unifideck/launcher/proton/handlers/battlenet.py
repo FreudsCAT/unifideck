@@ -48,6 +48,9 @@ from unifideck.launcher.proton.handlers import battlenet_login_state as login_st
 from unifideck.launcher.proton.handlers import battlenet_session as session
 from unifideck.launcher.proton.handlers import battlenet_watch as watch
 from unifideck.launcher.proton.handlers import battlenet_wsi, wrapper_clients
+from unifideck.launcher.proton.handlers.battlenet_auth_retry import (
+    auth_retry_worthwhile,
+)
 from unifideck.launcher.proton.handlers.battlenet_client import (
     find_client_exe,
     find_launcher_exe,
@@ -478,10 +481,21 @@ async def battlenet_auth_launch(plan: ProtonLaunchPlan) -> int:
     # _client_teardown's SIGTERM instead of SIGKILLing the client outright:
     # the token the client rotated during sign-in lives in CachedData.db and
     # is lost if it never gets to flush. See watch.stop_client.
-    async with _client_teardown(plan):
+    #
+    # The readiness latch is what stops this reopening a window the user just
+    # closed. This run takes the default ``max_attempts=2``, and the recoverable
+    # test is rc-and-duration only: closing the sign-in window inside
+    # ``_RECOVERABLE_MAX_RUNTIME_SECONDS`` (120) with rc 2, 74 or 127 looked
+    # exactly like the ANGLE/gamescope startup abort the retry exists for, so
+    # the client came back by itself. It reported as "the sign-in launcher
+    # reopens when I close it", and for rc 2 and 74 it also wiped the shared
+    # umu runtime cache on the way through. Whether the renderer was ever seen
+    # separates the two: a crash during renderer init never reaches it.
+    async with _client_teardown(plan), watch.watch_readiness(plan.prefix_path) as ready:
         rc = await run_umu_with_retry(
             argv, env=plan.env, on_start=plan.on_process_start,
             reap_wineserver=False,
+            should_retry=lambda: auth_retry_worthwhile(plan, ready),
         )
     plan.state.game_exit_code = rc
     return rc

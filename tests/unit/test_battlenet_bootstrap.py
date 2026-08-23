@@ -659,12 +659,67 @@ def test_installer_args_preanswer_the_blocking_screens() -> None:
     Pinned as a test because the failure is invisible: the install simply
     never finishes, and nothing in our own logs says why.
     """
-    from unifideck.stores.battlenet.prefix.client_install import INSTALLER_ARGS
+    from unifideck.stores.battlenet.prefix.client_install import installer_args
 
-    assert "--lang=enUS" in INSTALLER_ARGS, "language screen would block"
+    args = installer_args()
     assert any(
-        a.startswith("--installpath=") for a in INSTALLER_ARGS
+        a.startswith("--lang=") for a in args
+    ), "language screen would block"
+    assert any(
+        a.startswith("--installpath=") for a in args
     ), "install-path screen would block"
+
+
+@pytest.mark.parametrize(
+    ("ui_locale", "expected"),
+    [
+        # Shipped by the client, so the bootstrapper gets the user's language
+        # and, with it, a region that matches their account more often.
+        ("de-DE", "--lang=deDE"),
+        ("ko-KR", "--lang=koKR"),
+        ("pt-BR", "--lang=ptBR"),
+        # Also shipped, and previously missing from the map for no reason —
+        # ``strings battle.net.dll`` (2026-08-23) lists both among the 22 the
+        # client loads from ``languages.xml``. Turkish and Arabic users were
+        # getting an English wizard and a US content warm-up.
+        ("tr-TR", "--lang=trTR"),
+        ("ar-SA", "--lang=arSA"),
+        # Genuinely not shipped: the client has no Ukrainian. Passing a locale
+        # it does not know risks the wizard stalling on its language screen,
+        # invisibly, for the full 30-minute timeout.
+        ("uk-UA", "--lang=enUS"),
+        ("nl-NL", "--lang=enUS"),
+        # No preference expressed.
+        ("auto", "--lang=enUS"),
+        ("", "--lang=enUS"),
+    ],
+)
+def test_the_installer_language_follows_the_plugin_locale(
+    monkeypatch: pytest.MonkeyPatch, ui_locale: str, expected: str,
+) -> None:
+    """The language is the user's; the install path is still pinned.
+
+    Pinning the language to ``enUS`` was not merely an English wizard. The
+    bootstrapper derives its region from the locale and warms the Agent's
+    content store for it before login, so every non-US account threw that
+    warm-up away and paid a 45-minute re-download on first install.
+    """
+    from unifideck.launcher import wrapper_locale
+    from unifideck.stores.battlenet.prefix.client_install import installer_args
+
+    # State the resolved locale rather than letting the resolver run: without
+    # this the test machine's own language decides the result, which is how
+    # two of these used to pass for the wrong reason.
+    monkeypatch.setattr(wrapper_locale, "_RESOLVE_ATTEMPTED", True)
+    monkeypatch.setattr(wrapper_locale, "_RESOLVED_LOCALE", ui_locale or None)
+
+    args = installer_args()
+
+    assert expected in args
+    # The install path is hashed into Battle.net.config's section name, so it
+    # must be identical in every prefix and must not follow the locale.
+    assert any(a.startswith("--installpath=") for a in args)
+    assert sum(a.startswith("--lang=") for a in args) == 1
 
 
 @pytest.mark.asyncio
@@ -704,7 +759,7 @@ async def test_the_installer_is_invoked_with_those_args(
 
     assert ok.installed is True
     assert seen, "installer was never spawned"
-    for arg in ci.INSTALLER_ARGS:
+    for arg in ci.installer_args():
         assert arg in seen[0], f"{arg} missing from the installer command"
 
 

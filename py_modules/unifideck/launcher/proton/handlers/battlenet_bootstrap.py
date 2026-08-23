@@ -252,3 +252,4 @@ async def ensure_tweaks(plan: ProtonLaunchPlan) -> bool:
     if applied:
         logger.info("[battlenet] applied client tweaks to %s", plan.prefix_path)
     return applied
+

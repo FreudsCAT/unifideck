@@ -28,6 +28,7 @@ from .games_map_mixin import UNIFIDECK_TAG, _GamesMapMixin
 from .persistence import (
     merge_foreign_shortcuts,
     read_games_map,
+    vdf_write_lock,
     write_games_map,
     write_vdf,
 )
@@ -178,12 +179,28 @@ class ShortcutService(
         exactly as it is. See :mod:`write_guard`. Callers that mean to
         remove a foreign-looking row name its appid in
         ``allow_foreign_drops``.
-        """
-        if self._shortcuts_loaded:
-            await self._save_shortcuts(allow_foreign_drops)
 
-        if self._games_map_loaded:
-            await write_games_map(self._games_map_path, self._games_map)
+        **Serialised against every other writer of these two files.** The
+        merge above defends against a *foreign* concurrent writer; it does
+        nothing about two of ours. Both this and the icon pass in
+        :mod:`events` do their own read, edit and write, so running
+        concurrently they each start from the same snapshot and the second
+        discards the first's entries. Worse, they shared one fixed temp path,
+        so one write consumed the other's temp file mid-rename: measured
+        during a logout as 260 failures in twelve seconds, several leaving
+        ``wrote 398 entries but the file holds 0``. The lock covers the whole
+        cycle, because guarding only the write would still lose the merge.
+
+        Not reentrant, and does not need to be: every caller of this method
+        is a top-level operation (reconcile phases, the games-map mixin,
+        startup, the LastPlayTime migration) and none runs inside another.
+        """
+        async with vdf_write_lock():
+            if self._shortcuts_loaded:
+                await self._save_shortcuts(allow_foreign_drops)
+
+            if self._games_map_loaded:
+                await write_games_map(self._games_map_path, self._games_map)
 
     async def _save_shortcuts(
         self, allow_foreign_drops: frozenset[int],
@@ -205,8 +222,16 @@ class ShortcutService(
         await write_vdf(
             self._shortcuts_path, self._shortcuts, self._data_dir,
         )
+        # The path is logged, not just the census, because the failure it
+        # exposes is invisible otherwise: the backend resolves the Steam user
+        # from disk heuristics unless the frontend pushed the live one, and on
+        # a multi-account Deck it can pick the wrong ``userdata/<id>``. The
+        # sync then reports N games written while Steam, reading the other
+        # account's file, shows none. One line turns "synced N games, Steam
+        # shows 0" into a diagnosis.
         logger.info(
-            "[ShortcutService] wrote shortcuts.vdf — %s",
+            "[ShortcutService] wrote %s: %s",
+            self._shortcuts_path,
             census(self._shortcuts.get("shortcuts", {}), self._launcher_path),
         )
 

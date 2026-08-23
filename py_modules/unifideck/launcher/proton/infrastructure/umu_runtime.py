@@ -357,6 +357,7 @@ async def run_umu_with_retry(
     cwd: Path | None = None,
     max_attempts: int = 2,
     on_start: Callable[[object], None] | None = None,
+    should_retry: Callable[[], bool] | None = None,
     timeout: float | None = None,  # noqa: ASYNC109 — bounds a subprocess wait via wait_for + killpg, not an asyncio.timeout() wrapper
     reap_wineserver: bool = True,
 ) -> int:
@@ -370,6 +371,15 @@ async def run_umu_with_retry(
     process group is force-killed and the attempt returns
     :data:`UMU_TIMEOUT_RC`, which is deliberately *not* recoverable, so
     a hung Proton fails the step instead of retrying into the same hang.
+
+    ``should_retry`` is a last-word veto, consulted only once a code has
+    already been judged recoverable. The recoverable test is
+    code-and-duration and cannot see intent, which is a problem for any run
+    the user can close by hand: sign-in windows exit inside
+    :data:`_RECOVERABLE_MAX_RUNTIME_SECONDS` all the time, and reopening one
+    the user just dismissed is worse than not retrying a genuine crash. A
+    caller that can tell the two apart says so here. Returning False ends the
+    run with the real exit code, exactly as an unrecoverable one would.
 
     Pass ``reap_wineserver=False`` when this run shares a prefix with a
     wineserver it does **not** own — Battle.net phase C, which sends an
@@ -402,6 +412,12 @@ async def run_umu_with_retry(
             if rc == 0:
                 return 0
             if not _is_recoverable(rc, ran_for):
+                return rc
+            if should_retry is not None and not should_retry():
+                logger.info(
+                    "[launcher.umu] rc=%d is recoverable but the caller vetoed "
+                    "a retry", rc,
+                )
                 return rc
             if attempt < max_attempts:
                 await _prepare_retry(rc, attempt, max_attempts)
