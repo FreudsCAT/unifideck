@@ -58,6 +58,7 @@ _FALLBACK: dict[str, Any] = {
         "ubisoft": {},
         "battlenet": {},
         "microsoft": {},
+        "manual": {},
     },
 }
 

@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "Manual"
   },
   "unifiedLibrary": {
     "error": "Erro do Unifideck",
@@ -1052,5 +1053,23 @@
     "title": "COLEÇÕES DO STEAM",
     "enabled": "Coleções ativadas",
     "disabled": "Coleções desativadas"
+  },
+  "manualInstall": {
+    "title": "INSTALAÇÃO MANUAL",
+    "selectExe": "Selecionar exe",
+    "description": "Instale um jogo a partir do seu próprio instalador. Escolha o .exe de instalação: ele roda em um prefixo Proton próprio e a unidade D: é a pasta do jogo neste dispositivo. Ao terminar, você deverá selecionar o executável do jogo.",
+    "starting": "Preparando a instalação manual",
+    "startFailed": "Não foi possível iniciar a instalação manual",
+    "installerRunning": "Instalador aberto — conclua o assistente",
+    "launchFailed": "Não foi possível abrir o instalador",
+    "titleModalTitle": "Título do jogo",
+    "titleModalSubtitle": "Usado para o atalho da Steam, as artes e os dados do jogo — corrija se a sugestão estiver errada.",
+    "titleModalConfirm": "Continuar",
+    "exeModalTitle": "{{game}} — selecione o executável do jogo",
+    "exeModalSubtitle": "A instalação terminou. Escolha o .exe do jogo para que Jogar o inicie (instalado na unidade D:, a pasta deste jogo).",
+    "exeModalBrowse": "Procurar…",
+    "exeModalLater": "Mais tarde",
+    "ready": "Jogo pronto — Jogar vai iniciá-lo",
+    "finalizeFailed": "Não foi possível definir o executável do jogo"
   }
 }

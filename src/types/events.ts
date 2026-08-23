@@ -64,6 +64,11 @@ export const Events = {
   // Payload: { store_game_id: "ubisoft:<game_id>" }.
   UBISOFT_INSTALL_LAUNCH_REQUESTED: "ubisoft_install_launch_requested",
   BATTLENET_INSTALL_LAUNCH_REQUESTED: "battlenet_install_launch_requested",
+  // Manual install — backend asks the frontend to RunGame the shortcut
+  // whose games.map row points at the user's installer .exe, so the
+  // installer wizard opens inside a gamescope session.
+  // Payload: { store_game_id: "manual:<game_id>" }.
+  MANUAL_INSTALL_LAUNCH_REQUESTED: "manual_install_launch_requested",
   // Game state
   GAME_INSTALLED: "game_installed",
   GAME_UNINSTALLED: "game_uninstalled",

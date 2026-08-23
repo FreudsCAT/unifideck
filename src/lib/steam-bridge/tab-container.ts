@@ -109,9 +109,15 @@ export function getUnifideckTabs(): UnifideckTab[] {
       filters: [{ type: "store", params: { store: "microsoft" } }],
     },
     {
+      id: "unifideck-manual",
+      title: t("deckTabs.manual"),
+      position: 10,
+      filters: [{ type: "store", params: { store: "manual" } }],
+    },
+    {
       id: "unifideck-nonsteam",
       title: t("deckTabs.nonSteam"),
-      position: 10,
+      position: 11,
       filters: [{ type: "nonSteam", params: {} }],
     },
   ];
@@ -376,7 +382,8 @@ type ConnectableStore =
   | "amazon"
   | "ubisoft"
   | "battlenet"
-  | "microsoft";
+  | "microsoft"
+  | "manual";
 
 class TabManager {
   private tabs: UnifideckTabContainer[] = [];
@@ -388,6 +395,7 @@ class TabManager {
     ubisoft: 0,
     battlenet: 0,
     microsoft: 0,
+    manual: 0,
   };
   private version = 0;
   private listeners: (() => void)[] = [];
@@ -440,6 +448,7 @@ class TabManager {
       "unifideck-ubisoft": "ubisoft",
       "unifideck-battlenet": "battlenet",
       "unifideck-microsoft": "microsoft",
+      "unifideck-manual": "manual",
     };
     const store = m[id];
     if (!store) return true;

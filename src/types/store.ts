@@ -68,4 +68,10 @@ export const STORE_VISUALS: Record<StoreId, StoreVisual> = {
     brand_color: "#00aeff",
     icon_path: "/assets/battlenet.svg",
   },
+  manual: {
+    id: "manual",
+    display_name: "Manual",
+    brand_color: "#6b7280",
+    icon_path: "/assets/manual.svg",
+  },
 };

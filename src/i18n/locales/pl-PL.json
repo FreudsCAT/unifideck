@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "Ręczne"
   },
   "unifiedLibrary": {
     "error": "Błąd Unifideck",
@@ -1052,5 +1053,23 @@
     "title": "KOLEKCJE STEAM",
     "enabled": "Kolekcje włączone",
     "disabled": "Kolekcje wyłączone"
+  },
+  "manualInstall": {
+    "title": "INSTALACJA RĘCZNA",
+    "selectExe": "Wybierz plik exe",
+    "description": "Zainstaluj grę z własnego instalatora. Wybierz plik .exe instalatora: uruchomi się we własnym prefiksie Proton, a dysk D: to folder gry na tym urządzeniu. Po zakończeniu zostaniesz poproszony o wskazanie pliku wykonywalnego gry.",
+    "starting": "Przygotowywanie instalacji ręcznej",
+    "startFailed": "Nie udało się rozpocząć instalacji ręcznej",
+    "installerRunning": "Instalator uruchomiony — dokończ kreatora",
+    "launchFailed": "Nie udało się uruchomić instalatora",
+    "titleModalTitle": "Tytuł gry",
+    "titleModalSubtitle": "Używany dla skrótu Steam, grafik i danych gry — popraw go, jeśli podpowiedź jest błędna.",
+    "titleModalConfirm": "Kontynuuj",
+    "exeModalTitle": "{{game}} — wskaż plik wykonywalny gry",
+    "exeModalSubtitle": "Instalacja zakończona. Wybierz plik .exe gry, aby przycisk Graj ją uruchamiał (zainstalowana na dysku D:, w folderze tej gry).",
+    "exeModalBrowse": "Przeglądaj…",
+    "exeModalLater": "Później",
+    "ready": "Gra gotowa — Graj ją uruchomi",
+    "finalizeFailed": "Nie udało się ustawić pliku wykonywalnego gry"
   }
 }

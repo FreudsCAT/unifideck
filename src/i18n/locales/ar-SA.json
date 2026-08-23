@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "يدوي"
   },
   "unifiedLibrary": {
     "error": "خطأ في Unifideck",
@@ -1052,5 +1053,23 @@
     "title": "مجموعات STEAM",
     "enabled": "تم تمكين المجموعات",
     "disabled": "تم تعطيل المجموعات"
+  },
+  "manualInstall": {
+    "title": "التثبيت اليدوي",
+    "selectExe": "اختيار exe",
+    "description": "ثبّت لعبة من مثبّت لديك. اختر ملف ‎.exe الخاص بالتثبيت: سيعمل داخل بادئة Proton خاصة به، والقرص D: هو مجلد اللعبة على هذا الجهاز. عند الانتهاء سيُطلب منك اختيار الملف التنفيذي للعبة.",
+    "starting": "جارٍ تجهيز التثبيت اليدوي",
+    "startFailed": "تعذّر بدء التثبيت اليدوي",
+    "installerRunning": "تم تشغيل المثبّت — أكمل معالج التثبيت",
+    "launchFailed": "تعذّر تشغيل المثبّت",
+    "titleModalTitle": "عنوان اللعبة",
+    "titleModalSubtitle": "يُستخدم لاختصار Steam والأغلفة وبيانات اللعبة — صحّحه إن كان التخمين خاطئًا.",
+    "titleModalConfirm": "متابعة",
+    "exeModalTitle": "{{game}} — اختر الملف التنفيذي للعبة",
+    "exeModalSubtitle": "اكتمل التثبيت. اختر ملف ‎.exe الخاص باللعبة كي يقوم زر اللعب بتشغيلها (مثبّتة على القرص D:، أي مجلد هذه اللعبة).",
+    "exeModalBrowse": "استعراض…",
+    "exeModalLater": "لاحقًا",
+    "ready": "اللعبة جاهزة — زر اللعب سيشغّلها",
+    "finalizeFailed": "تعذّر تعيين الملف التنفيذي للعبة"
   }
 }

@@ -120,6 +120,10 @@
     "battlenet": {
       "data_dir": "~/.local/share/unifideck",
       "prefixes_dir": "~/.local/share/unifideck/prefixes/battlenet"
+    },
+    "manual": {
+      "install_dir": "~/Games/Manual",
+      "state_file": "~/.local/share/unifideck/manual_games.json"
     }
   },
   "metadata": {

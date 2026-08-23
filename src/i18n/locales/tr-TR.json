@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "Manuel"
   },
   "unifiedLibrary": {
     "error": "Unifideck Hatası",
@@ -1052,5 +1053,23 @@
     "title": "STEAM KOLEKSİYONLARI",
     "enabled": "Koleksiyonlar etkin",
     "disabled": "Koleksiyonlar devre dışı"
+  },
+  "manualInstall": {
+    "title": "MANUEL KURULUM",
+    "selectExe": "Exe seç",
+    "description": "Kendi yükleyicinden bir oyun kur. Kurulum .exe dosyasını seç: kendi Proton ön ekinde çalışır ve D: sürücüsü bu cihazdaki oyun klasörüdür. Bittiğinde oyunun çalıştırılabilir dosyasını seçmen istenecek.",
+    "starting": "Manuel kurulum hazırlanıyor",
+    "startFailed": "Manuel kurulum başlatılamadı",
+    "installerRunning": "Yükleyici açıldı — sihirbazı tamamla",
+    "launchFailed": "Yükleyici başlatılamadı",
+    "titleModalTitle": "Oyun adı",
+    "titleModalSubtitle": "Steam kısayolu, görseller ve oyun verileri için kullanılır — tahmin yanlışsa düzelt.",
+    "titleModalConfirm": "Devam",
+    "exeModalTitle": "{{game}} — oyunun çalıştırılabilir dosyasını seç",
+    "exeModalSubtitle": "Kurulum tamamlandı. Oynat düğmesinin oyunu başlatması için oyunun .exe dosyasını seç (D: sürücüsüne, bu oyunun klasörüne kuruldu).",
+    "exeModalBrowse": "Göz at…",
+    "exeModalLater": "Daha sonra",
+    "ready": "Oyun hazır — Oynat onu başlatacak",
+    "finalizeFailed": "Oyunun çalıştırılabilir dosyası ayarlanamadı"
   }
 }

@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "Manuell"
   },
   "unifiedLibrary": {
     "error": "Unifideck-Fehler",
@@ -1052,5 +1053,23 @@
     "title": "STEAM-SAMMLUNGEN",
     "enabled": "Sammlungen aktiviert",
     "disabled": "Sammlungen deaktiviert"
+  },
+  "manualInstall": {
+    "title": "MANUELLE INSTALLATION",
+    "selectExe": "Exe auswählen",
+    "description": "Installiere ein Spiel aus deinem eigenen Installer. Wähle die Setup-.exe: Sie läuft in einem eigenen Proton-Präfix, und Laufwerk D: ist der Spielordner auf diesem Gerät. Nach Abschluss wirst du gebeten, die Programmdatei des Spiels auszuwählen.",
+    "starting": "Manuelle Installation wird vorbereitet",
+    "startFailed": "Manuelle Installation konnte nicht gestartet werden",
+    "installerRunning": "Installer gestartet — schließe den Assistenten ab",
+    "launchFailed": "Installer konnte nicht gestartet werden",
+    "titleModalTitle": "Spieltitel",
+    "titleModalSubtitle": "Wird für die Steam-Verknüpfung, Artwork und Spieldaten verwendet — korrigiere ihn, falls die Vermutung falsch ist.",
+    "titleModalConfirm": "Weiter",
+    "exeModalTitle": "{{game}} — Programmdatei des Spiels auswählen",
+    "exeModalSubtitle": "Die Installation ist abgeschlossen. Wähle die .exe des Spiels, damit „Spielen“ es startet (installiert auf Laufwerk D:, dem Ordner dieses Spiels).",
+    "exeModalBrowse": "Durchsuchen…",
+    "exeModalLater": "Später",
+    "ready": "Spiel bereit — „Spielen“ startet es",
+    "finalizeFailed": "Programmdatei des Spiels konnte nicht gesetzt werden"
   }
 }

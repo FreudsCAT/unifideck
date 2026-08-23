@@ -156,6 +156,10 @@ export interface StoreInfo {
   icon: string;
   available: boolean;
   auth_status: StoreStatus;
+  /** Backend `StoreInfo.auth_method` — `"none"` marks a store with no
+   *  sign-in at all (the manual store), so the connections list can
+   *  skip rendering an Authenticate button for it. */
+  auth_method?: string;
 }
 
 /**
@@ -175,7 +179,8 @@ export type StoreId =
   | "amazon"
   | "microsoft"
   | "ubisoft"
-  | "battlenet";
+  | "battlenet"
+  | "manual";
 
 /**
  * Per-store availability + auth state, returned by

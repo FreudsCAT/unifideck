@@ -33,7 +33,8 @@ export type StoreSlug =
   | "amazon"
   | "ubisoft"
   | "battlenet"
-  | "microsoft";
+  | "microsoft"
+  | "manual";
 
 export type FilterType =
   | "installed"
@@ -386,6 +387,7 @@ export async function loadUnifideckCache(): Promise<void> {
       ubisoft: 0,
       battlenet: 0,
       microsoft: 0,
+      manual: 0,
     };
     for (const g of games ?? []) {
       if (g.app_id == null) continue;
