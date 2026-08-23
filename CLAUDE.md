@@ -89,7 +89,7 @@ zip adjunto), que junta idioma + Proton forzado + la línea del panel.
 
 ## Pendiente
 
-### 1. Esperar la 0.7.4 oficial y comprobar el Proton forzado
+### 1. Comprobar el Proton forzado en la 0.7.4 (ya publicada)
 
 Acordado el 2026-08-21 y reafirmado el 2026-08-23: no adelantar trabajo, ni
 rebasar los PR, hasta que la versión salga oficialmente. Revalidado en
@@ -104,9 +104,18 @@ con el problema intacto**, salvo que el autor meta algo antes:
   `proton_11`, `proton_8`, `proton_7` y `proton_hotfix` caen todos en
   `"other"` y saltar entre ellos no resetea el prefijo.
 
-La comprobación al salir es de un minuto: forzar una versión en Propiedades ›
+La comprobación es de un minuto: forzar una versión en Propiedades ›
 Compatibilidad y pulsar Jugar. Si no se crea ningún fichero en
 `~/.local/share/unifideck/launches/`, es el mismo fallo y toca enviar el #9.
+
+**Publicada el 2026-08-23 (`Release-0.7.4`).** El primer intento de medirlo no
+sirvió: `games.map` estaba vacío por el punto 4, así que el nivel 1 del
+selector ni se consultaba y el resultado no decía nada del bug. Repetir con un
+juego reinstalado, y confirmar que en el log aparece `steam force-compat
+lookup: appid=… -> 'proton_9'` antes de dar la prueba por válida.
+
+`upstream/staging` ya va por `cb2eeaa`, así que la base para rebasar los PR
+está lista.
 
 ### 2. Tres arreglos que perdimos en el merge de 0.7.3
 
@@ -170,7 +179,56 @@ Lo de `handlers/generic.py::_amazon_launch` ya está: tenía el mismo patrón y
 se arregló en el PR #422, con test propio en `test_store_launch_language.py` y
 verificado en dispositivo (`[language_setup.amazon] wrote locale=es-ES`).
 
-### 4. Selector de Proton propio en Unifideck
+### 4. `games.map` no se repuebla para juegos ya instalados
+
+Encontrado el 2026-08-23 sobre la 0.7.4 oficial. **Bug de upstream**, causa
+localizada en cinco líneas.
+
+`reconcile_phases.py:385-401` mantiene la fila de `games.map` así:
+
+```python
+exe = game.exe_path or ""
+if game.installed and exe:
+    self._games_map[key] = GameMapEntry(...)
+```
+
+Los objetos `Game` que llegan de la sincronización de biblioteca **no traen
+`exe_path`** — lo resuelve el instalador, no la tienda. Su propio comentario lo
+reconoce y da por hecho que la fila «ya existe» de una instalación anterior.
+
+Cuando no existe, nada la crea. Escenarios legítimos donde eso pasa: borrar los
+datos del plugin conservando los juegos, reinstalar el plugin en un equipo con
+juegos ya instalados, restaurar una copia parcial, mover la instalación a otra
+Deck.
+
+**Síntoma, y es silencioso:** la biblioteca aparece completa y sana, pero
+`games.map` está vacío, así que el lanzador resuelve `app_id=0`,
+`_game_context` deja `steam_app_id=None` y **el nivel 1 del selector no se
+consulta en ningún juego** — no aparece siquiera la línea `steam force-compat
+lookup` en el log. La versión de Proton que elija el usuario en Propiedades ›
+Compatibilidad se ignora en toda la biblioteca, sin error ni aviso.
+
+Reproducido en dispositivo: 669 accesos directos correctos en `shortcuts.vdf`,
+`games.map` con solo sus tres líneas de cabecera, y Dying Light arrancando con
+`GE-Proton11-5` en vez del `proton_9` elegido. El juego sí arranca porque el
+lanzador re-resuelve el ejecutable por búsqueda (`[ExeFinder] Best candidate
+(score=400)`); lo que no puede inventarse es el `app_id`.
+
+Comprobación rápida:
+
+```
+grep -c "^epic:\|^gog:\|^amazon:\|^ubisoft:" ~/.local/share/unifideck/games.map
+```
+
+**Arreglo propuesto:** que la reconciliación, ante un juego marcado como
+instalado y sin fila, resuelva el ejecutable con el `ExeFinder` que el
+lanzador ya usa y la escriba. Toda la maquinaria existe; solo falta llamarla
+desde ahí.
+
+Apaño para el usuario mientras tanto: reinstalar el juego desde Unifideck, que
+pasa por `_flip_existing_install` y deja la fila correcta.
+
+### 5. Selector de Proton propio en Unifideck
 
 Motivo: el pin de `proton_settings.json` **no se puede cambiar ni quitar desde
 la interfaz**. Una vez fijado, el juego queda anclado a esa versión; para
