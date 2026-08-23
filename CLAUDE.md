@@ -245,7 +245,75 @@ Steam**. El diálogo de propiedades no es una ruta, así que `routerHook.addPatc
 no sirve y habría que enganchar el modal; es la superficie más frágil de todas
 y sería solo informativa.
 
-### Ya verificado — no volver a investigarlo
+## Convivencia con otros plugins que escriben `shortcuts.vdf`
+
+**Tres horas perdidas el 2026-08-22. No repetir el camino.**
+
+Unifideck escribe `shortcuts.vdf` **directamente**. Steam mantiene su propia
+copia en memoria, cargada al arrancar la sesión, y la vuelca al fichero cuando
+guarda. Todo lo que el plugin escriba después de que la sesión arranque existe
+en disco pero no en esa memoria.
+
+Consecuencias visibles, todas comprobadas en dispositivo:
+
+- El diálogo de Propiedades de **Big Picture / Gaming Mode no muestra** las
+  opciones de lanzamiento aunque estén en el fichero. Steam **sí las pasa** al
+  lanzar: verificado con `request received: epic:04a54ed…` en el log del
+  lanzador. Ese diálogo **no es fuente de verdad**; la orden de abajo sí.
+- Un juego recién instalado puede salir sin opciones en pantalla, y aparecer
+  duplicado: una entrada con arte (la de la sesión) y otra sin arte (la del
+  fichero recién leído).
+- Editar las opciones **desde Steam de escritorio** hace que Steam reescriba la
+  entrada con su propio `appid`. El arte de `grid/` está guardado con el appid
+  antiguo, así que la carátula y el tiempo jugado se pierden. Se arregla
+  borrando el acceso directo y sincronizando: Unifideck lo recrea con su appid
+  determinista y el arte vuelve a enlazar solo. Una sincronización forzada
+  **no** basta — `_force_update_shortcut` conserva el appid a propósito.
+
+Comprobar el fichero, que es lo único fiable:
+
+```
+python3 -c "
+import sys; sys.path.insert(0,'/home/deck/homebrew/plugins/Unifideck/py_modules')
+import vdf
+p='/home/deck/.steam/steam/userdata/<UID>/config/shortcuts.vdf'
+sc=vdf.binary_load(open(p,'rb'))['shortcuts']
+ours=[e for e in sc.values() if 'unifideck-launcher' in str(e.get('Exe','')).lower()]
+print(len(sc),'entradas,',len(ours),'de Unifideck')
+"
+```
+
+Ojo: tras cualquier escritura de Steam **todas** las claves quedan en minúscula
+(`appname`, no `AppName`), así que esa diferencia de caja **no indica** quién
+escribió una entrada — me confundió durante un rato. Léelas siempre con
+`e.get("AppName") or e.get("appname")`.
+
+### Los dos plugins instalados, revisados el 2026-08-23
+
+- **Junk Store** (`ebenbruyns/junkstore`) — inofensivo. Solo usa la API de
+  Steam (`SetAppLaunchOptions`, `AddShortcut`, `RemoveShortcut`) sobre sus
+  propios accesos directos, por `id`. No abre el fichero ni recorre entradas
+  ajenas.
+- **NonSteamLaunchers** (`moraroy/NonSteamLaunchers-On-Steam-Deck`) — el que
+  importa. Escribe por la API (`NSLGameScanner.py:1245-1262`), lo que **obliga
+  a Steam a reescribir el fichero desde su memoria**; ese es el mecanismo que
+  puede tirar las entradas que Unifideck acababa de escribir. Además compara
+  entradas ajenas por subcadena (`NSLGameScanner.py:1167`,
+  `launch_options in s.get('LaunchOptions')`), lo que admite falsos positivos.
+  **Hace copia antes de tocar nada**, y ahí está la vía de rescate:
+  `~/.steam/steam/userdata/<UID>/config/shortcuts.vdf_backups/`.
+
+**Regla práctica:** después de que Unifideck sincronice, reiniciar Steam desde
+el menú (no apagar) antes de que NSL haga su barrido.
+
+**Candidato a PR:** el plugin ya detecta la situación —la comprobación
+`steam_started_after_shortcuts_write` del bundle de diagnóstico— pero solo la
+deja escrita en un informe que nadie mira. Avisarlo en la interfaz, con el
+motivo y el remedio, ahorraría exactamente la tarde descrita aquí. Y
+`orphan_scan.py:120,131` lee el nombre solo como `AppName`, así que tras una
+escritura de Steam ve todas las entradas sin nombre.
+
+## Ya verificado — no volver a investigarlo
 
 - Steam **sí** guarda la elección en `config.vdf`. Que el desplegable salte a
   «Steam Linux Runtime» al elegir una versión es cosmética de su interfaz; el
