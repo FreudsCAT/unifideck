@@ -83,6 +83,7 @@ from unifideck.rpc.mixins.edge import EdgeRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.executable import ExecutableRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.launch import LaunchRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.library_facets import LibraryFacetsRPCMixin  # noqa: E402
+from unifideck.rpc.mixins.manual_install import ManualInstallRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.observability import ObservabilityRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.playtime import PlaytimeRPCMixin  # noqa: E402
 from unifideck.rpc.mixins.security import SecurityRPCMixin  # noqa: E402
@@ -108,6 +109,7 @@ class Plugin(
     ExecutableRPCMixin,
     SyncRPCMixin,
     LibraryFacetsRPCMixin,
+    ManualInstallRPCMixin,
     UIRPCMixin,
     CloudFailureRPCMixin,
     CloudSaveRPCMixin,

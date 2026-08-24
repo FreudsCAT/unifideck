@@ -59,6 +59,11 @@ async def launch_windows(
         # plan is authoritative for the launch (see the helper's docstring).
         plan = await _setup_prefix_and_realign(svc, ctx, state)
 
+        # Manual installs keep their files OUTSIDE the prefix, exposed
+        # to Wine as drive D:. Re-mapped on every launch (idempotent)
+        # so the mapping survives a prefix regeneration.
+        _ensure_manual_drive_mapping(ctx, plan)
+
         # Phase 2: Cloud Sync Down
         await svc._cloud_sync_phase(ctx, "down")
 
@@ -77,6 +82,24 @@ async def launch_windows(
     except Exception:
         logger.exception("[Orchestrator] Windows launch failed")
         raise  # Let the outer _handle_launcher_error catch and toast it
+
+
+def _ensure_manual_drive_mapping(
+    ctx: LaunchContext,
+    plan: ProtonLaunchPlan,
+) -> None:
+    """Map drive D: to the game dir for manual-store launches.
+
+    Best-effort — a failed mapping only costs the drive-letter
+    convenience inside the installer wizard, never the launch.
+    """
+    if ctx.store != "manual" or not ctx.work_dir:
+        return
+    try:
+        from unifideck.stores.manual.drive import ensure_manual_drive
+        ensure_manual_drive(plan.prefix_path, ctx.work_dir)
+    except Exception:
+        logger.exception("[Orchestrator] manual D: mapping failed")
 
 
 async def _setup_prefix_and_realign(

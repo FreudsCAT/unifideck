@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "手动"
   },
   "unifiedLibrary": {
     "error": "Unifideck 错误",
@@ -1052,5 +1053,28 @@
     "title": "STEAM 收藏夹",
     "enabled": "收藏夹已启用",
     "disabled": "收藏夹已禁用"
+  },
+  "manualInstall": {
+    "title": "手动安装",
+    "description": "从你自己的安装程序安装游戏。选择安装用的 .exe：它会在独立的 Proton 前缀中运行，D: 盘就是本机上的游戏文件夹。安装完成后，会提示你选择游戏的可执行文件。",
+    "starting": "正在准备手动安装",
+    "startFailed": "无法开始手动安装",
+    "installerRunning": "安装程序已启动 — 请完成安装向导",
+    "launchFailed": "无法启动安装程序",
+    "titleModalTitle": "游戏名称",
+    "titleModalSubtitle": "用于 Steam 快捷方式、封面图和游戏资料 — 如果猜测有误请修改。",
+    "titleModalConfirm": "继续",
+    "exeModalTitle": "{{game}} — 选择游戏的可执行文件",
+    "exeModalSubtitle": "安装已完成。请选择游戏的 .exe，这样“开始游戏”就会启动它（安装在 D: 盘，即本游戏的文件夹）。",
+    "exeModalBrowse": "浏览…",
+    "exeModalLater": "稍后",
+    "ready": "游戏就绪 — 点击开始游戏即可启动",
+    "finalizeFailed": "无法设置游戏的可执行文件",
+    "installButton": "安装",
+    "importButton": "导入",
+    "importDescription": "添加已安装的游戏：选择它的可执行文件，游戏就会出现在你的库中。文件保留在原来的位置。",
+    "importFailed": "无法导入游戏",
+    "exeModalNoCandidates": "暂未找到可执行文件 — 请使用浏览来定位游戏的 .exe。",
+    "importStarting": "游戏已导入 — 正在启动以验证是否可运行"
   }
 }

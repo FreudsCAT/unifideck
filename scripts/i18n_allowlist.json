@@ -4,7 +4,6 @@
     "shape": "\"<flat.key>\": { \"locales\": [\"de-DE\", \"fr-FR\"] | \"*\", \"reason\": \"why identical is correct\" }",
     "rule": "Prefer translating over allowlisting. Use \"*\" only when the value is identical in every supported language; otherwise list the specific tags, because a key translated in 12 locales proves the other 3 are real misses."
   },
-
   "deckTabs.microsoft": {
     "locales": "*",
     "reason": "Company name. Unchanged in every supported language."
@@ -48,7 +47,6 @@
     ],
     "reason": "Brand name plus a colon. fr-FR differs only by its spaced colon; ko/zh append a word for 'score'."
   },
-
   "gameInfoPanel.labels.status": {
     "locales": ["de-DE", "nl-NL", "pl-PL", "pt-BR"],
     "reason": "'Status' is the native word in German, Dutch, Polish and Brazilian Portuguese."
@@ -73,7 +71,6 @@
     "locales": ["de-DE"],
     "reason": "German uses the English plural 'Stores' for digital storefronts."
   },
-
   "gameInfoPanel.buttons.details": {
     "locales": ["de-DE", "nl-NL"],
     "reason": "'Details' is the native word in German and Dutch."
@@ -98,7 +95,6 @@
     "locales": ["nl-NL"],
     "reason": "Steam leaves 'Points Shop' untranslated in its Dutch UI."
   },
-
   "launchLogs.filterInfo": {
     "locales": ["de-DE", "fr-FR", "it-IT", "nl-NL"],
     "reason": "'Info' is the native abbreviation in these four languages."
@@ -135,7 +131,6 @@
     "locales": ["es-ES"],
     "reason": "'Error' is the Spanish word."
   },
-
   "downloads.title": {
     "locales": ["de-DE", "nl-NL", "pt-BR"],
     "reason": "'Downloads' is the established plural in German, Dutch and Brazilian Portuguese."
@@ -163,5 +158,9 @@
   "ubisoftAuth.passwordLabel": {
     "locales": ["it-IT"],
     "reason": "'Password' is the standard Italian term."
+  },
+  "deckTabs.manual": {
+    "locales": ["es-ES", "pt-BR"],
+    "reason": "'Manual' is the correct word in Spanish and Brazilian Portuguese — identical spelling to English by coincidence."
   }
 }

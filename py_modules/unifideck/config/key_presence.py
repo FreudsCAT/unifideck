@@ -124,6 +124,8 @@ RUNTIME_REQUIRED_KEYS: tuple[str, ...] = (
     "stores.epic",
     "stores.epic.user_file",
     "stores.gog.client_secret",
+    "stores.manual.install_dir",
+    "stores.manual.state_file",
     "stores.microsoft.subscription_check_url",
     # sync
     "sync.artwork_concurrency",

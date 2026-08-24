@@ -24,6 +24,9 @@ import { resolveAppIdFromStoreGame } from "../../lib/library-filters";
 import { StoreIcon } from "../shared/StoreIcon";
 import { UninstallConfirmModal } from "../modals/UninstallConfirmModal";
 import { UpdateAvailableModal } from "../modals/UpdateAvailableModal";
+import { ManualInstallExeModal } from "../modals/ManualInstallExeModal";
+import { isManualTileLive } from "../../lib/manual-restart";
+import { launchManualGame } from "../../services/manual-install-listener";
 import { formatBytes } from "../../utils";
 import type { Game } from "../../types/api";
 import type { InstalledDiskInfo } from "../../types/downloads";
@@ -117,10 +120,41 @@ export const InstalledGameRow: FC<Props> = ({ game, disk, onUninstalled }) => {
     }
   };
 
+  // A manual game whose installer ran but whose executable was never
+  // chosen ("Later" on the post-install modal). The Play button then
+  // opens the exe selector — no room in this row for a third button.
+  const isPendingManual =
+    game.store === "manual" && game.metadata?.manual_status === "installing";
+
+  const openExeModal = () => {
+    showModal(
+      <ManualInstallExeModal
+        gameId={game.store_game_id}
+        gameTitle={game.title}
+        installPath={game.install_path ?? "/"}
+      />,
+    );
+  };
+
   // Mirrors InstalledButtons: ask before launching a stale build rather
   // than blocking it.
   const onPlay = () => {
     if (appId == null) return;
+    // A manual game whose exe was never chosen: Play opens the exe
+    // selector instead of re-running the installer — the pending step
+    // is what actually stands between the user and playing.
+    if (isPendingManual) {
+      openExeModal();
+      return;
+    }
+    // A manual game whose persistent shortcut Steam hasn't loaded yet
+    // (no restart since it was written): a plain RunGame would fail
+    // with "Game configuration unavailable" — go through the
+    // temp-shortcut launch instead.
+    if (game.store === "manual" && !isManualTileLive(game.store_game_id)) {
+      launchManualGame(game.store_game_id);
+      return;
+    }
     if (!hasUpdate) {
       actions.launch(appId);
       return;
@@ -145,6 +179,9 @@ export const InstalledGameRow: FC<Props> = ({ game, disk, onUninstalled }) => {
           setBusy(true);
           try {
             const result = await actions.uninstall(appId, deletePrefix);
+            // Manual games' live-session shortcut removal happens
+            // inside actions.uninstall (see lib/manual-uninstall) —
+            // the same path the detail-page buttons use.
             if (result?.success) onUninstalled();
           } finally {
             setBusy(false);

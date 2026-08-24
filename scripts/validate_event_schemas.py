@@ -82,6 +82,7 @@ VALID_EVENTS: set[str] = {e.name for e in Events}
 # truth rather than drifting behind the code.
 CANONICAL_SCHEMA: dict[str, set[str]] = {
     "ACCOUNT_SWITCHED":             {"active_user_id", "new_user"},
+    "ARTWORK_REQUEST":              {"app_id", "force", "game_id", "store", "title"},
     "CIRCUIT_STATE_CHANGED":        {"failure_count", "game_id", "is_open", "store", "trigger"},
     "CONFIG_VALIDATION_COMPLETED":  {"defaults_validated", "user_overrides_present"},
     "CONFIG_VALIDATION_FAILED":     {"defaults_validated", "error_count", "first_error_path", "first_error_source", "user_overrides_present"},
@@ -129,6 +130,7 @@ CANONICAL_SCHEMA: dict[str, set[str]] = {
     "TOAST_NOTIFICATION":           {"actions", "duration_ms", "i18n_key", "params", "severity"},
     "BATTLENET_INSTALL_LAUNCH_REQUESTED": {"store_game_id"},
     "UBISOFT_INSTALL_LAUNCH_REQUESTED": {"store_game_id"},
+    "MANUAL_INSTALL_LAUNCH_REQUESTED": {"store_game_id"},
 }
 
 

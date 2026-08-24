@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "手動"
   },
   "unifiedLibrary": {
     "error": "Unifideck 錯誤",
@@ -1052,5 +1053,28 @@
     "typeReinstall": "重新安裝",
     "typeUpdate": "升級至",
     "updateButton": "升級至 v{{version}}"
+  },
+  "manualInstall": {
+    "title": "手動安裝",
+    "description": "從你自己的安裝程式安裝遊戲。選擇安裝用的 .exe：它會在獨立的 Proton 前綴中執行，D: 磁碟就是本機上的遊戲資料夾。安裝完成後，會提示你選擇遊戲的執行檔。",
+    "starting": "正在準備手動安裝",
+    "startFailed": "無法開始手動安裝",
+    "installerRunning": "安裝程式已啟動 — 請完成安裝精靈",
+    "launchFailed": "無法啟動安裝程式",
+    "titleModalTitle": "遊戲名稱",
+    "titleModalSubtitle": "用於 Steam 捷徑、封面圖與遊戲資料 — 如果猜測有誤請修改。",
+    "titleModalConfirm": "繼續",
+    "exeModalTitle": "{{game}} — 選擇遊戲的執行檔",
+    "exeModalSubtitle": "安裝已完成。請選擇遊戲的 .exe，這樣「開始遊戲」就會啟動它（安裝在 D: 磁碟，即本遊戲的資料夾）。",
+    "exeModalBrowse": "瀏覽…",
+    "exeModalLater": "稍後",
+    "ready": "遊戲就緒 — 按開始遊戲即可啟動",
+    "finalizeFailed": "無法設定遊戲的執行檔",
+    "installButton": "安裝",
+    "importButton": "匯入",
+    "importDescription": "新增已安裝的遊戲：選擇它的執行檔，遊戲就會出現在你的收藏庫中。檔案保留在原本的位置。",
+    "importFailed": "無法匯入遊戲",
+    "exeModalNoCandidates": "尚未找到執行檔 — 請使用瀏覽來指定遊戲的 .exe。",
+    "importStarting": "遊戲已匯入 — 正在啟動以驗證是否可執行"
   }
 }

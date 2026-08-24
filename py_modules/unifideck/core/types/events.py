@@ -151,6 +151,14 @@ class Events(StrEnum):
     BATTLENET_INSTALL_LAUNCH_REQUESTED = "battlenet_install_launch_requested"
     UBISOFT_INSTALL_LAUNCH_REQUESTED = "ubisoft_install_launch_requested"
 
+    # Manual install — same RunGame constraint as the wrapper stores:
+    # the user's own installer .exe must run inside a gamescope session,
+    # so the backend asks the frontend to RunGame the freshly created
+    # shortcut (whose games.map row points at the installer) instead of
+    # spawning the installer itself.
+    # Payload fields: store_game_id (str — "manual:<game_id>").
+    MANUAL_INSTALL_LAUNCH_REQUESTED = "manual_install_launch_requested"
+
     # Generic store error
     STORE_ERROR = "store_error"
 
@@ -346,6 +354,7 @@ class StoreEnum(StrEnum):
     MICROSOFT = "microsoft"
     UBISOFT = "ubisoft"
     BATTLENET = "battlenet"
+    MANUAL = "manual"
 
 
 class OwnershipType(StrEnum):

@@ -148,3 +148,35 @@ export function isShortcutAppRunning(appId: number): boolean {
   const status = getShortcutDisplayStatus(appId);
   return status === 1 || status === 4;
 }
+
+/** Outcome of {@link removeShortcutFromSession}. `absent` means Steam
+ *  never had the shortcut in this session's memory — there was no
+ *  visible tile to remove, so nothing further is needed. */
+export type SessionShortcutRemoval = "removed" | "absent" | "failed";
+
+/**
+ * Remove a shortcut from the LIVE Steam session via
+ * ``SteamClient.Apps.RemoveShortcut`` — the same API the temp-shortcut
+ * cleanup uses. This is what makes a deleted shortcut's tile vanish
+ * immediately (library and Recents) instead of lingering until Steam
+ * re-reads ``shortcuts.vdf`` at the next restart. Steam then flushes
+ * its own copy of the file without the entry, which matches the
+ * backend's removal.
+ *
+ * Accepts a signed or unsigned appid (``m_mapApps`` and the Apps API
+ * are keyed unsigned).
+ */
+export function removeShortcutFromSession(
+  appId: number,
+): SessionShortcutRemoval {
+  const unsigned = appId < 0 ? appId + 0x100000000 : appId;
+  if (!getAppStoreEntry(unsigned)) return "absent";
+  try {
+    const apps = window.SteamClient?.Apps;
+    if (!apps?.RemoveShortcut) return "failed";
+    apps.RemoveShortcut(unsigned);
+    return "removed";
+  } catch {
+    return "failed";
+  }
+}
