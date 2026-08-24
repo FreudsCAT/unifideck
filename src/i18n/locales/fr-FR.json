@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "Manuel"
   },
   "unifiedLibrary": {
     "error": "Erreur Unifideck",
@@ -1052,5 +1053,28 @@
     "title": "COLLECTIONS STEAM",
     "enabled": "Collections activées",
     "disabled": "Collections désactivées"
+  },
+  "manualInstall": {
+    "title": "INSTALLATION MANUELLE",
+    "description": "Installez un jeu depuis votre propre installateur. Choisissez le .exe d'installation : il s'exécute dans son propre préfixe Proton et le lecteur D: est le dossier du jeu sur cet appareil. À la fin, il vous sera demandé de sélectionner l'exécutable du jeu.",
+    "starting": "Préparation de l'installation manuelle",
+    "startFailed": "Impossible de démarrer l'installation manuelle",
+    "installerRunning": "Installateur lancé — terminez l'assistant",
+    "launchFailed": "Impossible de lancer l'installateur",
+    "titleModalTitle": "Titre du jeu",
+    "titleModalSubtitle": "Utilisé pour le raccourci Steam, les visuels et les données du jeu — corrigez-le si la suggestion est fausse.",
+    "titleModalConfirm": "Continuer",
+    "exeModalTitle": "{{game}} — sélectionnez l'exécutable du jeu",
+    "exeModalSubtitle": "L'installation est terminée. Choisissez le .exe du jeu pour que Jouer le lance (installé sur le lecteur D:, le dossier de ce jeu).",
+    "exeModalBrowse": "Parcourir…",
+    "exeModalLater": "Plus tard",
+    "ready": "Jeu prêt — Jouer le lancera",
+    "finalizeFailed": "Impossible de définir l'exécutable du jeu",
+    "installButton": "Installer",
+    "importButton": "Importer",
+    "importDescription": "Ajoutez un jeu déjà installé : sélectionnez son exécutable et il apparaîtra dans votre bibliothèque. Les fichiers restent où ils sont.",
+    "importFailed": "Impossible d'importer le jeu",
+    "exeModalNoCandidates": "Aucun exécutable trouvé pour l'instant — utilisez Parcourir pour localiser le .exe du jeu.",
+    "importStarting": "Jeu importé — lancement pour vérifier qu'il fonctionne"
   }
 }

@@ -149,6 +149,9 @@
         },
         "battlenet": {
           "$ref": "#/$defs/battlenetStore"
+        },
+        "manual": {
+          "$ref": "#/$defs/manualStore"
         }
       }
     },
@@ -856,6 +859,18 @@
         },
         "subscription_check_url": {
           "$ref": "#/$defs/httpsUrl"
+        }
+      }
+    },
+    "manualStore": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "install_dir": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "state_file": {
+          "$ref": "#/$defs/nonEmptyString"
         }
       }
     },

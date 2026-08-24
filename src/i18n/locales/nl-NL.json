@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "Handmatig"
   },
   "unifiedLibrary": {
     "error": "Unifideck-fout",
@@ -1052,5 +1053,28 @@
     "title": "STEAM-COLLECTIES",
     "enabled": "Collecties ingeschakeld",
     "disabled": "Collecties uitgeschakeld"
+  },
+  "manualInstall": {
+    "title": "HANDMATIGE INSTALLATIE",
+    "description": "Installeer een game vanaf je eigen installatieprogramma. Kies de setup-.exe: die draait in een eigen Proton-prefix en schijf D: is de gamemap op dit apparaat. Na afloop word je gevraagd het uitvoerbare bestand van de game te kiezen.",
+    "starting": "Handmatige installatie voorbereiden",
+    "startFailed": "Kon de handmatige installatie niet starten",
+    "installerRunning": "Installatieprogramma gestart — voltooi de wizard",
+    "launchFailed": "Kon het installatieprogramma niet starten",
+    "titleModalTitle": "Titel van de game",
+    "titleModalSubtitle": "Wordt gebruikt voor de Steam-snelkoppeling, artwork en gamegegevens — corrigeer hem als de gok fout is.",
+    "titleModalConfirm": "Doorgaan",
+    "exeModalTitle": "{{game}} — kies het uitvoerbare bestand",
+    "exeModalSubtitle": "De installatie is klaar. Kies de .exe van de game zodat Spelen hem start (geïnstalleerd op schijf D:, de map van deze game).",
+    "exeModalBrowse": "Bladeren…",
+    "exeModalLater": "Niet nu",
+    "ready": "Game klaar — Spelen start hem",
+    "finalizeFailed": "Kon het uitvoerbare bestand niet instellen",
+    "installButton": "Installeren",
+    "importButton": "Importeren",
+    "importDescription": "Voeg een al geïnstalleerde game toe: kies het uitvoerbare bestand en de game verschijnt in je bibliotheek. De bestanden blijven waar ze zijn.",
+    "importFailed": "Kon de game niet importeren",
+    "exeModalNoCandidates": "Nog geen uitvoerbare bestanden gevonden — gebruik Bladeren om de .exe van de game te vinden.",
+    "importStarting": "Game geïmporteerd — wordt gestart om te controleren of hij werkt"
   }
 }

@@ -77,6 +77,10 @@ export interface Game {
   store_tags?: GameTag[];
   size_bytes?: number;
   deck_rating?: DeckRating;
+  /** Raw wire field: backend ``Game.metadata`` free-form dict. Manual
+   *  rows carry ``manual_status`` ("installing" | "ready") so the UI
+   *  can surface a pending exe selection. */
+  metadata?: Record<string, unknown>;
 }
 
 /** One achievement (definition + this user's unlock status). */
@@ -156,6 +160,10 @@ export interface StoreInfo {
   icon: string;
   available: boolean;
   auth_status: StoreStatus;
+  /** Backend `StoreInfo.auth_method` — `"none"` marks a store with no
+   *  sign-in at all (the manual store), so the connections list can
+   *  skip rendering an Authenticate button for it. */
+  auth_method?: string;
 }
 
 /**
@@ -175,7 +183,8 @@ export type StoreId =
   | "amazon"
   | "microsoft"
   | "ubisoft"
-  | "battlenet";
+  | "battlenet"
+  | "manual";
 
 /**
  * Per-store availability + auth state, returned by

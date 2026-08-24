@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "Manuale"
   },
   "unifiedLibrary": {
     "error": "Errore Unifideck",
@@ -1052,5 +1053,28 @@
     "title": "COLLEZIONI DI STEAM",
     "enabled": "Collezioni abilitate",
     "disabled": "Collezioni disabilitate"
+  },
+  "manualInstall": {
+    "title": "INSTALLAZIONE MANUALE",
+    "description": "Installa un gioco dal tuo installer. Scegli il .exe di installazione: viene eseguito in un prefisso Proton dedicato e l'unità D: è la cartella del gioco su questo dispositivo. Al termine ti verrà chiesto di selezionare l'eseguibile del gioco.",
+    "starting": "Preparazione dell'installazione manuale",
+    "startFailed": "Impossibile avviare l'installazione manuale",
+    "installerRunning": "Installer avviato — completa la procedura guidata",
+    "launchFailed": "Impossibile avviare l'installer",
+    "titleModalTitle": "Titolo del gioco",
+    "titleModalSubtitle": "Usato per il collegamento di Steam, le immagini e i dati del gioco — correggilo se il suggerimento è sbagliato.",
+    "titleModalConfirm": "Continua",
+    "exeModalTitle": "{{game}} — seleziona l'eseguibile del gioco",
+    "exeModalSubtitle": "L'installazione è terminata. Scegli il .exe del gioco così Gioca lo avvierà (installato nell'unità D:, la cartella di questo gioco).",
+    "exeModalBrowse": "Sfoglia…",
+    "exeModalLater": "Più tardi",
+    "ready": "Gioco pronto — Gioca lo avvierà",
+    "finalizeFailed": "Impossibile impostare l'eseguibile del gioco",
+    "installButton": "Installa",
+    "importButton": "Importa",
+    "importDescription": "Aggiungi un gioco già installato: seleziona il suo eseguibile e apparirà nella tua libreria. I file restano dove sono.",
+    "importFailed": "Impossibile importare il gioco",
+    "exeModalNoCandidates": "Nessun eseguibile trovato per ora — usa Sfoglia per individuare il .exe del gioco.",
+    "importStarting": "Gioco importato — avvio per verificare che funzioni"
   }
 }

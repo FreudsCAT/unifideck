@@ -95,6 +95,13 @@ export const rpcRoutes = {
   cloudSavePull: "cloud_save_pull",
   cloudSavePush: "cloud_save_push",
   setGameSavePath: "set_game_save_path",
+  // Manual install flow (ManualInstallRPCMixin)
+  manualInstallStart: "manual_install_start",
+  manualImport: "manual_import",
+  manualInstallFinalize: "manual_install_finalize",
+  manualExeCandidates: "manual_exe_candidates",
+  manualEnsureShortcut: "manual_ensure_shortcut",
+  manualInstallStatus: "manual_install_status",
   // Launch executable override (ExecutableRPCMixin)
   listGameExecutables: "list_game_executables",
   setGameExecutable: "set_game_executable",

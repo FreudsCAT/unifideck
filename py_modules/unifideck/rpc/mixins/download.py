@@ -261,7 +261,13 @@ class DownloadRPCMixin:
         # uninstall returns success without deleting anything; nile likewise
         # leaves our manifest marker (a stub dir) behind. The marker proves
         # the folder is ours, so this only ever removes a dir we created.
-        await asyncio.to_thread(marker_sweep.sweep_game, store, game_id)
+        #
+        # EXCEPT the manual store: an IMPORTed game's folder is created and
+        # managed by the USER — the sweep's "marker ⇒ we created it" premise
+        # does not hold there (it deleted a user's own game folder once), and
+        # ManualStore.uninstall_game already does its own guarded cleanup.
+        if store != "manual":
+            await asyncio.to_thread(marker_sweep.sweep_game, store, game_id)
         return result
 
     async def check_game_update(self, store: str, game_id: str) -> Any:

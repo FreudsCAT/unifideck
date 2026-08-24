@@ -18,6 +18,7 @@ import { useCallback, useState } from "react";
 import { useDownloads } from "../contexts/DownloadContext";
 import { invalidateGameInfo } from "./useGameInfo";
 import { bumpGameStateVersion } from "../lib/game-state-version";
+import { finalizeManualUninstall } from "../lib/manual-uninstall";
 import { UpdateStore } from "../stores/update-store";
 import type { Result, StoreId } from "../types/api";
 
@@ -90,6 +91,11 @@ export function useGameActions(bridge: SteamBridgeShape): UseGameActionsResult {
         if (result?.success) {
           invalidateGameInfo(appId);
           bumpGameStateVersion(appId);
+          // Manual games: the shortcut was deleted outright — clear it
+          // from the live session too (and leave a now-dead detail
+          // page). Centralised here, the one choke point every
+          // uninstall surface calls. No-op for other stores.
+          finalizeManualUninstall(appId);
         }
         return result;
       } finally {

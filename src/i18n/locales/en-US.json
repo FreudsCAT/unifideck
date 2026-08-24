@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "Manual"
   },
   "unifiedLibrary": {
     "error": "Unifideck Error",
@@ -1052,5 +1053,28 @@
     "typeReinstall": "Reinstalling",
     "typeUpdate": "Updating to",
     "updateButton": "Update to v{{version}}"
+  },
+  "manualInstall": {
+    "title": "MANUAL INSTALL",
+    "description": "Install a game from your own installer. Pick the setup .exe: it runs in its own Proton prefix, and drive D: is the game's folder on this device. When it finishes, you'll be asked to select the game's executable.",
+    "starting": "Preparing manual install",
+    "startFailed": "Could not start the manual install",
+    "installerRunning": "Installer launched — complete the wizard",
+    "launchFailed": "Could not launch the installer",
+    "titleModalTitle": "Game title",
+    "titleModalSubtitle": "Used for the Steam shortcut, artwork and game data — fix it if the guess is wrong.",
+    "titleModalConfirm": "Continue",
+    "exeModalTitle": "{{game}} — select the game executable",
+    "exeModalSubtitle": "The installer has finished. Choose the game's .exe so Play launches the game (it was installed under drive D:, this game's folder).",
+    "exeModalBrowse": "Browse…",
+    "exeModalLater": "Later",
+    "ready": "Game ready — Play will launch it",
+    "finalizeFailed": "Could not set the game executable",
+    "installButton": "Install",
+    "importButton": "Import",
+    "importDescription": "Add a game that is already installed: select its executable and it appears in your library. Files stay where they are.",
+    "importFailed": "Could not import the game",
+    "exeModalNoCandidates": "No executables found yet — use Browse to locate the game's .exe.",
+    "importStarting": "Game imported — launching it to verify it works"
   }
 }

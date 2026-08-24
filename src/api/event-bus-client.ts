@@ -62,6 +62,7 @@ const WATCHED_EVENTS: EventName[] = [
   // → UPC — works; this allowlist omission was the whole bug).
   "ubisoft_install_launch_requested",
   "battlenet_install_launch_requested",
+  "manual_install_launch_requested",
   "game_installed",
   "game_uninstalled",
   "game_update_available",
@@ -85,6 +86,7 @@ const WATCHED_EVENTS: EventName[] = [
 const IMPERATIVE_EVENTS = new Set<string>([
   "ubisoft_install_launch_requested",
   "battlenet_install_launch_requested",
+  "manual_install_launch_requested",
 ]);
 
 /** Sync-lifecycle events describe a sync that was already underway or
