@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "Manual"
   },
   "unifiedLibrary": {
     "error": "Error de Unifideck",
@@ -1052,5 +1053,28 @@
     "title": "COLECCIONES DE STEAM",
     "enabled": "Colecciones activadas",
     "disabled": "Colecciones desactivadas"
+  },
+  "manualInstall": {
+    "title": "INSTALACIÓN MANUAL",
+    "description": "Instala un juego desde tu propio instalador. Elige el .exe de instalación: se ejecuta en su propio prefijo de Proton y la unidad D: es la carpeta del juego en este dispositivo. Al terminar, se te pedirá seleccionar el ejecutable del juego.",
+    "starting": "Preparando la instalación manual",
+    "startFailed": "No se pudo iniciar la instalación manual",
+    "installerRunning": "Instalador iniciado — completa el asistente",
+    "launchFailed": "No se pudo iniciar el instalador",
+    "titleModalTitle": "Título del juego",
+    "titleModalSubtitle": "Se usa para el acceso directo de Steam, el arte y los datos del juego — corrígelo si la sugerencia es incorrecta.",
+    "titleModalConfirm": "Continuar",
+    "exeModalTitle": "{{game}} — selecciona el ejecutable del juego",
+    "exeModalSubtitle": "La instalación ha terminado. Elige el .exe del juego para que Jugar lo inicie (se instaló en la unidad D:, la carpeta de este juego).",
+    "exeModalBrowse": "Examinar…",
+    "exeModalLater": "Más tarde",
+    "ready": "Juego listo — Jugar lo iniciará",
+    "finalizeFailed": "No se pudo establecer el ejecutable del juego",
+    "installButton": "Instalar",
+    "importButton": "Importar",
+    "importDescription": "Añade un juego ya instalado: selecciona su ejecutable y aparecerá en tu biblioteca. Los archivos se quedan donde están.",
+    "importFailed": "No se pudo importar el juego",
+    "exeModalNoCandidates": "Aún no se han encontrado ejecutables — usa Examinar para localizar el .exe del juego.",
+    "importStarting": "Juego importado — lanzándolo para comprobar que funciona"
   }
 }

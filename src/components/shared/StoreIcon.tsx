@@ -13,7 +13,7 @@ import {
   SiBattledotnet,
   SiUbisoft,
 } from "react-icons/si";
-import { FaGamepad, FaSteam, FaXbox } from "react-icons/fa";
+import { FaGamepad, FaHdd, FaSteam, FaXbox } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import type { StoreId } from "../../types/api";
 
@@ -25,6 +25,7 @@ const STORE_ICONS: Record<StoreId, IconType> = {
   microsoft: FaXbox,
   ubisoft: SiUbisoft,
   battlenet: SiBattledotnet,
+  manual: FaHdd,
 };
 
 interface Props {

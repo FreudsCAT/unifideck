@@ -35,6 +35,7 @@ export interface TeardownHandles {
   lifetimeListener?: Unregisterable | null;
   launcherToastPoll?: (() => void) | null;
   bootEventListener?: (() => void) | null;
+  manualInstallListener?: (() => void) | null;
 }
 /**
  * Run every disposer captured during bootstrap, in
@@ -73,6 +74,13 @@ export function runTeardown(handles: TeardownHandles): void {
       handles.bootEventListener();
     } catch (e) {
       console.warn("[Teardown] boot event listener stop failed:", e);
+    }
+  }
+  if (handles.manualInstallListener) {
+    try {
+      handles.manualInstallListener();
+    } catch (e) {
+      console.warn("[Teardown] manual install listener stop failed:", e);
     }
   }
   if (handles.launcherToastPoll) {

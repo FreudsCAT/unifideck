@@ -187,11 +187,24 @@ class EventsMixin:
         UI continue to recognise it. The emitters in
         ``stores/{epic,amazon}/install.py`` pass ``store`` + ``game_id``
         (not ``app_id``), so we look the shortcut up by those.
+
+        The manual store is the exception: a manual game ceases to
+        exist on uninstall — there is no store library it remains
+        "owned" in, so a lingering "Not Installed" tile would only
+        offer an Install button that cannot work. Drop its shortcut
+        entirely (games.map row and registry go with it, artwork
+        follows via ``SHORTCUT_REMOVED``); the tile disappears once
+        Steam re-reads ``shortcuts.vdf``. ``mark_uninstalled`` runs
+        first so ``SyncService._all_games`` still gets its
+        install-state flip.
         """
         store = kwargs.get("store")
         game_id = kwargs.get("game_id")
-        if isinstance(store, str) and isinstance(game_id, str):
-            await self.mark_uninstalled(store, game_id)
+        if not (isinstance(store, str) and isinstance(game_id, str)):
+            return
+        app_id = await self.mark_uninstalled(store, game_id)
+        if store == "manual" and app_id is not None:
+            await self.remove_game(app_id)
 
     @subscribe(Events.SYNC_COMPLETE)
     async def _on_sync_complete(self, **kwargs: Any) -> None:

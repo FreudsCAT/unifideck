@@ -9,7 +9,7 @@
  * before the "Properties…" entry. Proven robust across Steam client versions.
  *
  * GATING: the item is added only for an INSTALLED Unifideck shortcut whose
- * store supports an executable override (gog / amazon / epic). Regular Steam
+ * store supports an executable override (gog / amazon / epic / manual). Regular Steam
  * games — and unsupported stores (Microsoft xCloud) — are left untouched. The
  * patch only ADDS a menu item; it never mutates the overview or launch routing.
  */
@@ -29,7 +29,7 @@ import { getUnifideckGame } from "../library-filters";
 import { ChangeExecutableModal } from "../../components/modals/ChangeExecutableModal";
 
 /** Stores whose launch target the user can override (see ExecutableRPCMixin). */
-const SUPPORTED_STORES = new Set(["gog", "amazon", "epic"]);
+const SUPPORTED_STORES = new Set(["gog", "amazon", "epic", "manual"]);
 
 /** Stable key so re-renders can dedupe our injected item. */
 const MENU_ITEM_KEY = "unifideck-change-exe";

@@ -41,6 +41,7 @@ import { loadCompatCacheFromBackend } from "./lib/protondb-cache";
 import { runBootstrapTasks } from "./bootstrap-tasks";
 import { startLauncherToastPoll } from "./services/launcherToasts";
 import { startBootEventListener } from "./services/boot-event-listener";
+import { startManualInstallListener } from "./services/manual-install-listener";
 import { downloadStore } from "./stores/download-store";
 import { syncStore } from "./stores/sync-store";
 import { authStore } from "./stores/auth-store";
@@ -134,6 +135,13 @@ export default definePlugin(() => {
     handles.bootEventListener = startBootEventListener();
   } catch (e) {
     console.error("[Unifideck] boot event listener start failed:", e);
+  }
+  // Manual-install RunGame bridge — must live outside the QAM panel:
+  // the launch request arrives while the panel is closed.
+  try {
+    handles.manualInstallListener = startManualInstallListener();
+  } catch (e) {
+    console.error("[Unifideck] manual install listener start failed:", e);
   }
   // Persistent poll for launcher-subprocess toasts (first-time prefix
   // setup, dependency install, Proton switch). Runs here — NOT in the

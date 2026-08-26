@@ -87,13 +87,18 @@ export const StoreConnections: FC = () => {
   return (
     <PanelSection title={t("storeConnections.title")}>
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {stores.map((s) => (
-          <StoreRow
-            key={s.name}
-            storeId={s.name}
-            displayName={s.display_name}
-          />
-        ))}
+        {stores
+          // A store with no sign-in at all (auth_method "none" — the
+          // manual store) would only render a useless Authenticate
+          // button here, so it has no row in the connections list.
+          .filter((s) => s.auth_method !== "none")
+          .map((s) => (
+            <StoreRow
+              key={s.name}
+              storeId={s.name}
+              displayName={s.display_name}
+            />
+          ))}
       </div>
     </PanelSection>
   );

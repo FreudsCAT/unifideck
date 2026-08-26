@@ -37,6 +37,7 @@ import {
   CollectionsToggle,
   CleanupSection,
   CaptureLogsSection,
+  ManualInstallSection,
   PluginUpdater,
 } from "../components/settings";
 import { DownloadsTab } from "../components/downloads";
@@ -250,6 +251,7 @@ export const QuickAccessPanel: FC = () => {
             <PluginUpdater />
             <CleanupSection />
             <CaptureLogsSection />
+            <ManualInstallSection />
           </>
         )}
         {tab === "downloads" && <DownloadsTab />}

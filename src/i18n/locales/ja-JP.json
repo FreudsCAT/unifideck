@@ -551,7 +551,8 @@
     "amazon": "Amazon",
     "ubisoft": "Ubisoft",
     "microsoft": "Microsoft",
-    "battlenet": "Battle.net"
+    "battlenet": "Battle.net",
+    "manual": "手動"
   },
   "unifiedLibrary": {
     "error": "Unifideck エラー",
@@ -1052,5 +1053,28 @@
     "title": "STEAM コレクション",
     "enabled": "コレクションが有効",
     "disabled": "コレクションが無効"
+  },
+  "manualInstall": {
+    "title": "手動インストール",
+    "description": "手元のインストーラーからゲームをインストールします。セットアップ用の .exe を選ぶと、専用の Proton プレフィックスで実行され、D: ドライブが本体側のゲームフォルダーになります。完了後、ゲームの実行ファイルを選択するよう求められます。",
+    "starting": "手動インストールを準備中",
+    "startFailed": "手動インストールを開始できませんでした",
+    "installerRunning": "インストーラーを起動しました — ウィザードを完了してください",
+    "launchFailed": "インストーラーを起動できませんでした",
+    "titleModalTitle": "ゲームタイトル",
+    "titleModalSubtitle": "Steam ショートカット、アートワーク、ゲーム情報の検索に使われます。推測が違う場合は修正してください。",
+    "titleModalConfirm": "続行",
+    "exeModalTitle": "{{game}} — ゲームの実行ファイルを選択",
+    "exeModalSubtitle": "インストールが完了しました。プレイでゲームが起動するように、ゲームの .exe を選択してください（D: ドライブ＝このゲームのフォルダーにインストールされています）。",
+    "exeModalBrowse": "参照…",
+    "exeModalLater": "後で",
+    "ready": "ゲームの準備完了 — プレイで起動します",
+    "finalizeFailed": "ゲームの実行ファイルを設定できませんでした",
+    "installButton": "インストール",
+    "importButton": "インポート",
+    "importDescription": "インストール済みのゲームを追加します。実行ファイルを選択すると、ライブラリに表示されます。ファイルは元の場所に残ります。",
+    "importFailed": "ゲームをインポートできませんでした",
+    "exeModalNoCandidates": "実行ファイルがまだ見つかりません。参照からゲームの .exe を指定してください。",
+    "importStarting": "ゲームをインポートしました — 動作確認のため起動します"
   }
 }
