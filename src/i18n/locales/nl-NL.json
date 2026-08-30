@@ -770,7 +770,9 @@
       "subtitle": "Kies welk bestand deze game start (bijv. sla een launcher over en start de game direct). De werkmap en cloudopslag worden niet beïnvloed.",
       "title": "Uitvoerbaar bestand wijzigen. {{game}}",
       "unavailable": "Kon de map van deze game niet lezen."
-    }
+    },
+    "protonPinned": "{{version}} vastgezet voor dit spel",
+    "protonPinnedBody": "Unifideck past het nu toe bij het starten. Steams geforceerde compatibiliteit is uitgeschakeld zodat de launcher kan starten — schakel het opnieuw in om Proton te wijzigen."
   },
   "playMeta": {
     "spaceRequired": "Benodigde ruimte",

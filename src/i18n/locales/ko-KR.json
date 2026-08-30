@@ -770,7 +770,9 @@
       "subtitle": "이 게임이 실행할 파일을 선택하십시오 (예: 런처를 건너뛰고 게임을 직접 실행). 작업 디렉토리와 클라우드 저장 데이터는 영향을 받지 않습니다.",
       "title": "실행 파일 변경. {{game}}",
       "unavailable": "이 게임의 폴더를 읽을 수 없습니다."
-    }
+    },
+    "protonPinned": "이 게임에 {{version}}이(가) 고정되었습니다",
+    "protonPinnedBody": "이제 Unifideck이 실행 시 적용합니다. 런처가 시작될 수 있도록 Steam의 강제 호환성 설정을 해제했습니다. Proton을 변경하려면 다시 설정하세요."
   },
   "playMeta": {
     "spaceRequired": "필요한 용량",

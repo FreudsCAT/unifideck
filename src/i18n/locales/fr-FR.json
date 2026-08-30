@@ -770,7 +770,9 @@
       "subtitle": "Choisissez le fichier avec lequel lancer ce jeu (ex. contourner un lanceur et lancer le jeu directement). Le dossier de travail et les sauvegardes cloud ne sont pas affectés.",
       "title": "Modifier l'exécutable. {{game}}",
       "unavailable": "Impossible de lire le dossier de ce jeu."
-    }
+    },
+    "protonPinned": "{{version}} épinglé pour ce jeu",
+    "protonPinnedBody": "Unifideck l'applique désormais au lancement. La compatibilité forcée de Steam a été désactivée pour que le lanceur puisse démarrer — réactivez-la pour changer de Proton."
   },
   "playMeta": {
     "spaceRequired": "Espace requis",

@@ -770,7 +770,9 @@
       "subtitle": "Escolha qual arquivo este jogo inicia (por exemplo, pular um inicializador e executar o jogo diretamente). O diretório de trabalho e os salvamentos na nuvem não serão afetados.",
       "title": "Alterar executável. {{game}}",
       "unavailable": "Não foi possível ler a pasta deste jogo."
-    }
+    },
+    "protonPinned": "{{version}} fixado para este jogo",
+    "protonPinnedBody": "O Unifideck passa a aplicá-lo ao iniciar. A Compatibilidade forçada da Steam foi desativada para que o inicializador possa abrir — ative-a novamente para trocar de Proton."
   },
   "playMeta": {
     "spaceRequired": "Espaço necessário",

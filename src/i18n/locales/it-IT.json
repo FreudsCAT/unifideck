@@ -770,7 +770,9 @@
       "subtitle": "Scegli quale file avvia questo gioco (es. saltare un launcher e avviare direttamente il gioco). La cartella di lavoro e i salvataggi cloud non subiranno variazioni.",
       "title": "Modifica eseguibile. {{game}}",
       "unavailable": "Impossibile leggere la cartella di questo gioco."
-    }
+    },
+    "protonPinned": "{{version}} impostato per questo gioco",
+    "protonPinnedBody": "Unifideck lo applica ora all'avvio. La compatibilità forzata di Steam è stata disattivata per permettere l'avvio del launcher: riattivala per cambiare Proton."
   },
   "playMeta": {
     "spaceRequired": "Spazio richiesto",

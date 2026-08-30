@@ -793,7 +793,9 @@
       "changed": "可執行檔已變更",
       "changeFailed": "無法變更可執行檔",
       "reset": "重設為預設可執行檔"
-    }
+    },
+    "protonPinned": "已為此遊戲固定 {{version}}",
+    "protonPinnedBody": "Unifideck 現在會在啟動時套用。為了讓啟動器能夠執行，已清除 Steam 的強制相容性設定——若要更換 Proton，請重新設定。"
   },
   "playMeta": {
     "spaceRequired": "所需空間",

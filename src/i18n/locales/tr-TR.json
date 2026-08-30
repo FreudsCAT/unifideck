@@ -770,7 +770,9 @@
       "subtitle": "Bu oyunun hangi dosyayı başlatacağını seçin (örn. bir başlatıcıyı atlayıp oyunu doğrudan çalıştırmak için). Çalışma dizini ve bulut kayıtları etkilenmez.",
       "title": "Çalıştırılabilir dosyayı değiştir. {{game}}",
       "unavailable": "Bu oyunun klasörü okunamadı."
-    }
+    },
+    "protonPinned": "Bu oyun için {{version}} sabitlendi",
+    "protonPinnedBody": "Unifideck artık başlatırken bunu uyguluyor. Başlatıcının çalışabilmesi için Steam'in Zorunlu Uyumluluk ayarı temizlendi — Proton'u değiştirmek için yeniden ayarlayın."
   },
   "playMeta": {
     "spaceRequired": "Gerekli Alan",

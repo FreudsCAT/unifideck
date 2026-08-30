@@ -770,7 +770,9 @@
       "subtitle": "选择此游戏启动的文件（例如：跳过启动器并直接运行游戏）。工作目录和云端存档不受影响。",
       "title": "更改可执行文件。{{game}}",
       "unavailable": "无法读取此游戏的文件夹。"
-    }
+    },
+    "protonPinned": "已为该游戏固定 {{version}}",
+    "protonPinnedBody": "Unifideck 现在会在启动时应用它。为了让启动器能够运行，已清除 Steam 的强制兼容性设置——如需更换 Proton，请重新设置。"
   },
   "playMeta": {
     "spaceRequired": "所需空间",

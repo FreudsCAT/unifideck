@@ -770,7 +770,9 @@
       "subtitle": "Wybierz plik uruchamiający tę grę (np. pomiń launcher i uruchom grę bezpośrednio). Katalog roboczy oraz zapisy w chmurze nie zostaną naruszone.",
       "title": "Zmień plik wykonywalny. {{game}}",
       "unavailable": "Nie można odczytać folderu tej gry."
-    }
+    },
+    "protonPinned": "{{version}} przypisany do tej gry",
+    "protonPinnedBody": "Unifideck zastosuje go przy uruchamianiu. Wymuszona zgodność Steam została wyłączona, aby program uruchamiający mógł wystartować — włącz ją ponownie, aby zmienić Proton."
   },
   "playMeta": {
     "spaceRequired": "Wymagane miejsce",

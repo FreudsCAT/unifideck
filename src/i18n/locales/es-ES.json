@@ -770,7 +770,9 @@
       "subtitle": "Elige qué archivo inicia este juego (por ejemplo, omitir un lanzador y ejecutar el juego directamente). El directorio de trabajo y los guardados en la nube no se verán afectados.",
       "title": "Cambiar ejecutable. {{game}}",
       "unavailable": "No se pudo leer la carpeta de este juego."
-    }
+    },
+    "protonPinned": "{{version}} fijado para este juego",
+    "protonPinnedBody": "Unifideck lo aplicará al iniciar. Se ha desactivado la Compatibilidad forzada de Steam para que pueda arrancar el lanzador; vuelve a activarla para cambiar de Proton."
   },
   "playMeta": {
     "spaceRequired": "Espacio requerido",

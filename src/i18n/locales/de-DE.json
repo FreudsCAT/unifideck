@@ -770,7 +770,9 @@
       "subtitle": "Wählen Sie aus, welche Datei dieses Spiel startet (z. B. um einen Launcher zu überspringen und das Spiel direkt auszuführen). Das Arbeitsverzeichnis und Cloud-Spielstände sind nicht betroffen.",
       "title": "Ausführbare Datei ändern. {{game}}",
       "unavailable": "Der Ordner dieses Spiels konnte nicht gelesen werden."
-    }
+    },
+    "protonPinned": "{{version}} für dieses Spiel festgelegt",
+    "protonPinnedBody": "Unifideck wendet es jetzt beim Start an. Steams erzwungene Kompatibilität wurde deaktiviert, damit der Launcher starten kann – aktiviere sie erneut, um Proton zu wechseln."
   },
   "playMeta": {
     "spaceRequired": "Benötigter Speicherplatz",
