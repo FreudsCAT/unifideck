@@ -103,6 +103,13 @@ zip adjunto), que junta idioma + Proton forzado + la línea del panel.
 - **PR #422 — resolución del idioma. MERGEADO** el 2026-08-20 (`3f9c191`).
   Entró sin que el autor tocara una línea. Verificado en dispositivo con los
   tres handlers (Epic, Amazon, Ubisoft) y los dos niveles.
+- **PR #443 — foco del botón Update. MERGEADO** el 2026-09-01 (`b56f24c5`),
+  **en la rama `0.7.5`, no en `staging`.** El CSS entró intacto; el test
+  recibió un commit de seguimiento del autor (`fac5340c`) que sustituye
+  `__dirname` por `fileURLToPath(new URL(...))`. Tenía razón: el fichero es
+  ESM y `__dirname` solo existía ahí porque vitest lo inyecta, así que el test
+  se rompía bajo cualquier otro runner. **Aprendido para la próxima:** en
+  ficheros de `src/`, nada de `__dirname`.
 
 ### Listo para enviar, sin enviar
 
@@ -112,7 +119,8 @@ zip adjunto), que junta idioma + Proton forzado + la línea del panel.
   abrirlo. Verificado en dispositivo **en aislamiento**: build con solo esos
   siete ficheros sobre 0.7.3 limpio, con `proton_9` y `GE-Proton11-1`, más el
   caso sin elección. Ningún lanzamiento entró en el pressure-vessel.
-- **PR #10 del fork** (`fix/update-btn-gamepad-focus`) — el botón Update de la
+- **PR #10 del fork** (`fix/update-btn-gamepad-focus`) — MERGEADO aguas
+  arriba, ver arriba. El botón Update de la
   pestaña Downloads no tenía estado de foco, así que con el mando parecía
   inactivo aunque el foco sí pasaba por él. Bug de upstream, independiente de
   todo lo demás. Verificado en dispositivo sobre la 0.7.3.
@@ -136,6 +144,61 @@ zip adjunto), que junta idioma + Proton forzado + la línea del panel.
 - **PR #8 del fork** (`feat/proton-in-use-badge`) — la línea del panel.
   Depende funcionalmente del anterior: sin la captura, el origen `pin` nunca
   contiene una elección del usuario. Enviar **después** del #9.
+
+## La 0.7.5 en desarrollo — revisada el 2026-09-02
+
+Rama `0.7.5`, **73 commits por encima de `staging`** y sin mergear todavía.
+`staging` sigue en la 0.7.4 más el PR ajeno #278 (locale árabe). Es una
+refactorización grande, y **mueve ficheros que nuestros PR pendientes tocan**.
+
+**Reubicaciones que nos afectan:**
+
+| Antes | En la 0.7.5 |
+|---|---|
+| `compat/prefix_init.py` | `launcher/proton/compat/prefix_init.py` |
+| `launcher/proton/selector.py` | `launcher/proton/infrastructure/selector.py` |
+
+Consecuencia: el **PR #9 no se puede rebasar sin más**; hay que rehacerlo sobre
+la estructura nueva cuando la 0.7.5 llegue a `staging`. No adelantar trabajo
+hasta entonces, por lo mismo de siempre.
+
+**`save_proton_setting` ya no existe como ruta RPC.** El autor la borró en su
+auditoría de arquitectura (`docs/architecture-audit.md`), en un lote de 12
+rutas muertas. La función de backend sigue viva en
+`compatibility/proton_helpers.py:309`, llamada desde `prefix_setup.py:183` y
+`ge_fallback.py:105` — lo que desapareció es la puerta desde el frontend. Eso
+**invalida el paso 2 del punto 5** tal y como estaba planteado: un selector de
+Proton propio tendría que reponer la ruta, no limitarse a usarla.
+
+**Lo demás sigue igual, comprobado sobre la 0.7.5:**
+
+- `_proton_family` conserva la tabla numérica parada en `proton10`, así que
+  `proton_11`, `proton_8`, `proton_7` y `proton_hotfix` siguen cayendo en
+  `"other"`. El punto 2 sigue vigente. Ojo: el autor la reescribió otra vez
+  (normaliza a alfanumérico para que `GE-Proton11-3` y `Proton-GE Latest` sean
+  la misma familia, y añade `cachyos`), así que hay que construir sobre **esa**
+  versión.
+- Ningún `SpecifyCompatTool` captura la elección del usuario antes de
+  `RunGame`: los siete usos son de autenticación y de los lanzadores
+  envoltorio. El nivel 1 sigue existiendo
+  (`infrastructure/selector.py:261`). El PR #9 sigue justificado.
+
+**En qué está trabajando (temas de la 0.7.5):**
+
+- **Tienda nueva: GameVault** (PR #315), con conexión a carpeta local,
+  detección de ejecutables nativos de Linux y RPC propia.
+- **Soporte de Steam Machine**: valoración de compatibilidad por dispositivo y
+  detección del tipo de máquina.
+- **Lanzar las tiendas desde el plugin**, con inyección de sesión web en
+  Amazon, y eliminación de los flujos de autenticación redundantes.
+- **Bus de eventos y observabilidad**: toasts al canal `LAUNCHER_STAGE`,
+  decoradores `@subscribe`, ciclo de vida de descarga centralizado en
+  `DownloadWorker`, badge del circuit breaker del lanzador.
+- **Auditoría de arquitectura**: `docs/architecture-audit.md`,
+  `scripts/validate_architecture.py` (ya en `tests.yml`) y borrado de rutas y
+  módulos muertos.
+- **Battle.net**: reintento automático del login ante abortos de WSI en
+  gamescope, búsquedas de UID sin distinguir mayúsculas.
 
 ## Pendiente
 
@@ -296,6 +359,19 @@ desde ahí.
 
 Apaño para el usuario mientras tanto: reinstalar el juego desde Unifideck, que
 pasa por `_flip_existing_install` y deja la fila correcta.
+
+**Novedad de la 0.7.5 (2026-08-31, `87915701`):** el autor ha atacado la misma
+familia de problemas, pero por otro lado. Ahora el selector «Change
+executable» **puede crear la fila que falta** (le pasa `work_dir` y `app_id`
+para construirla) y `_durable_exe` impide que una sincronización pise el
+ejecutable que el usuario eligió. Es una reparación **manual y juego a juego**.
+
+La causa automática **sigue intacta**: el guard de `reconcile_phases.py:307`
+continúa siendo `if game.installed and exe:`, y los juegos que llegan de la
+sincronización de biblioteca de Epic y Amazon siguen sin traer `exe_path`. Así
+que el punto sigue vigente, pero el enfoque del PR cambia: ya no hay que
+inventar la maquinaria, sino **enganchar la reparación automática a lo que él
+acaba de construir**.
 
 ### 5. Selector de Proton propio en Unifideck
 
